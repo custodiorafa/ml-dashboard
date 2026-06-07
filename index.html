@@ -1631,7 +1631,7 @@ async function startApp(){
 // ════════════════════════════════════════════
 function renderAll(){
   renderTopBar();
-  renderOverview();
+  renderOverview(); // async — roda em paralelo com as outras
   loadPricingData();
   loadTrends();
   loadStockData();
@@ -1669,106 +1669,127 @@ function renderTopBar(){
 }
 
 // ════════════════════════════════════════════
-// OVERVIEW
+// OVERVIEW — vendas reais por período e por SKU
 // ════════════════════════════════════════════
-function renderOverview(){
+async function renderOverview(){
   const u = state.user;
   const items = state.items;
-
-  // KPIs
   const totalCount = state.totalItemCount || items.length;
+
+  // KPIs base
   document.getElementById('kpi-items').textContent = totalCount;
   document.getElementById('kpi-items-d').innerHTML = `<span class="up">● ${items.filter(i=>i.status==='active').length} com detalhes carregados</span>`;
-
-  // Orders KPI (demo or real)
-  if(state.isDemo){
-    document.getElementById('kpi-orders').textContent = '187';
-    document.getElementById('kpi-orders-d').innerHTML = `<span class="up">▲ +12% vs mês anterior</span>`;
-    document.getElementById('kpi-visits').textContent = '4.2k';
-    document.getElementById('kpi-visits-d').innerHTML = `<span class="up">▲ +8% vs semana passada</span>`;
-  } else {
-    document.getElementById('kpi-orders').textContent = '—';
-    document.getElementById('kpi-orders-d').innerHTML = `<span class="neutral">use API /orders</span>`;
-    document.getElementById('kpi-visits').textContent = '—';
-    document.getElementById('kpi-visits-d').innerHTML = `<span class="neutral">use API /visits</span>`;
-  }
-
-  // Reputation
   const rep = u?.seller_reputation;
-  const repLevel = { '1_red':'🔴 Novo','2_red':'🔴 Baixo','3_yellow':'🟡 Médio','4_light_green':'🟢 Bom','5_green':'🟢 Excelente' };
-  document.getElementById('kpi-rep').textContent = rep ? (rep.transactions?.completed || '—') : '—';
-  document.getElementById('kpi-rep-d').innerHTML = rep ? `<span class="up">${repLevel[rep.level_id]||rep.level_id}</span>` : '<span class="neutral">sem dados</span>';
-
-  // Meta
+  const repLevel = {'1_red':'🔴 Novo','2_red':'🔴 Baixo','3_yellow':'🟡 Médio','4_light_green':'🟢 Bom','5_green':'🟢 Excelente'};
+  document.getElementById('kpi-rep').textContent = rep?(rep.transactions?.completed||'—'):'—';
+  document.getElementById('kpi-rep-d').innerHTML = rep?`<span class="up">${repLevel[rep.level_id]||rep.level_id}</span>`:'<span class="neutral">sem dados</span>';
   document.getElementById('overview-meta').textContent = `${state.isDemo?'[DEMO] ':''}Site: ${state.site} · Seller: ${state.sellerId} · ${new Date().toLocaleString('pt-BR')}`;
-
-  // Token status
   const ts = document.getElementById('token-status');
-  if(state.isDemo){ ts.className='token-status token-exp'; ts.textContent='⚡ Modo Demo'; }
-  else { ts.className='token-status token-ok'; ts.textContent='● Token ativo'; }
+  if(state.isDemo){ts.className='token-status token-exp';ts.textContent='⚡ Modo Demo';}
+  else{ts.className='token-status token-ok';ts.textContent='● Token ativo';}
 
-  // Items table
-  const tbody = document.getElementById('items-tbody');
-  if(items.length===0){
-    tbody.innerHTML='<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--muted)">Nenhum anúncio encontrado</td></tr>';
+  // ── Vendas reais 30 dias ──
+  const skuSales={}, skuRevenue={};
+  if(!state.isDemo){
+    document.getElementById('kpi-orders').textContent='…';
+    document.getElementById('kpi-visits').textContent='…';
+    const dateFrom = new Date(Date.now()-30*864e5).toISOString().slice(0,10)+'T00:00:00.000-03:00';
+    const dateTo   = new Date().toISOString().slice(0,10)+'T23:59:59.000-03:00';
+    const ordersResp = await mlGet(`/orders/search?seller=${state.sellerId}&order.status=paid&order.date_created.from=${encodeURIComponent(dateFrom)}&order.date_created.to=${encodeURIComponent(dateTo)}&limit=50`);
+    if(ordersResp){
+      const total = ordersResp.paging?.total || ordersResp.results?.length || 0;
+      const revenue = (ordersResp.results||[]).reduce((s,o)=>s+(o.total_amount||0),0);
+      document.getElementById('kpi-orders').textContent = total.toLocaleString('pt-BR');
+      document.getElementById('kpi-orders-d').innerHTML = `<span class="up">R$${revenue.toLocaleString('pt-BR',{minimumFractionDigits:2})} faturado</span>`;
+      state.orders = ordersResp.results||[];
+      // Mapa SKU → vendas + receita
+      state.orders.forEach(o=>(o.order_items||[]).forEach(oi=>{
+        const id=oi.item?.id; if(!id) return;
+        skuSales[id]=(skuSales[id]||0)+(oi.quantity||0);
+        skuRevenue[id]=(skuRevenue[id]||0)+((oi.unit_price||0)*(oi.quantity||0));
+      }));
+    } else {
+      document.getElementById('kpi-orders').textContent='—';
+      document.getElementById('kpi-orders-d').innerHTML='<span class="neutral">sem permissão /orders</span>';
+    }
+    // Visitas
+    const ids5=items.slice(0,5).map(i=>i.id).join(',');
+    if(ids5){
+      const vr=await mlGet(`/visits/items?ids=${ids5}&date_from=${new Date(Date.now()-7*864e5).toISOString().slice(0,10)}&date_to=${new Date().toISOString().slice(0,10)}`);
+      if(vr){
+        const tv=Object.values(vr).reduce((s,v)=>s+(typeof v==='number'?v:v?.total_visits||0),0);
+        document.getElementById('kpi-visits').textContent=tv>1000?(tv/1000).toFixed(1)+'k':tv;
+        document.getElementById('kpi-visits-d').innerHTML='<span class="up">últimos 7 dias (amostra)</span>';
+      } else {
+        document.getElementById('kpi-visits').textContent='—';
+        document.getElementById('kpi-visits-d').innerHTML='<span class="neutral">sem dados</span>';
+      }
+    }
   } else {
-    tbody.innerHTML = items.map(it=>{
-      const qty = it.available_quantity ?? 0;
-      const stkColor = qty<5?'c-red':qty<20?'c-orange':'c-green';
-      return `<tr>
-        <td class="fw6" style="max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${it.title}</td>
-        <td class="mono c-blue">R$${fmt(it.price)}</td>
-        <td class="mono ${stkColor}">${qty}</td>
-        <td class="mono">${it.sold_quantity||0}</td>
-        <td><span class="badge ${it.status==='active'?'b-green':'b-red'}">${it.status==='active'?'Ativo':'Pausado'}</span></td>
-      </tr>`;
-    }).join('');
+    document.getElementById('kpi-orders').textContent='187';
+    document.getElementById('kpi-orders-d').innerHTML='<span class="up">R$28.450,00 faturado</span>';
+    document.getElementById('kpi-visits').textContent='4.2k';
+    document.getElementById('kpi-visits-d').innerHTML='<span class="up">últimos 7 dias</span>';
   }
 
-  document.getElementById('items-count-badge').textContent = `${items.length} anúncios`;
+  // ── Tabela anúncios + vendas 30d por SKU ──
+  // Adiciona coluna receita na thead
+  document.querySelector('#items-tbody')?.closest('table')?.querySelector('thead tr') &&
+    (document.querySelector('#items-tbody').closest('table').querySelector('thead tr').innerHTML =
+      '<th>Produto</th><th>Preço</th><th>Estoque</th><th>Vend. 30d</th><th>Receita 30d</th><th>Status</th>');
 
-  // Seller profile
-  const profBody = document.getElementById('seller-profile-body');
+  const sorted=[...items].sort((a,b)=>(skuSales[b.id]||b.sold_quantity||0)-(skuSales[a.id]||a.sold_quantity||0));
+  const tbody=document.getElementById('items-tbody');
+  tbody.innerHTML = sorted.length ? sorted.map(it=>{
+    const qty=it.available_quantity??0;
+    const sc=qty<5?'c-red':qty<20?'c-orange':'c-green';
+    const s30=skuSales[it.id]??it.sold_quantity??0;
+    const r30=skuRevenue[it.id]??null;
+    return `<tr>
+      <td class="fw6" style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${it.title}">${it.title}</td>
+      <td class="mono c-blue">R$${fmt(it.price)}</td>
+      <td class="mono ${sc}">${qty}</td>
+      <td class="mono c-green fw6">${s30}</td>
+      <td class="mono">${r30!==null?'R$'+fmt(r30):'—'}</td>
+      <td><span class="badge ${it.status==='active'?'b-green':'b-red'}">${it.status==='active'?'Ativo':'Pausado'}</span></td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--muted)">Nenhum anúncio encontrado</td></tr>';
+
+  document.getElementById('items-count-badge').textContent=`${totalCount} anúncios`;
+
+  // ── Perfil ──
+  const profBody=document.getElementById('seller-profile-body');
   if(u){
-    const completed = rep?.transactions?.completed || 0;
-    const psStatus = rep?.power_seller_status || 'none';
-    const psColors = { platinum:'c-blue', gold:'c-yellow', silver:'c-muted' };
-    profBody.innerHTML = `
+    const completed=rep?.transactions?.completed||0;
+    const psStatus=rep?.power_seller_status||'none';
+    const rl={'1_red':'Novo','2_red':'Baixo','3_yellow':'Médio','4_light_green':'Bom','5_green':'Excelente'};
+    const pc={platinum:'c-blue',gold:'c-yellow',silver:'c-muted'};
+    profBody.innerHTML=`
       <div style="text-align:center;padding:8px 0 16px">
         <div style="width:56px;height:56px;background:var(--accent);border-radius:50%;margin:0 auto 10px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff">${(u.nickname||'V')[0]}</div>
         <div style="font-size:16px;font-weight:700">${u.nickname}</div>
         <div style="font-size:12px;color:var(--text2);margin-top:3px">ID: ${u.id}</div>
       </div>
       <div style="display:flex;flex-direction:column;gap:8px">
-        <div style="display:flex;justify-content:space-between;font-size:12px">
-          <span class="c-muted">Vendas concluídas</span><span class="mono fw6">${completed.toLocaleString('pt-BR')}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:12px">
-          <span class="c-muted">Power Seller</span><span class="badge b-blue">${psStatus!=='none'?psStatus:'Não'}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:12px">
-          <span class="c-muted">Nível</span><span class="mono fw6 ${psColors[psStatus]||'c-green'}">${repLevel[rep?.level_id]||'—'}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:12px">
-          <span class="c-muted">Site</span><span class="mono">${state.site}</span>
-        </div>
+        <div style="display:flex;justify-content:space-between;font-size:12px"><span class="c-muted">Vendas concluídas</span><span class="mono fw6">${completed.toLocaleString('pt-BR')}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:12px"><span class="c-muted">Power Seller</span><span class="badge b-blue">${psStatus!=='none'?psStatus:'Não'}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:12px"><span class="c-muted">Nível</span><span class="mono fw6 ${pc[psStatus]||'c-green'}">${rl[rep?.level_id]||'—'}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:12px"><span class="c-muted">Site</span><span class="mono">${state.site}</span></div>
       </div>`;
-    const repLevel = { '1_red':'Novo','2_red':'Baixo','3_yellow':'Médio','4_light_green':'Bom','5_green':'Excelente' };
   }
 
-  // Category bars
-  const catCounts = {};
-  items.forEach(it=>{ const c=it.category_id||'Outros'; catCounts[c]=(catCounts[c]||0)+1; });
-  const catEntries = Object.entries(catCounts).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const maxCat = catEntries[0]?.[1]||1;
-  document.getElementById('cat-bars').innerHTML = catEntries.map(([cat,n])=>`
+  // ── Categorias ──
+  const catCounts={};
+  items.forEach(it=>{const c=it.category_id||'Outros';catCounts[c]=(catCounts[c]||0)+1;});
+  const catE=Object.entries(catCounts).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const maxC=catE[0]?.[1]||1;
+  document.getElementById('cat-bars').innerHTML=catE.map(([cat,n])=>`
     <div class="bar-row">
       <div class="bar-lbl">${cat}</div>
-      <div class="bar-trk"><div class="bar-fill" style="width:${n/maxCat*100}%;background:var(--accent)"></div></div>
+      <div class="bar-trk"><div class="bar-fill" style="width:${n/maxC*100}%;background:var(--accent)"></div></div>
       <div class="bar-num c-blue">${n}</div>
-    </div>`).join('') || '<div class="c-muted" style="font-size:13px">Sem dados</div>';
+    </div>`).join('')||'<div class="c-muted" style="font-size:13px">Sem dados</div>';
 
-  // Price distribution
   renderPriceDist(items);
 }
 
@@ -1991,66 +2012,85 @@ async function fetchAndRenderTrends(catId, catNames={}){
 }
 
 // ════════════════════════════════════════════
-// STOCK PREDICTIVE
+// STOCK PREDICTIVE + sugestão de reposição
 // ════════════════════════════════════════════
 async function loadStockData(){
   const items = state.isDemo ? demoItems() : state.items;
-  if(!items.length){ document.getElementById('stock-tbody').innerHTML='<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--muted)">Sem anúncios para analisar</td></tr>'; return; }
+  if(!items.length){ document.getElementById('stock-tbody').innerHTML='<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--muted)">Sem anúncios para analisar</td></tr>'; return; }
 
-  // Estimate turnover rate from sold_quantity
+  // Usa vendas reais dos orders se disponível
+  const skuSales = {};
+  (state.orders||[]).forEach(o=>(o.order_items||[]).forEach(oi=>{
+    const id=oi.item?.id; if(!id) return;
+    skuSales[id]=(skuSales[id]||0)+(oi.quantity||0);
+  }));
+
   const analyzed = items.map(it=>{
     const qty = it.available_quantity ?? 0;
-    const sold = it.sold_quantity ?? 0;
-    // Estimate monthly sell rate (assume sold over 6 months)
-    const monthlyRate = sold ? Math.max(1, Math.round(sold/6)) : 5;
-    const daysToRupture = monthlyRate>0 ? Math.round((qty/monthlyRate)*30) : 999;
-    return { ...it, qty, sold, monthlyRate, daysToRupture };
+    const sold = skuSales[it.id] ?? it.sold_quantity ?? 0;
+    // Taxa mensal real (vendas 30d) ou estimada (histórico/6 meses)
+    const monthlyRate = skuSales[it.id]
+      ? Math.max(1, skuSales[it.id])          // vendas reais últimos 30d
+      : sold ? Math.max(1, Math.round(sold/6)) // estimativa histórica
+      : 3;                                      // mínimo conservador
+    const daysToRupture = Math.round((qty / monthlyRate) * 30);
+    // Sugestão de reposição = 2 meses de estoque de segurança - estoque atual
+    const safetyStock = monthlyRate * 2;
+    const suggestOrder = Math.max(0, safetyStock - qty);
+    return { ...it, qty, sold, monthlyRate, daysToRupture, suggestOrder };
   });
 
   // KPIs
-  const ok = analyzed.filter(i=>i.daysToRupture>30).length;
+  const ok   = analyzed.filter(i=>i.daysToRupture>30).length;
   const warn = analyzed.filter(i=>i.daysToRupture>7 && i.daysToRupture<=30).length;
   const crit = analyzed.filter(i=>i.daysToRupture<=7).length;
-  document.getElementById('stock-ok').textContent = ok;
-  document.getElementById('stock-warn').textContent = warn;
+  document.getElementById('stock-ok').textContent       = ok;
+  document.getElementById('stock-warn').textContent     = warn;
   document.getElementById('stock-critical').textContent = crit;
-  const avgTurn = Math.round(analyzed.reduce((s,i)=>s+i.daysToRupture,0)/analyzed.length);
-  document.getElementById('avg-turnover').textContent = isFinite(avgTurn)?avgTurn+'d':'—';
+  const avgTurn = Math.round(analyzed.filter(i=>i.daysToRupture<999).reduce((s,i)=>s+i.daysToRupture,0)/Math.max(1,analyzed.filter(i=>i.daysToRupture<999).length));
+  document.getElementById('avg-turnover').textContent   = isFinite(avgTurn)?avgTurn+'d':'—';
 
-  // Table
-  document.getElementById('stock-tbody').innerHTML = analyzed.map(it=>{
-    const pct = Math.min(100, Math.round(it.qty / Math.max(1, it.qty+it.monthlyRate*2)*100));
+  // Ordena: críticos primeiro
+  const sorted = [...analyzed].sort((a,b)=>a.daysToRupture-b.daysToRupture);
+
+  // Atualiza cabeçalho da tabela para incluir coluna sugestão
+  const stockTable = document.getElementById('stock-tbody')?.closest('table');
+  if(stockTable) stockTable.querySelector('thead tr').innerHTML =
+    '<th>Produto</th><th>ID</th><th>Estoque</th><th>Nível</th><th>Giro/mês</th><th>Ruptura em</th><th>Sugestão Reposição</th><th>Ação</th>';
+
+  document.getElementById('stock-tbody').innerHTML = sorted.map(it=>{
+    const pct = Math.min(100,Math.round(it.qty/Math.max(1,it.qty+it.monthlyRate*2)*100));
     const fillColor = pct<20?'var(--red)':pct<50?'var(--orange)':'var(--green)';
     const ruptText = it.daysToRupture>90?'Sem risco':it.daysToRupture>30?`${it.daysToRupture}d`:it.daysToRupture>7?`⚠️ ${it.daysToRupture}d`:`🚨 ${it.daysToRupture}d`;
     const ruptClass = it.daysToRupture>30?'b-green':it.daysToRupture>7?'b-orange':'b-red';
     const needOrder = it.daysToRupture<=30;
+    const suggHtml = it.suggestOrder>0
+      ? `<span class="c-orange fw6 mono">${it.suggestOrder} un</span><span style="font-size:10px;color:var(--muted);display:block">(2 meses)</span>`
+      : `<span class="c-muted" style="font-size:11px">OK</span>`;
     return `<tr>
-      <td class="fw6" style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${it.title}</td>
-      <td class="mono c-muted" style="font-size:11px">${it.id}</td>
-      <td class="mono fw6">${it.qty} un</td>
-      <td style="min-width:100px">
-        <div class="sbar">
-          <div class="sbar-trk"><div class="sbar-fill" style="width:${pct}%;background:${fillColor}"></div></div>
-          <div class="sbar-pct">${pct}%</div>
-        </div>
-      </td>
-      <td class="mono">${it.daysToRupture>90?'—':Math.round(30/it.monthlyRate)+'d'}</td>
+      <td class="fw6" style="max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${it.title}">${it.title}</td>
+      <td class="mono c-muted" style="font-size:10px">${it.id}</td>
+      <td class="mono fw6">${it.qty}</td>
+      <td style="min-width:90px"><div class="sbar"><div class="sbar-trk"><div class="sbar-fill" style="width:${pct}%;background:${fillColor}"></div></div><div class="sbar-pct">${pct}%</div></div></td>
+      <td class="mono">${it.monthlyRate}/mês</td>
       <td><span class="badge ${ruptClass}">${ruptText}</span></td>
-      <td>${needOrder?`<button class="btn-sm btn-primary" onclick="orderStock('${it.id}')">Pedir</button>`:`<span class="c-muted" style="font-size:11px">—</span>`}</td>
+      <td>${suggHtml}</td>
+      <td>${needOrder?`<button class="btn-sm btn-primary" onclick="orderStock('${it.id}',${it.suggestOrder})">Pedir ${it.suggestOrder>0?it.suggestOrder+' un':''}</button>`:`<span class="c-muted" style="font-size:11px">—</span>`}</td>
     </tr>`;
   }).join('');
 
   // Predict box
   const critItems = analyzed.filter(i=>i.daysToRupture<=7);
+  const totalSuggest = analyzed.reduce((s,i)=>s+i.suggestOrder,0);
   document.getElementById('predict-rupture-val').textContent = `${critItems.length} SKU${critItems.length!==1?'s':''} críticos`;
-  document.getElementById('predict-rupture-desc').textContent = critItems.length>0 
-    ? `Ação urgente: ${critItems.slice(0,2).map(i=>i.title.split(' ').slice(0,3).join(' ')).join(', ')} com ruptura em menos de 7 dias.`
-    : 'Estoque dentro dos níveis seguros para os próximos 30 dias. Continue monitorando!';
+  document.getElementById('predict-rupture-desc').textContent = critItems.length>0
+    ? `Repor urgente: ${critItems.slice(0,2).map(i=>i.title.split(' ').slice(0,3).join(' ')).join(', ')}. Total sugerido: ${totalSuggest} unidades.`
+    : `Estoque seguro. Reposição sugerida total: ${totalSuggest} unidades para 2 meses.`;
 
-  // Seasonality
-  const months = ['Jul','Ago','Set','Out','Nov','Dez'];
-  const vals = [55,62,71,88,97,100];
-  const colors = ['#5a6a7a','#5a6a7a','#ffd600','#ff9500','#ff4d6a','#ff4d6a'];
+  // Sazonalidade
+  const months=['Jul','Ago','Set','Out','Nov','Dez'];
+  const vals=[55,62,71,88,97,100];
+  const colors=['#5a6a7a','#5a6a7a','#ffd600','#ff9500','#ff4d6a','#ff4d6a'];
   document.getElementById('season-bars').innerHTML = months.map((m,i)=>`
     <div class="bar-row">
       <div class="bar-lbl">${m}</div>
@@ -2058,20 +2098,23 @@ async function loadStockData(){
       <div class="bar-num" style="color:${colors[i]}">${vals[i]}</div>
     </div>`).join('');
 
-  // Add stock alerts
+  // Alertas
   const newAlerts = critItems.slice(0,3).map(it=>({
     type:'red', icon:'🚨',
     title:`Ruptura iminente: ${it.title.split(' ').slice(0,4).join(' ')}`,
-    desc:`Apenas ${it.qty} unidades. Com o giro atual, ruptura em ~${it.daysToRupture} dias.`,
+    desc:`${it.qty} un · Giro: ${it.monthlyRate}/mês · Ruptura em ~${it.daysToRupture}d · Repor: ${it.suggestOrder} un`,
     time: new Date().toLocaleTimeString('pt-BR')
   }));
-  state.alerts = [...state.alerts.filter(a=>!a.title.includes('Ruptura iminente')), ...newAlerts];
-  document.getElementById('alert-badge').textContent = state.alerts.length;
+  state.alerts=[...state.alerts.filter(a=>!a.title.includes('Ruptura iminente')),...newAlerts];
+  document.getElementById('alert-badge').textContent=state.alerts.length;
   renderAlerts();
 }
 
-function orderStock(id){
-  alert(`Abrindo pedido de reposição para item ${id}...\n(Integre com seu fornecedor ou ERP)`);
+function orderStock(id, qty){
+  const msg = qty>0
+    ? `Pedido de reposição: ${qty} unidades\nItem: ${id}\n\nIntegre este botão com seu ERP ou fornecedor.`
+    : `Abrindo pedido para item ${id}`;
+  alert(msg);
 }
 
 // ════════════════════════════════════════════
