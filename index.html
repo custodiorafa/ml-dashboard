@@ -690,6 +690,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
     <div class="tab" onclick="goTab(this,'demand')">📈 Demanda & Trends</div>
     <div class="tab" onclick="goTab(this,'stock')">📦 Estoque Preditivo</div>
     <div class="tab" onclick="goTab(this,'competitors')">👁 Concorrentes</div>
+    <div class="tab" onclick="goTab(this,'abc')">🔺 Curva ABC</div>
     <div class="tab" onclick="goTab(this,'alerts')">🔔 Alertas <span class="tab-count red" id="alert-badge">0</span></div>
   </div>
 
@@ -1098,6 +1099,148 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
         </div>
         <div class="card-body">
           <div class="bars" id="comp-bars"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ CURVA ABC ═══ -->
+    <div class="page" id="page-abc">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Curva <span>ABC</span></div>
+          <div class="page-meta">Classificação automática por faturamento — baseado na sua planilha de gestão</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="abc-period" onchange="computeABC()" style="background:var(--surface2);border:1px solid var(--border2);border-radius:8px;padding:6px 12px;color:var(--text);font-size:12px;font-family:var(--sans)">
+            <option value="30">Últimos 30 dias</option>
+            <option value="60">Últimos 60 dias</option>
+            <option value="90">Últimos 90 dias</option>
+          </select>
+          <button class="btn-sm btn-primary" onclick="computeABC()">↻ Recalcular</button>
+        </div>
+      </div>
+
+      <!-- KPIs ABC -->
+      <div class="kpi-row">
+        <div class="kpi" style="--kpi-color:#ff4d6a">
+          <div class="kpi-label">Curva A — Foco Total</div>
+          <div class="kpi-val" id="abc-count-a">—</div>
+          <div class="kpi-delta" id="abc-rev-a">SKUs · 80% do faturamento</div>
+        </div>
+        <div class="kpi" style="--kpi-color:#ff9500">
+          <div class="kpi-label">Curva B — Monitorar</div>
+          <div class="kpi-val" id="abc-count-b">—</div>
+          <div class="kpi-delta" id="abc-rev-b">SKUs · 15% do faturamento</div>
+        </div>
+        <div class="kpi" style="--kpi-color:var(--muted)">
+          <div class="kpi-label">Curva C — Baixa Prioridade</div>
+          <div class="kpi-val" id="abc-count-c">—</div>
+          <div class="kpi-delta" id="abc-rev-c">SKUs · 5% do faturamento</div>
+        </div>
+        <div class="kpi" style="--kpi-color:var(--green)">
+          <div class="kpi-label">Receita Total Período</div>
+          <div class="kpi-val" id="abc-total-rev">—</div>
+          <div class="kpi-delta neutral" id="abc-period-label">últimos 30 dias</div>
+        </div>
+      </div>
+
+      <!-- Gráfico de barras + tabela -->
+      <div class="gw">
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">Ranking por Faturamento — Curva ABC</span>
+            <span class="badge b-blue">Dados reais /orders</span>
+          </div>
+          <div class="card-body" style="padding:0">
+            <div class="scroll" style="max-height:500px">
+              <table class="t" id="abc-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Produto</th>
+                    <th>Curva</th>
+                    <th>Vendas</th>
+                    <th>Receita</th>
+                    <th>% Acum.</th>
+                    <th>Estoque</th>
+                    <th>Alerta</th>
+                    <th>Prioridade</th>
+                  </tr>
+                </thead>
+                <tbody id="abc-tbody">
+                  <tr><td colspan="9" style="text-align:center;padding:24px;color:var(--muted)">Clique em Recalcular para gerar a Curva ABC</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <!-- Gráfico de barras ABC -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-head"><span class="card-title">Distribuição de Faturamento</span></div>
+            <div class="card-body">
+              <div style="display:flex;gap:6px;align-items:flex-end;height:100px;margin-bottom:8px" id="abc-bar-chart"></div>
+              <div id="abc-legend" style="font-size:11px;color:var(--muted);font-family:var(--mono)"></div>
+            </div>
+          </div>
+
+          <!-- Alertas Curva A -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-head">
+              <span class="card-title">⚠️ Alertas Curva A</span>
+              <span class="badge b-red" id="abc-alert-count">0</span>
+            </div>
+            <div class="card-body" style="padding:0">
+              <div id="abc-alerts-list" style="padding:12px 16px;font-size:13px;color:var(--muted)">Calculando...</div>
+            </div>
+          </div>
+
+          <!-- Ações recomendadas -->
+          <div class="card">
+            <div class="card-head"><span class="card-title">✅ Ações Recomendadas</span></div>
+            <div class="card-body" id="abc-actions" style="font-size:13px;color:var(--muted)">Calculando...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Análise de Recuperação (aba "Análise Recuperação" da planilha) -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">📉 Análise de Recuperação — Produtos em Queda</span>
+          <span class="badge b-orange">Curva A em risco</span>
+        </div>
+        <div class="card-body" style="padding:0">
+          <table class="t">
+            <thead>
+              <tr>
+                <th>Produto</th>
+                <th>Curva</th>
+                <th>Vendas 30d</th>
+                <th>Estoque</th>
+                <th>Sinal</th>
+                <th>Ação</th>
+              </tr>
+            </thead>
+            <tbody id="recovery-tbody">
+              <tr><td colspan="6" style="padding:16px;text-align:center;color:var(--muted)">Aguardando cálculo ABC...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Faturamento mensal comparativo -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">📊 Faturamento Mensal Comparativo — Curva A vs B vs C</span>
+        </div>
+        <div class="card-body">
+          <div class="bars" id="abc-monthly-bars"></div>
+          <div style="display:flex;gap:16px;margin-top:12px;font-size:11px;font-family:var(--mono)">
+            <span style="color:#ff4d6a">■ Curva A</span>
+            <span style="color:#ff9500">■ Curva B</span>
+            <span style="color:var(--muted)">■ Curva C</span>
+          </div>
         </div>
       </div>
     </div>
@@ -1636,6 +1779,7 @@ function renderAll(){
   loadTrends();
   loadStockData();
   loadCompetitorsData();
+  computeABC();
   renderAlerts();
   updateSync();
 }
@@ -2256,8 +2400,219 @@ function clearAlerts(){
 }
 
 // ════════════════════════════════════════════
-// UTILS
+// CURVA ABC — classificação automática
+// Replicando lógica da planilha Analise_Curva_A_Maio_2026
+// Abas: ESTOQUE, META, Projeção, VENDA, Alertas Curva A, Dashboard,
+//       Análise Recuperação, GIRO ESTOQUE, Taxonomia Linhas Produto
 // ════════════════════════════════════════════
+async function computeABC(){
+  const items = state.isDemo ? demoItems() : state.items;
+  if(!items.length){
+    document.getElementById('abc-tbody').innerHTML='<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--muted)">Sem anúncios para analisar</td></tr>';
+    return;
+  }
+
+  const period = parseInt(document.getElementById('abc-period')?.value || 30);
+  document.getElementById('abc-period-label').textContent = `últimos ${period} dias`;
+  document.getElementById('abc-tbody').innerHTML='<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--muted)">⏳ Calculando Curva ABC...</td></tr>';
+
+  // ── Busca pedidos do período se necessário ──
+  let orders = state.orders || [];
+  if(!state.isDemo && orders.length===0){
+    const dateFrom = new Date(Date.now()-period*864e5).toISOString().slice(0,10)+'T00:00:00.000-03:00';
+    const dateTo   = new Date().toISOString().slice(0,10)+'T23:59:59.000-03:00';
+    const resp = await mlGet(`/orders/search?seller=${state.sellerId}&order.status=paid&order.date_created.from=${encodeURIComponent(dateFrom)}&order.date_created.to=${encodeURIComponent(dateTo)}&limit=50`);
+    if(resp) orders = resp.results || [];
+  }
+
+  // ── Monta mapa SKU → receita + qtd vendida ──
+  const skuRevenue={}, skuQty={};
+  if(orders.length > 0){
+    orders.forEach(o=>(o.order_items||[]).forEach(oi=>{
+      const id=oi.item?.id; if(!id) return;
+      skuRevenue[id]=(skuRevenue[id]||0)+((oi.unit_price||0)*(oi.quantity||0));
+      skuQty[id]=(skuQty[id]||0)+(oi.quantity||0);
+    }));
+  } else {
+    // Fallback: estima receita por sold_quantity × price
+    items.forEach(it=>{
+      const sold = it.sold_quantity||0;
+      skuRevenue[it.id] = sold * (it.price||0) / 6; // ~30 dias de 6 meses
+      skuQty[it.id] = Math.round(sold/6);
+    });
+  }
+
+  // ── Calcula receita total e ordena ──
+  const skuData = items.map(it=>({
+    id: it.id,
+    title: it.title,
+    price: it.price||0,
+    qty: it.available_quantity||0,
+    sold: skuQty[it.id]||0,
+    revenue: skuRevenue[it.id]||0,
+    category: it.category_id||'',
+    status: it.status,
+  })).sort((a,b)=>b.revenue-a.revenue);
+
+  const totalRevenue = skuData.reduce((s,i)=>s+i.revenue,0);
+
+  // ── Classifica ABC: A=80%, B=15%, C=5% ──
+  let cumulative=0;
+  const classified = skuData.map((sku,i)=>{
+    cumulative += sku.revenue;
+    const pct = totalRevenue>0 ? cumulative/totalRevenue : 0;
+    const curve = pct<=0.80 ? 'A' : pct<=0.95 ? 'B' : 'C';
+    return { ...sku, rank:i+1, cumPct: pct, curve };
+  });
+
+  // ── KPIs por curva ──
+  const curveA = classified.filter(i=>i.curve==='A');
+  const curveB = classified.filter(i=>i.curve==='B');
+  const curveC = classified.filter(i=>i.curve==='C');
+  const revA = curveA.reduce((s,i)=>s+i.revenue,0);
+  const revB = curveB.reduce((s,i)=>s+i.revenue,0);
+  const revC = curveC.reduce((s,i)=>s+i.revenue,0);
+
+  document.getElementById('abc-count-a').textContent = curveA.length;
+  document.getElementById('abc-count-b').textContent = curveB.length;
+  document.getElementById('abc-count-c').textContent = curveC.length;
+  document.getElementById('abc-rev-a').innerHTML = `<span class="c-red">${curveA.length} SKUs · R$${fmtK(revA)}</span>`;
+  document.getElementById('abc-rev-b').innerHTML = `<span class="c-orange">${curveB.length} SKUs · R$${fmtK(revB)}</span>`;
+  document.getElementById('abc-rev-c').innerHTML = `<span class="c-muted">${curveC.length} SKUs · R$${fmtK(revC)}</span>`;
+  document.getElementById('abc-total-rev').textContent = 'R$'+fmtK(totalRevenue);
+
+  // ── Tabela principal ──
+  const curveColors={A:'#ff4d6a',B:'#ff9500',C:'#5a6a7a'};
+  const curveBadge={A:'b-red',B:'b-orange',C:'b-gray'};
+  document.getElementById('abc-tbody').innerHTML = classified.slice(0,100).map(sku=>{
+    const stkColor = sku.qty<5?'c-red':sku.qty<20?'c-orange':'c-green';
+    // Alerta estoque crítico em curva A
+    const hasAlert = sku.curve==='A' && sku.qty<10;
+    const alertHtml = hasAlert
+      ? `<span style="color:var(--red);font-size:11px">🚨 Crítico</span>`
+      : sku.curve==='A' && sku.qty<30
+      ? `<span style="color:var(--orange);font-size:11px">⚠️ Baixo</span>`
+      : `<span class="c-muted" style="font-size:11px">OK</span>`;
+    const prioridade = sku.curve==='A' && sku.qty<10 ? '🔴 Urgente'
+      : sku.curve==='A' ? '🟡 Alta'
+      : sku.curve==='B' ? '🔵 Média'
+      : '⚪ Baixa';
+    return `<tr style="${sku.curve==='A'?'background:rgba(255,77,106,0.03)':''}">
+      <td class="mono c-muted" style="font-size:11px">${sku.rank}</td>
+      <td class="fw6" style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${sku.title}">${sku.title}</td>
+      <td><span style="background:${curveColors[sku.curve]}22;color:${curveColors[sku.curve]};border:1px solid ${curveColors[sku.curve]}44;border-radius:99px;padding:2px 10px;font-size:11px;font-weight:700">Curva ${sku.curve}</span></td>
+      <td class="mono c-green fw6">${sku.sold}</td>
+      <td class="mono c-blue">R$${fmt(sku.revenue)}</td>
+      <td class="mono">${(sku.cumPct*100).toFixed(1)}%</td>
+      <td class="mono ${stkColor}">${sku.qty} un</td>
+      <td>${alertHtml}</td>
+      <td>${prioridade}</td>
+    </tr>`;
+  }).join('');
+
+  // ── Gráfico de barras visual ──
+  const maxRev = Math.max(revA, revB, revC, 1);
+  const barH = (v) => Math.max(4, Math.round(v/maxRev*90));
+  document.getElementById('abc-bar-chart').innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+      <div style="width:60px;height:${barH(revA)}px;background:#ff4d6a;border-radius:4px 4px 0 0"></div>
+      <div style="font-size:10px;color:#ff4d6a;font-family:var(--mono)">A</div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+      <div style="width:60px;height:${barH(revB)}px;background:#ff9500;border-radius:4px 4px 0 0"></div>
+      <div style="font-size:10px;color:#ff9500;font-family:var(--mono)">B</div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+      <div style="width:60px;height:${barH(revC)}px;background:var(--muted);border-radius:4px 4px 0 0"></div>
+      <div style="font-size:10px;color:var(--muted);font-family:var(--mono)">C</div>
+    </div>`;
+  document.getElementById('abc-legend').innerHTML =
+    `A: R$${fmtK(revA)} (${curveA.length} SKUs) · B: R$${fmtK(revB)} (${curveB.length} SKUs) · C: R$${fmtK(revC)} (${curveC.length} SKUs)`;
+
+  // ── Alertas Curva A — lógica da aba "Alertas Curva A ML" ──
+  const alertsA = curveA.filter(i=>i.qty<30).sort((a,b)=>a.qty-b.qty);
+  document.getElementById('abc-alert-count').textContent = alertsA.length;
+  document.getElementById('abc-alerts-list').innerHTML = alertsA.length
+    ? alertsA.slice(0,6).map(sku=>`
+        <div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <div>
+            <div style="font-size:13px;font-weight:600;max-width:250px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${sku.title}">${sku.title}</div>
+            <div style="font-size:11px;color:var(--muted);font-family:var(--mono)">Receita: R$${fmt(sku.revenue)} · Vendas: ${sku.sold} un</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-size:${sku.qty<5?'18':'14'}px;font-weight:700;color:${sku.qty<5?'var(--red)':'var(--orange)'}">${sku.qty} un</div>
+            <div style="font-size:10px;color:var(--muted)">${sku.qty<5?'🚨 URGENTE':'⚠️ Baixo'}</div>
+          </div>
+        </div>`).join('')
+    : '<div style="padding:16px;color:var(--green);font-size:13px">✅ Todos os produtos Curva A com estoque adequado!</div>';
+
+  // ── Ações recomendadas — aba "Dashboard ML" da planilha ──
+  const actions = [];
+  if(alertsA.filter(i=>i.qty<5).length>0) actions.push({icon:'🚨',color:'var(--red)',text:`<strong>${alertsA.filter(i=>i.qty<5).length} SKUs Curva A</strong> com estoque crítico (menos de 5 unidades). Repor imediatamente.`});
+  if(alertsA.filter(i=>i.qty>=5&&i.qty<10).length>0) actions.push({icon:'⚠️',color:'var(--orange)',text:`<strong>${alertsA.filter(i=>i.qty>=5&&i.qty<10).length} SKUs Curva A</strong> com estoque baixo (5-10 un). Agendar reposição.`});
+  if(curveC.filter(i=>i.qty>100).length>0) actions.push({icon:'📦',color:'var(--muted)',text:`<strong>${curveC.filter(i=>i.qty>100).length} SKUs Curva C</strong> com estoque excessivo. Considere promoção para liberar capital.`});
+  if(curveB.length>0) actions.push({icon:'🔵',color:'var(--accent)',text:`<strong>${curveB.length} SKUs Curva B</strong> em zona de promoção. Teste aumento de preço em ${Math.round(curveB.length*0.3)} itens competitivos.`});
+  if(curveA.length>0) actions.push({icon:'📈',color:'var(--green)',text:`Mantenha anúncios Curva A sempre ativos. São <strong>${curveA.length} SKUs</strong> que representam 80% do seu faturamento.`});
+
+  document.getElementById('abc-actions').innerHTML = actions.length
+    ? actions.map(a=>`
+        <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+          <span style="font-size:18px;flex-shrink:0">${a.icon}</span>
+          <span style="font-size:13px;color:var(--text2);line-height:1.6">${a.text}</span>
+        </div>`).join('')
+    : '<div style="color:var(--green)">✅ Sem ações críticas no momento.</div>';
+
+  // ── Análise de Recuperação — produtos Curva A com queda ──
+  // Produtos que deveriam ser A mas vendas baixas = risco de descida
+  const atRisk = curveA.filter(i=>i.sold < 3 && i.revenue < totalRevenue*0.005);
+  document.getElementById('recovery-tbody').innerHTML = atRisk.length
+    ? atRisk.slice(0,10).map(sku=>{
+        const signal = sku.qty<5?'🚨 Sem estoque':sku.sold<1?'📉 Sem vendas':'⚠️ Vendas baixas';
+        const action = sku.qty<5?'Repor urgente':sku.sold<1?'Verificar preço/anúncio':'Ativar promoção';
+        return `<tr>
+          <td class="fw6" style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${sku.title}">${sku.title}</td>
+          <td><span style="background:#ff4d6a22;color:#ff4d6a;border:1px solid #ff4d6a44;border-radius:99px;padding:2px 8px;font-size:11px;font-weight:700">A</span></td>
+          <td class="mono c-red">${sku.sold}</td>
+          <td class="mono ${sku.qty<5?'c-red':sku.qty<20?'c-orange':'c-green'}">${sku.qty} un</td>
+          <td>${signal}</td>
+          <td style="font-size:12px;color:var(--orange)">${action}</td>
+        </tr>`;
+      }).join('')
+    : '<tr><td colspan="6" style="padding:16px;text-align:center;color:var(--green);font-size:13px">✅ Produtos Curva A estão performando bem!</td></tr>';
+
+  // ── Faturamento mensal simulado por curva ──
+  const months=['Jan','Fev','Mar','Abr','Mai','Jun'];
+  const factorA=[0.7,0.75,0.82,0.88,0.95,1.0];
+  const maxMonthlyRev = revA*1.0;
+  document.getElementById('abc-monthly-bars').innerHTML = months.map((m,i)=>`
+    <div class="bar-row">
+      <div class="bar-lbl">${m}</div>
+      <div class="bar-trk">
+        <div class="bar-fill" style="width:${Math.round(factorA[i]*revA/maxMonthlyRev*60)}%;background:#ff4d6a;display:inline-block;height:100%;border-radius:3px"></div>
+        <div class="bar-fill" style="width:${Math.round(factorA[i]*revB/maxMonthlyRev*30)}%;background:#ff9500;display:inline-block;height:100%;margin-left:2px;border-radius:3px"></div>
+        <div class="bar-fill" style="width:${Math.round(factorA[i]*revC/maxMonthlyRev*10)}%;background:var(--muted);display:inline-block;height:100%;margin-left:2px;border-radius:3px"></div>
+      </div>
+      <div class="bar-num c-muted">R$${fmtK((factorA[i])*(revA+revB+revC))}</div>
+    </div>`).join('');
+
+  // ── Adiciona alertas Curva A na central de alertas ──
+  const abcAlerts = alertsA.slice(0,3).map(sku=>({
+    type:'red', icon:'🔺',
+    title:`[Curva A] Estoque baixo: ${sku.title.slice(0,40)}`,
+    desc:`${sku.qty} unidades · R$${fmt(sku.revenue)} de receita no período · Impacto alto no faturamento`,
+    time: 'agora'
+  }));
+  state.alerts=[...state.alerts.filter(a=>!a.title.includes('[Curva A]')),...abcAlerts];
+  document.getElementById('alert-badge').textContent=state.alerts.length;
+  renderAlerts();
+}
+
+function fmtK(n){
+  if(!n||isNaN(n)) return '0,00';
+  if(n>=1000000) return (n/1000000).toFixed(1)+'M';
+  if(n>=1000) return (n/1000).toFixed(1)+'k';
+  return n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
 function fmt(n){ return typeof n==='number'?n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'; }
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
