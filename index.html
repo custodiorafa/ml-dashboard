@@ -1864,9 +1864,9 @@ async function startApp(){
 // ════════════════════════════════════════════
 // RENDER ALL
 // ════════════════════════════════════════════
-function renderAll(){
+async function renderAll(){
   renderTopBar();
-  renderOverview(); // async — roda em paralelo com as outras
+  await renderOverview();
   loadPricingData();
   loadTrends();
   loadStockData();
@@ -2054,12 +2054,12 @@ document.getElementById('top-today-bars').innerHTML = [
     (document.querySelector('#items-tbody').closest('table').querySelector('thead tr').innerHTML =
       '<th>Produto</th><th>Preço</th><th>Estoque</th><th>Vend. 30d</th><th>Receita 30d</th><th>Status</th>');
 
-  const sorted=[...items].sort((a,b)=>(skuSales[b.id]||b.sold_quantity||0)-(skuSales[a.id]||a.sold_quantity||0));
+  const sorted=[...items].sort((a,b)=>(skuSales[b.id]||0)-(skuSales[a.id]||0));
   const tbody=document.getElementById('items-tbody');
   tbody.innerHTML = sorted.length ? sorted.map(it=>{
     const qty=it.available_quantity??0;
     const sc=qty<5?'c-red':qty<20?'c-orange':'c-green';
-    const s30=skuSales[it.id]??it.sold_quantity??0;
+    const s30=skuSales[it.id]??0;
     const r30=skuRevenue[it.id]??null;
     return `<tr>
       <td class="fw6" style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${it.title}">${it.title}</td>
@@ -2426,13 +2426,13 @@ async function loadStockData(){
 
   const analyzed = items.map(it=>{
     const qty = it.available_quantity ?? 0;
-    const sold = skuSales[it.id] ?? it.sold_quantity ?? 0;
-    // Taxa mensal real (vendas 30d) ou estimada (histórico/6 meses)
+    const sold = skuSales[it.id] ?? 0;
+    // Giro/mês real dos últimos 30 dias — sem fallback para histórico vitalício
     const monthlyRate = skuSales[it.id]
       ? Math.max(1, skuSales[it.id])          // vendas reais últimos 30d
-      : sold ? Math.max(1, Math.round(sold/6)) // estimativa histórica
-      : 3;                                      // mínimo conservador
-    const daysToRupture = Math.round((qty / monthlyRate) * 30);
+      : it.sold_quantity ? 0 // sem vendas recentes (produto parado)
+      : 1; // nunca vendeu — estimativa mínima
+    const daysToRupture = qty<=0 ? 0 : (monthlyRate>0 ? Math.round((qty / monthlyRate) * 30) : 999);
     // Sugestão de reposição = 2 meses de estoque de segurança - estoque atual
     const safetyStock = monthlyRate * 2;
     const suggestOrder = Math.max(0, safetyStock - qty);
@@ -2672,12 +2672,28 @@ async function computeABC(){
   document.getElementById('abc-tbody').innerHTML='<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--muted)">⏳ Calculando Curva ABC...</td></tr>';
 
   // ── Busca pedidos do período se necessário ──
-  let orders = state.orders || [];
-  if(!state.isDemo && orders.length===0){
+  let orders = (period===30 ? state.orders : null) || [];
+  if(!state.isDemo && (orders.length===0 || period!==30)){
     const dateFrom = new Date(Date.now()-period*864e5).toISOString().slice(0,10)+'T00:00:00.000-03:00';
     const dateTo   = new Date().toISOString().slice(0,10)+'T23:59:59.000-03:00';
-    const resp = await mlGet(`/orders/search?seller=${state.sellerId}&order.status=paid&order.date_created.from=${encodeURIComponent(dateFrom)}&order.date_created.to=${encodeURIComponent(dateTo)}&limit=50`);
-    if(resp) orders = resp.results || [];
+    const firstPage = await mlGet(`/orders/search?seller=${state.sellerId}&order.status=paid&order.date_created.from=${encodeURIComponent(dateFrom)}&order.date_created.to=${encodeURIComponent(dateTo)}&limit=50&offset=0`);
+    if(firstPage){
+      const totalOrders = firstPage.paging?.total || firstPage.results?.length || 0;
+      let allOrders = [...(firstPage.results||[])];
+      const maxOrders = Math.min(totalOrders, 2000);
+      const fetches = [];
+      for(let offset=50; offset<maxOrders; offset+=50){
+        fetches.push(mlGet(`/orders/search?seller=${state.sellerId}&order.status=paid&order.date_created.from=${encodeURIComponent(dateFrom)}&order.date_created.to=${encodeURIComponent(dateTo)}&limit=50&offset=${offset}`));
+      }
+      for(let i=0; i<fetches.length; i+=5){
+        const group = await Promise.all(fetches.slice(i,i+5));
+        group.forEach(r=>{ if(r?.results) allOrders.push(...r.results); });
+      }
+      orders = allOrders;
+      if(period===30) state.orders = allOrders;
+    } else {
+      orders = [];
+    }
   }
 
   // ── Monta mapa SKU → receita + qtd vendida ──
