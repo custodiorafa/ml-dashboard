@@ -1959,7 +1959,7 @@ async function renderOverview(){
       document.getElementById('kpi-orders').textContent = totalOrders.toLocaleString('pt-BR');
 
       // Pagina o restante em paralelo (lotes de 50, máx 2000 pedidos)
-      const maxOrders = Math.min(totalOrders, 2000);
+      const maxOrders = Math.min(totalOrders, 10000);
       const fetches = [];
       for(let offset=50; offset<maxOrders; offset+=50){
         fetches.push(mlGet(
@@ -2695,7 +2695,7 @@ async function computeABC(){
     if(firstPage){
       const totalOrders = firstPage.paging?.total || firstPage.results?.length || 0;
       let allOrders = [...(firstPage.results||[])];
-      const maxOrders = Math.min(totalOrders, 2000);
+      const maxOrders = Math.min(totalOrders, 10000);
       const fetches = [];
       for(let offset=50; offset<maxOrders; offset+=50){
         fetches.push(mlGet(`/orders/search?seller=${state.sellerId}&order.status=paid&order.date_created.from=${encodeURIComponent(dateFrom)}&order.date_created.to=${encodeURIComponent(dateTo)}&limit=50&offset=${offset}`));
