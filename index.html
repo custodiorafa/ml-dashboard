@@ -1734,6 +1734,20 @@ async function mlGetPublic(path){
 }
 
 // ════════════════════════════════════════════
+const categoryNameCache = {};
+async function resolveCategoryNames(ids){
+  const names = {};
+  for(const id of ids){
+    if(!id) continue;
+    if(categoryNameCache[id]){ names[id]=categoryNameCache[id]; continue; }
+    if(state.isDemo){ categoryNameCache[id]=id; names[id]=id; continue; }
+    const cat = await mlGetPublic(`/categories/${id}`);
+    categoryNameCache[id] = cat?.name || id;
+    names[id] = categoryNameCache[id];
+  }
+  return names;
+}
+
 // DEMO DATA GENERATORS
 // ════════════════════════════════════════════
 function demoUser(){ return { nickname:'LOJA DEMO', id:'123456789', points:3250, seller_reputation:{ level_id:'5_green', power_seller_status:'platinum', transactions:{ completed:1847, canceled:23 }, metrics:{ claims:{rate:0.01}, delayed_handling_time:{rate:0.03}, cancellations:{rate:0.02} } } }; }
@@ -1917,8 +1931,8 @@ async function renderOverview(){
   document.getElementById('kpi-items-d').innerHTML = `<span class="up">● ${items.filter(i=>i.status==='active').length} com detalhes carregados</span>`;
   const rep = u?.seller_reputation;
   const repLevel = {'1_red':'🔴 Novo','2_red':'🔴 Baixo','3_yellow':'🟡 Médio','4_light_green':'🟢 Bom','5_green':'🟢 Excelente'};
-  document.getElementById('kpi-rep').textContent = rep?(rep.transactions?.completed||'—'):'—';
-  document.getElementById('kpi-rep-d').innerHTML = rep?`<span class="up">${repLevel[rep.level_id]||rep.level_id}</span>`:'<span class="neutral">sem dados</span>';
+  document.getElementById('kpi-rep').textContent = rep?(repLevel[rep.level_id]||rep.level_id||'—'):'—';
+  document.getElementById('kpi-rep-d').innerHTML = rep?`<span class="up">${(rep.transactions?.completed||0).toLocaleString('pt-BR')} vendas concluídas</span>`:'<span class="neutral">sem dados</span>';
   document.getElementById('overview-meta').textContent = `${state.isDemo?'[DEMO] ':''}Site: ${state.site} · Seller: ${state.sellerId} · ${new Date().toLocaleString('pt-BR')}`;
   const ts = document.getElementById('token-status');
   if(state.isDemo){ts.className='token-status token-exp';ts.textContent='⚡ Modo Demo';}
@@ -2012,7 +2026,7 @@ document.getElementById('top-today-bars').innerHTML = top5Today.length ? top5Tod
     // Visitas
     const ids5=items.slice(0,5).map(i=>i.id).join(',');
     if(ids5){
-      const vr=await mlGet(`/visits/items?ids=${ids5}&date_from=${new Date(Date.now()-7*864e5).toISOString().slice(0,10)}&date_to=${new Date().toISOString().slice(0,10)}`);
+      const vr=await mlGet(`/items/visits?ids=${ids5}&date_from=${new Date(Date.now()-7*864e5).toISOString().slice(0,10)}&date_to=${new Date().toISOString().slice(0,10)}`);
       if(vr){
         const tv=Object.values(vr).reduce((s,v)=>s+(typeof v==='number'?v:v?.total_visits||0),0);
         document.getElementById('kpi-visits').textContent=tv>1000?(tv/1000).toFixed(1)+'k':tv;
@@ -2098,10 +2112,11 @@ document.getElementById('top-today-bars').innerHTML = [
   const catCounts={};
   items.forEach(it=>{const c=it.category_id||'Outros';catCounts[c]=(catCounts[c]||0)+1;});
   const catE=Object.entries(catCounts).sort((a,b)=>b[1]-a[1]).slice(0,5);
+const catNames = await resolveCategoryNames(catE.map(([c])=>c));
   const maxC=catE[0]?.[1]||1;
   document.getElementById('cat-bars').innerHTML=catE.map(([cat,n])=>`
     <div class="bar-row">
-      <div class="bar-lbl">${cat}</div>
+      <div class="bar-lbl">${catNames[cat]||cat}</div>
       <div class="bar-trk"><div class="bar-fill" style="width:${n/maxC*100}%;background:var(--accent)"></div></div>
       <div class="bar-num c-blue">${n}</div>
     </div>`).join('')||'<div class="c-muted" style="font-size:13px">Sem dados</div>';
