@@ -750,6 +750,32 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 
 <div class="card" style="margin-bottom:22px">
 <div class="card-head">
+<span class="card-title">Resumo de Pedidos (30 dias)</span>
+<span class="badge b-blue" id="orders-summary-badge">carregando</span>
+</div>
+<div class="card-body">
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;text-align:center">
+<div>
+<div style="font-size:10px;font-family:var(--mono);text-transform:uppercase;letter-spacing:1px;color:var(--text2);margin-bottom:6px">Pedidos Feitos</div>
+<div style="font-size:22px;font-weight:700" id="orders-made-count">-</div>
+<div style="font-size:12px;color:var(--text2);margin-top:4px" id="orders-made-rev">-</div>
+</div>
+<div>
+<div style="font-size:10px;font-family:var(--mono);text-transform:uppercase;letter-spacing:1px;color:var(--red);margin-bottom:6px">(-) Cancelados</div>
+<div style="font-size:22px;font-weight:700;color:var(--red)" id="orders-cancelled-count">-</div>
+<div style="font-size:12px;color:var(--red);margin-top:4px" id="orders-cancelled-rev">-</div>
+</div>
+<div>
+<div style="font-size:10px;font-family:var(--mono);text-transform:uppercase;letter-spacing:1px;color:var(--green);margin-bottom:6px">(=) Pedidos Aprovados</div>
+<div style="font-size:22px;font-weight:700;color:var(--green)" id="orders-approved-count">-</div>
+<div style="font-size:12px;color:var(--green);margin-top:4px" id="orders-approved-rev">-</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="card" style="margin-bottom:22px">
+<div class="card-head">
 <span class="card-title">🏆 Top 5 Mais Vendidos Hoje</span>
 <span class="badge b-green" id="top-today-badge">carregando</span>
 </div>
@@ -1948,7 +1974,7 @@ async function renderOverview(){
 
     // Busca primeira página para saber o total
     const firstPage = await mlGet(
-      `/orders/search?seller=${state.sellerId}&order.status=paid&order.date_created.from=${encodeURIComponent(dateFrom)}&order.date_created.to=${encodeURIComponent(dateTo)}&limit=50&offset=0`
+      `/orders/search?seller=${state.sellerId}&order.date_created.from=${encodeURIComponent(dateFrom)}&order.date_created.to=${encodeURIComponent(dateTo)}&limit=50&offset=0`
     );
 
     if(firstPage){
@@ -1963,7 +1989,7 @@ async function renderOverview(){
       const fetches = [];
       for(let offset=50; offset<maxOrders; offset+=50){
         fetches.push(mlGet(
-          `/orders/search?seller=${state.sellerId}&order.status=paid&order.date_created.from=${encodeURIComponent(dateFrom)}&order.date_created.to=${encodeURIComponent(dateTo)}&limit=50&offset=${offset}`
+          `/orders/search?seller=${state.sellerId}&order.date_created.from=${encodeURIComponent(dateFrom)}&order.date_created.to=${encodeURIComponent(dateTo)}&limit=50&offset=${offset}`
         ));
       }
 
@@ -1972,14 +1998,28 @@ async function renderOverview(){
         const group = await Promise.all(fetches.slice(i,i+5));
         group.forEach(r=>{ if(r?.results) allOrders.push(...r.results); });
       }
-
-      state.orders = allOrders;
+const cancelledOrders = allOrders.filter(o=>o.status==='cancelled');
+const approvedOrders = allOrders.filter(o=>o.status!=='cancelled');
+state.orders = approvedOrders;
 
       // Calcula receita total e por SKU
-      const totalRevenue = allOrders.reduce((s,o)=>s+(o.total_amount||0),0);
+      const totalFeitos = allOrders.length;
+const revFeitos = allOrders.reduce((s,o)=>s+(o.total_amount||0),0);
+const totalCancelados = cancelledOrders.length;
+const revCancelados = cancelledOrders.reduce((s,o)=>s+(o.total_amount||0),0);
+const totalAprovados = approvedOrders.length;
+const totalRevenue = approvedOrders.reduce((s,o)=>s+(o.total_amount||0),0);
+document.getElementById('kpi-orders').textContent = totalAprovados.toLocaleString('pt-BR');
+const summaryBadgeEl = document.getElementById('orders-summary-badge'); if(summaryBadgeEl) summaryBadgeEl.textContent = totalFeitos.toLocaleString('pt-BR')+' pedidos no periodo';
+const elMadeCount = document.getElementById('orders-made-count'); if(elMadeCount) elMadeCount.textContent = totalFeitos.toLocaleString('pt-BR');
+const elMadeRev = document.getElementById('orders-made-rev'); if(elMadeRev) elMadeRev.textContent = 'R$'+fmt(revFeitos);
+const elCancCount = document.getElementById('orders-cancelled-count'); if(elCancCount) elCancCount.textContent = totalCancelados.toLocaleString('pt-BR');
+const elCancRev = document.getElementById('orders-cancelled-rev'); if(elCancRev) elCancRev.textContent = 'R$'+fmt(revCancelados);
+const elApprCount = document.getElementById('orders-approved-count'); if(elApprCount) elApprCount.textContent = totalAprovados.toLocaleString('pt-BR');
+const elApprRev = document.getElementById('orders-approved-rev'); if(elApprRev) elApprRev.textContent = 'R$'+fmt(totalRevenue);
       document.getElementById('kpi-orders-d').innerHTML = `<span class="up">R$${totalRevenue.toLocaleString('pt-BR',{minimumFractionDigits:2})} faturado</span>`;
 
-      allOrders.forEach(o=>(o.order_items||[]).forEach(oi=>{
+      approvedOrders.forEach(o=>(o.order_items||[]).forEach(oi=>{
         const id=oi.item?.id; if(!id) return;
         skuSales[id]=(skuSales[id]||0)+(oi.quantity||0);
 skuRevenue[id]=(skuRevenue[id]||0)+((oi.unit_price||0)*(oi.quantity||0));
@@ -1987,7 +2027,7 @@ skuRevenue[id]=(skuRevenue[id]||0)+((oi.unit_price||0)*(oi.quantity||0));
 
 // ── Métricas de HOJE (filtra allOrders pela data de hoje) ──
 const todayStr = new Date().toLocaleDateString('en-CA');
-const todayOrders = allOrders.filter(o=>{
+const todayOrders = approvedOrders.filter(o=>{
 const d = o.date_created ? new Date(o.date_created) : null;
 return d && d.toLocaleDateString('en-CA') === todayStr;
 });
