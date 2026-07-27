@@ -1323,6 +1323,46 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
       </div>
 
       <!-- Análise de Recuperação (aba "Análise Recuperação" da planilha) -->
+<div class="card" style="margin-bottom:18px">
+<div class="card-head">
+<span class="card-title">Relatorio de Reposicao de Estoque</span>
+<div style="display:flex;gap:8px;align-items:center">
+<span class="badge b-orange" id="repo-count-badge">0 itens</span>
+<button class="btn-sm btn-ghost" onclick="exportRepoCSV()">Exportar CSV</button>
+</div>
+</div>
+<div class="card-body">
+<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin-bottom:14px">
+<div style="display:flex;gap:6px" id="repo-filter-btns">
+<button class="btn-sm btn-primary" id="repo-btn-all" onclick="setRepoFilter(this,'all')">Todas</button>
+<button class="btn-sm btn-ghost" id="repo-btn-a" onclick="setRepoFilter(this,'A')">Curva A</button>
+<button class="btn-sm btn-ghost" id="repo-btn-b" onclick="setRepoFilter(this,'B')">Curva B</button>
+<button class="btn-sm btn-ghost" id="repo-btn-c" onclick="setRepoFilter(this,'C')">Curva C</button>
+</div>
+<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer">
+<input type="checkbox" id="repo-only-needed" checked onchange="renderRepoTable()"/>
+Mostrar apenas itens que precisam repor
+</label>
+</div>
+<div class="scroll" style="max-height:420px">
+<table class="t">
+<thead>
+<tr>
+<th>Produto</th>
+<th>Curva</th>
+<th>Estoque Atual</th>
+<th>Vendas no Periodo</th>
+<th>Giro/dia</th>
+<th>Cobertura Atual</th>
+<th>Meta Cobertura</th>
+<th>Sugestao Reposicao</th>
+</tr>
+</thead>
+<tbody id="repo-tbody"><tr><td colspan="8" style="text-align:center;padding:20px;color:var(--muted)">Aguardando calculo ABC...</td></tr></tbody>
+</table>
+</div>
+</div>
+</div>
       <div class="card">
         <div class="card-head">
           <span class="card-title">📉 Análise de Recuperação — Produtos em Queda</span>
@@ -2931,6 +2971,63 @@ async function computeABC(){
   state.alerts=[...state.alerts.filter(a=>!a.title.includes('[Curva A]')),...abcAlerts];
   document.getElementById('alert-badge').textContent=state.alerts.length;
   renderAlerts();
+
+state.abcClassified = classified;
+state.abcPeriod = period;
+renderRepoTable();
+}
+
+let repoFilter = 'all';
+function setRepoFilter(el, curve){
+document.querySelectorAll('#repo-filter-btns button').forEach(b=>{b.classList.remove('btn-primary'); b.classList.add('btn-ghost');});
+el.classList.remove('btn-ghost'); el.classList.add('btn-primary');
+repoFilter = curve;
+renderRepoTable();
+}
+
+function renderRepoTable(){
+const classified = state.abcClassified || [];
+const period = state.abcPeriod || 30;
+const onlyNeeded = document.getElementById('repo-only-needed')?.checked;
+const targetDaysMap = {A:60,B:30,C:15};
+let rows = classified.map(sku=>{
+const dailyRate = period>0 ? (sku.sold/period) : 0;
+const coverageDays = dailyRate>0 ? Math.round(sku.qty/dailyRate) : (sku.qty>0 ? 999 : 0);
+const target = targetDaysMap[sku.curve]||0;
+const targetStock = Math.ceil(dailyRate*target);
+const suggested = Math.max(0, Math.round(targetStock - sku.qty));
+return Object.assign({}, sku, {dailyRate:dailyRate, coverageDays:coverageDays, targetDays:target, suggested:suggested});
+});
+if(repoFilter!=='all') rows = rows.filter(r=>r.curve===repoFilter);
+if(onlyNeeded) rows = rows.filter(r=>r.suggested>0);
+rows.sort((a,b)=>b.suggested-a.suggested);
+window.repoRows = rows;
+const badge = document.getElementById('repo-count-badge'); if(badge) badge.textContent = rows.length+' itens';
+const tbody = document.getElementById('repo-tbody');
+if(!tbody) return;
+tbody.innerHTML = rows.length ? rows.map(r=>{
+const covClass = r.coverageDays<7 ? 'c-red' : r.coverageDays<r.targetDays ? 'c-orange' : 'c-green';
+const suggHtml = r.suggested>0 ? '<span class="c-orange fw6 mono">'+r.suggested+' un</span>' : '<span class="c-muted" style="font-size:11px">OK</span>';
+const curveColor = r.curve==='A' ? '#ff4d6a' : r.curve==='B' ? '#ff9500' : '#5a6a7a';
+const covLabel = r.coverageDays>=999 ? '999+' : r.coverageDays;
+return '<tr><td class="fw6" style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+r.title+'">'+r.title+'</td><td><span style="background:'+curveColor+'22;color:'+curveColor+';border-radius:99px;padding:2px 10px;font-size:11px;font-weight:700">Curva '+r.curve+'</span></td><td class="mono">'+r.qty+' un</td><td class="mono c-green">'+r.sold+'</td><td class="mono">'+r.dailyRate.toFixed(2)+'</td><td class="mono '+covClass+'">'+covLabel+'d</td><td class="mono c-muted">'+r.targetDays+'d</td><td>'+suggHtml+'</td></tr>';
+}).join('') : '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--muted)">Nenhum item neste filtro</td></tr>';
+}
+
+function exportRepoCSV(){
+const rows = window.repoRows || [];
+if(!rows.length){ showToast('Nenhum dado para exportar', 'warn'); return; }
+const header = ['Produto','Curva','Estoque Atual','Vendas no Periodo','Giro por dia','Cobertura Atual dias','Meta Cobertura dias','Sugestao Reposicao'];
+const csvRows = rows.map(r=>[r.title,r.curve,r.qty,r.sold,r.dailyRate.toFixed(2),r.coverageDays,r.targetDays,r.suggested]);
+const allRows = [header].concat(csvRows);
+const csvLines = allRows.map(row=>row.map(v=>'"'+String(v).split('"').join('""')+'"').join(','));
+const csv = csvLines.join(String.fromCharCode(10));
+const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+const url = URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url; a.download = 'reposicao_estoque.csv';
+document.body.appendChild(a); a.click(); document.body.removeChild(a);
+URL.revokeObjectURL(url);
 }
 
 function fmtK(n){
