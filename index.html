@@ -3020,8 +3020,8 @@ if(!rows.length){ showToast('Nenhum dado para exportar', 'warn'); return; }
 const header = ['Produto','Curva','Estoque Atual','Vendas no Periodo','Giro por dia','Cobertura Atual dias','Meta Cobertura dias','Sugestao Reposicao'];
 const csvRows = rows.map(r=>[r.title,r.curve,r.qty,r.sold,r.dailyRate.toFixed(2),r.coverageDays,r.targetDays,r.suggested]);
 const allRows = [header].concat(csvRows);
-const csvLines = allRows.map(row=>row.map(v=>'"'+String(v).split('"').join('""')+'"').join(','));
-const csv = csvLines.join(String.fromCharCode(10));
+const csvLines = allRows.map(row=>row.map(v=>'"'+String(v).split('"').join('""')+'"').join(';'));
+const csv = String.fromCharCode(65279) + csvLines.join(String.fromCharCode(10));
 const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
 const url = URL.createObjectURL(blob);
 const a = document.createElement('a');
