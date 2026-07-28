@@ -319,6 +319,7 @@ main { padding:24px 28px; }
 .b-yellow { background:rgba(255,230,0,0.15); color:var(--ml-yellow); }
 
 /* TABLE */
+  .b-muted { background:rgba(61,80,102,0.25); color:var(--muted); }
 table.t { width:100%; border-collapse:collapse; }
 table.t th {
   padding:10px 14px; text-align:left;
@@ -2237,10 +2238,13 @@ async function loadPricingData(){
   const results = [];
   // Analisa até 15 itens — busca pública tempo real
   for(const it of items.slice(0,15)){
-    let mktMin = it.price * 0.75 + Math.random()*20;
-    let mktMax = it.price * 1.35 + Math.random()*50;
-    let mktCount = 0;
-    if(!state.isDemo){
+    let mktMin = null;
+        let mktMax = null;
+        let mktCount = 0;
+        if(state.isDemo){
+                mktMin = it.price * 0.75 + Math.random()*20;
+                mktMax = it.price * 1.35 + Math.random()*50;
+        } else {
       // Busca pelo título + categoria para mais precisão
       const q = it.title.split(' ').slice(0,4).join(' ');
       const search = await mlGetPublic(`/sites/${state.site}/search?q=${encodeURIComponent(q)}&category=${it.category_id||''}&limit=20`);
@@ -2255,24 +2259,26 @@ async function loadPricingData(){
           mktCount=prices.length;
         }
       }
+          await new Promise(res=>setTimeout(res, 350));
     }
-    results.push({ ...it, mktMin, mktMax, mktCount });
+    results.push({ ...it, mktMin, mktMax, mktCount, hasMarket: mktMin !== null });
   }
 
   // KPIs
   const avgMine = results.reduce((s,r)=>s+r.price,0)/results.length;
   document.getElementById('avg-price-mine').textContent = 'R$'+Math.round(avgMine);
-  const cheaper = results.filter(r=>r.mktMin<r.price).length;
+const withMarket = results.filter(r=>r.hasMarket);
+  const cheaper = withMarket.filter(r=>r.mktMin<r.price).length;
   document.getElementById('cheaper-count').textContent = cheaper;
-  document.getElementById('cheaper-pct').textContent = `de ${results.length} analisados`;
-  const opps = results.filter(r=>r.price < r.mktMin*0.95).length;
+  document.getElementById('cheaper-pct').textContent = `de ${withMarket.length} com dados de mercado`;
+  const opps = withMarket.filter(r=>r.price < r.mktMin*0.95).length;
   document.getElementById('price-opp-count').textContent = opps;
   document.getElementById('price-alerts').textContent = cheaper+opps;
 
   // Table
   document.getElementById('pricing-tbody').innerHTML = results.map(r=>{
-    const pos = r.price<=r.mktMin*1.05 ? 'Mais barato' : r.price<=r.mktMax*0.85 ? 'Competitivo' : 'Caro';
-    const posClass = pos==='Mais barato'?'b-green':pos==='Competitivo'?'b-blue':'b-red';
+    const pos = !r.hasMarket ? 'Sem dados' : r.price<=r.mktMin*1.05 ? 'Mais barato' : r.price<=r.mktMax*0.85 ? 'Competitivo' : 'Caro';
+    const posClass = pos==='Sem dados'?'b-muted':pos==='Mais barato'?'b-green':pos==='Competitivo'?'b-blue':'b-red';
     const action = pos==='Caro'
       ? `<span class="c-red" style="font-size:11px">↓ Reduzir</span>`
       : pos==='Mais barato'
@@ -2281,8 +2287,8 @@ async function loadPricingData(){
     return `<tr>
       <td class="fw6" style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r.title}">${r.title}</td>
       <td class="mono c-blue">R$${fmt(r.price)}</td>
-      <td class="mono c-green">R$${fmt(r.mktMin)}</td>
-      <td class="mono c-muted">R$${fmt(r.mktMax)}</td>
+      <td class="mono c-green">${r.hasMarket ? 'R$'+fmt(r.mktMin) : '<span class="c-muted" style="font-size:11px">indisponível</span>'}</td>
+      <td class="mono c-muted">${r.hasMarket ? 'R$'+fmt(r.mktMax) : '<span class="c-muted" style="font-size:11px">indisponível</span>'}</td>
       <td><span class="badge ${posClass}">${pos}</span></td>
       <td>${action}</td>
     </tr>`;
