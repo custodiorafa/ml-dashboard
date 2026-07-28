@@ -1276,6 +1276,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
                   <tr>
                     <th>#</th>
                     <th>Produto</th>
+                    <th>SKU</th>
                     <th>Curva</th>
                     <th>Vendas</th>
                     <th>Receita</th>
@@ -1286,7 +1287,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
                   </tr>
                 </thead>
                 <tbody id="abc-tbody">
-                  <tr><td colspan="9" style="text-align:center;padding:24px;color:var(--muted)">Clique em Recalcular para gerar a Curva ABC</td></tr>
+                  <tr><td colspan="10" style="text-align:center;padding:24px;color:var(--muted)">Clique em Recalcular para gerar a Curva ABC</td></tr>
                 </tbody>
               </table>
             </div>
@@ -1349,6 +1350,7 @@ Mostrar apenas itens que precisam repor
 <thead>
 <tr>
 <th>Produto</th>
+<th>SKU</th>
 <th>Curva</th>
 <th>Estoque Atual</th>
 <th>Vendas no Periodo</th>
@@ -1358,7 +1360,7 @@ Mostrar apenas itens que precisam repor
 <th>Sugestao Reposicao</th>
 </tr>
 </thead>
-<tbody id="repo-tbody"><tr><td colspan="8" style="text-align:center;padding:20px;color:var(--muted)">Aguardando calculo ABC...</td></tr></tbody>
+<tbody id="repo-tbody"><tr><td colspan="9" style="text-align:center;padding:20px;color:var(--muted)">Aguardando calculo ABC...</td></tr></tbody>
 </table>
 </div>
 </div>
@@ -2510,7 +2512,7 @@ async function fetchAndRenderTrends(catId){
 // ════════════════════════════════════════════
 async function loadStockData(){
   const items = state.isDemo ? demoItems() : state.items;
-  if(!items.length){ document.getElementById('stock-tbody').innerHTML='<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--muted)">Sem anúncios para analisar</td></tr>'; return; }
+  if(!items.length){ document.getElementById('stock-tbody').innerHTML='<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--muted)">Sem anúncios para analisar</td></tr>'; return; }
 
   // Usa vendas reais dos orders se disponível
   const skuSales = {};
@@ -2758,13 +2760,13 @@ function clearAlerts(){
 async function computeABC(){
   const items = state.isDemo ? demoItems() : state.items;
   if(!items.length){
-    document.getElementById('abc-tbody').innerHTML='<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--muted)">Sem anúncios para analisar</td></tr>';
+    document.getElementById('abc-tbody').innerHTML='<tr><td colspan="10" style="padding:20px;text-align:center;color:var(--muted)">Sem anúncios para analisar</td></tr>';
     return;
   }
 
   const period = parseInt(document.getElementById('abc-period')?.value || 30);
   document.getElementById('abc-period-label').textContent = `últimos ${period} dias`;
-  document.getElementById('abc-tbody').innerHTML='<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--muted)">⏳ Calculando Curva ABC...</td></tr>';
+  document.getElementById('abc-tbody').innerHTML='<tr><td colspan="10" style="padding:20px;text-align:center;color:var(--muted)">⏳ Calculando Curva ABC...</td></tr>';
 
   // ── Busca pedidos do período se necessário ──
   let orders = (period===30 ? state.orders : null) || [];
@@ -2866,6 +2868,7 @@ async function computeABC(){
     return `<tr style="${sku.curve==='A'?'background:rgba(255,77,106,0.03)':''}">
       <td class="mono c-muted" style="font-size:11px">${sku.rank}</td>
       <td class="fw6" style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${sku.title}">${sku.title}</td>
+      <td class="mono c-muted" style="font-size:11px">${sku.id}</td>
       <td><span style="background:${curveColors[sku.curve]}22;color:${curveColors[sku.curve]};border:1px solid ${curveColors[sku.curve]}44;border-radius:99px;padding:2px 10px;font-size:11px;font-weight:700">Curva ${sku.curve}</span></td>
       <td class="mono c-green fw6">${sku.sold}</td>
       <td class="mono c-blue">R$${fmt(sku.revenue)}</td>
@@ -3010,8 +3013,8 @@ const covClass = r.coverageDays<7 ? 'c-red' : r.coverageDays<r.targetDays ? 'c-o
 const suggHtml = r.suggested>0 ? '<span class="c-orange fw6 mono">'+r.suggested+' un</span>' : '<span class="c-muted" style="font-size:11px">OK</span>';
 const curveColor = r.curve==='A' ? '#ff4d6a' : r.curve==='B' ? '#ff9500' : '#5a6a7a';
 const covLabel = r.coverageDays>=999 ? '999+' : r.coverageDays;
-return '<tr><td class="fw6" style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+r.title+'">'+r.title+'</td><td><span style="background:'+curveColor+'22;color:'+curveColor+';border-radius:99px;padding:2px 10px;font-size:11px;font-weight:700">Curva '+r.curve+'</span></td><td class="mono">'+r.qty+' un</td><td class="mono c-green">'+r.sold+'</td><td class="mono">'+r.dailyRate.toFixed(2)+'</td><td class="mono '+covClass+'">'+covLabel+'d</td><td class="mono c-muted">'+r.targetDays+'d</td><td>'+suggHtml+'</td></tr>';
-}).join('') : '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--muted)">Nenhum item neste filtro</td></tr>';
+return '<tr><td class="fw6" style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+r.title+'">'+r.title+'</td><td class="mono c-muted" style="font-size:11px">'+r.id+'</td><td><span style="background:'+curveColor+'22;color:'+curveColor+';border-radius:99px;padding:2px 10px;font-size:11px;font-weight:700">Curva '+r.curve+'</span></td><td class="mono">'+r.qty+' un</td><td class="mono c-green">'+r.sold+'</td><td class="mono">'+r.dailyRate.toFixed(2)+'</td><td class="mono '+covClass+'">'+covLabel+'d</td><td class="mono c-muted">'+r.targetDays+'d</td><td>'+suggHtml+'</td></tr>';
+}).join('') : '<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--muted)">Nenhum item neste filtro</td></tr>';
 }
 
 function exportRepoCSV(){
