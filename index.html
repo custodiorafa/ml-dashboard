@@ -785,12 +785,11 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 </div>
 </div>
 
-<div class="gw">
+<div class="gw" style="grid-template-columns:3fr 1fr">
         <div class="card">
           <div class="card-head">
             <span class="card-title">Meus Anúncios — Performance</span>
-            <span class="badge b-blue" id="items-count-badge">carregando</span>
-          </div>
+            <span class="badge b-blue" id="items-count-badge">carregando</span></div><div class="card-body" style="padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--border)"><input id="items-search" type="text" placeholder="Buscar por nome ou ID ML..." style="flex:1;min-width:180px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px"><select id="items-sort" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px"><option value="sales_desc">Mais vendidos</option><option value="rev_desc">Maior receita</option><option value="price_desc">Maior preço</option><option value="stock_asc">Menor estoque</option><option value="az">A-Z</option></select><select id="items-status" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px"><option value="all">Todos os status</option><option value="active">Ativos</option><option value="paused">Pausados</option></select><span class="c-muted" style="font-size:12px" id="items-selected-count"></span></div>
           <div class="card-body" style="padding:0">
             <div class="scroll">
               <table class="t">
@@ -1990,7 +1989,7 @@ function renderTopBar(){
 // ════════════════════════════════════════════
 // OVERVIEW — vendas reais por período e por SKU
 // ════════════════════════════════════════════
-async function renderOverview(){
+function getFilteredOvRows(){const rows=(window.__ovRows||[]).slice();const se=document.getElementById('items-search'),so=document.getElementById('items-sort'),st=document.getElementById('items-status');const q=(se&&se.value||'').toLowerCase().trim();const sortV=(so&&so.value)||'sales_desc';const statusV=(st&&st.value)||'all';let filtered=rows.filter(r=>{const okQ=!q||r.title.toLowerCase().includes(q)||String(r.id).toLowerCase().includes(q);const okS=statusV==='all'||r.status===statusV;return okQ&&okS;});filtered.sort((a,b)=>{if(sortV==='sales_desc')return b.s30-a.s30;if(sortV==='rev_desc')return (b.r30||0)-(a.r30||0);if(sortV==='price_desc')return b.price-a.price;if(sortV==='stock_asc')return a.qty-b.qty;if(sortV==='az')return a.title.localeCompare(b.title);return 0;});return filtered;} function renderItemsTable(){const rows=getFilteredOvRows();const tbody=document.getElementById('items-tbody');if(!tbody)return;tbody.innerHTML = rows.length ? rows.map(r=>{const sc=r.qty<5?'c-red':r.qty<20?'c-orange':'c-green';const checked=(window.__ovSelected&&window.__ovSelected.has(r.id))?'checked':'';return `<tr><td><input type="checkbox" class="item-chk" data-id="${r.id}" ${checked}></td><td class="fw6" style="max-width:260px"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r.title}">${r.title}</div><div class="c-muted" style="font-size:11px">${r.id}</div></td><td class="mono c-blue">R$${fmt(r.price)}</td><td class="mono ${sc}">${r.qty}</td><td class="mono c-green fw6">${r.s30}</td><td class="mono">${r.r30!==null?'R$'+fmt(r.r30):'—'}</td><td><span class="badge ${r.status==='active'?'b-green':'b-red'}">${r.status==='active'?'Ativo':'Pausado'}</span></td></tr>`;}).join('') : '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted)">Nenhum anúncio encontrado</td></tr>';const cnt=document.getElementById('items-selected-count');if(cnt)cnt.textContent=(window.__ovSelected&&window.__ovSelected.size)?`${window.__ovSelected.size} selecionado(s)`:'';} if(!window.__ovBound){window.__ovBound=true;window.__ovSelected=new Set();const se2=document.getElementById('items-search'),so2=document.getElementById('items-sort'),st2=document.getElementById('items-status'),sa2=document.getElementById('items-select-all'),tb2=document.getElementById('items-tbody');if(se2)se2.addEventListener('input',renderItemsTable);if(so2)so2.addEventListener('change',renderItemsTable);if(st2)st2.addEventListener('change',renderItemsTable);if(sa2)sa2.addEventListener('change',()=>{const rws=getFilteredOvRows();if(sa2.checked){rws.forEach(r=>window.__ovSelected.add(r.id));}else{window.__ovSelected.clear();}renderItemsTable();});if(tb2)tb2.addEventListener('change',(e)=>{if(e.target&&e.target.classList.contains('item-chk')){const id=e.target.getAttribute('data-id');if(e.target.checked)window.__ovSelected.add(id);else window.__ovSelected.delete(id);const cnt2=document.getElementById('items-selected-count');if(cnt2)cnt2.textContent=window.__ovSelected.size?`${window.__ovSelected.size} selecionado(s)`:'';}});} async function renderOverview(){
   const u = state.user;
   const items = state.items;
   const totalCount = state.totalItemCount || items.length;
@@ -2092,13 +2091,13 @@ document.getElementById('kpi-today-units').textContent = todayUnits;
 document.getElementById('kpi-today-units-d').innerHTML = `<span class="up">${Object.keys(todaySkuQty).length} SKU${Object.keys(todaySkuQty).length!==1?'s':''} diferentes</span>`;
 const top5Today = Object.entries(todaySkuQty).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([id,qty])=>{
 const it = items.find(i=>i.id===id);
-return { title: it?.title || id, qty };
+return { title: it?.title || id, qty, id };
 });
 const maxTop5 = top5Today[0]?.qty || 1;
 document.getElementById('top-today-badge').textContent = `${todayOrders.length} pedidos hoje`;
 document.getElementById('top-today-bars').innerHTML = top5Today.length ? top5Today.map(p=>`
 <div class="bar-row">
-<div class="bar-lbl">${p.title}</div>
+<div class="bar-lbl">${p.title}<div class="c-muted" style="font-size:10px">${p.id||''}</div></div>
 <div class="bar-trk"><div class="bar-fill" style="width:${p.qty/maxTop5*100}%;background:var(--green)"></div></div>
 <div class="bar-num c-green">${p.qty} un</div>
 </div>`).join('') : '<div class="c-muted" style="font-size:13px">Nenhuma venda registrada hoje ainda</div>';
@@ -2139,7 +2138,7 @@ document.getElementById('top-today-bars').innerHTML = [
 {title:'Mouse Sem Fio Ergonômico',qty:2}
 ].map(p=>`
 <div class="bar-row">
-<div class="bar-lbl">${p.title}</div>
+<div class="bar-lbl">${p.title}<div class="c-muted" style="font-size:10px">${p.id||''}</div></div>
 <div class="bar-trk"><div class="bar-fill" style="width:${p.qty/5*100}%;background:var(--green)"></div></div>
 <div class="bar-num c-green">${p.qty} un</div>
 </div>`).join('');
@@ -2149,26 +2148,10 @@ document.getElementById('top-today-bars').innerHTML = [
   // Adiciona coluna receita na thead
   document.querySelector('#items-tbody')?.closest('table')?.querySelector('thead tr') &&
     (document.querySelector('#items-tbody').closest('table').querySelector('thead tr').innerHTML =
-      '<th>Produto</th><th>Preço</th><th>Estoque</th><th>Vend. 30d</th><th>Receita 30d</th><th>Status</th>');
+      '<th style="width:28px"><input type="checkbox" id="items-select-all"></th><th>Produto</th><th>Preço</th><th>Estoque</th><th>Vend. 30d</th><th>Receita 30d</th><th>Status</th>');
 
-  const sorted=[...items].sort((a,b)=>(skuSales[b.id]||0)-(skuSales[a.id]||0));
-  const tbody=document.getElementById('items-tbody');
-  tbody.innerHTML = sorted.length ? sorted.map(it=>{
-    const qty=it.available_quantity??0;
-    const sc=qty<5?'c-red':qty<20?'c-orange':'c-green';
-    const s30=skuSales[it.id]??0;
-    const r30=skuRevenue[it.id]??null;
-    return `<tr>
-      <td class="fw6" style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${it.title}">${it.title}</td>
-      <td class="mono c-blue">R$${fmt(it.price)}</td>
-      <td class="mono ${sc}">${qty}</td>
-      <td class="mono c-green fw6">${s30}</td>
-      <td class="mono">${r30!==null?'R$'+fmt(r30):'—'}</td>
-      <td><span class="badge ${it.status==='active'?'b-green':'b-red'}">${it.status==='active'?'Ativo':'Pausado'}</span></td>
-    </tr>`;
-  }).join('') : '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--muted)">Nenhum anúncio encontrado</td></tr>';
-
-  document.getElementById('items-count-badge').textContent=`${totalCount} anúncios`;
+  window.__ovRows=items.map(it=>({id:it.id,title:it.title,price:it.price,qty:it.available_quantity??0,s30:skuSales[it.id]??0,r30:skuRevenue[it.id]??null,status:it.status}));
+  renderItemsTable();document.getElementById('items-count-badge').textContent=`${totalCount} anúncios`;
 
   // ── Perfil ──
   const profBody=document.getElementById('seller-profile-body');
