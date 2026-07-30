@@ -2404,7 +2404,7 @@ function sortOpportunities(){
 async function loadTrends(){
   const items = state.isDemo ? demoItems() : state.items;
   trendState.allItems = items;
-  const catIds = [...new Set(items.map(i=>i.category_id).filter(Boolean))].slice(0,8);
+  const catCounts={}; items.forEach(i=>{ if(i.category_id) catCounts[i.category_id]=(catCounts[i.category_id]||0)+1; }); const catIds=Object.entries(catCounts).sort((a,b)=>b[1]-a[1]).map(([cid])=>cid).slice(0,8);
 
   // Resolve nomes reais das categorias
   const catNames={};
@@ -2444,7 +2444,7 @@ async function fetchAndRenderTrends(catId){
     trends=await mlGetPublic(`/trends/${state.site}/${catId}`);
     if(!trends||!Array.isArray(trends)) trends=await mlGetPublic(`/trends/${state.site}`);
   }
-  if(!trends||!Array.isArray(trends)) trends=demoTrends(catId);
+  const trendsUnavailable=(!trends||!Array.isArray(trends))&&!state.isDemo; if(!trends||!Array.isArray(trends)) trends = state.isDemo ? demoTrends(catId) : []; trendState.trendsUnavailable=trendsUnavailable; if(trendsUnavailable){ const _msg='<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px">⚠️ API de Trends do Mercado Livre indisponível para esta conta (endpoint bloqueado ou descontinuado pelo ML). Não é possível exibir dados reais de demanda agora.</div>'; document.getElementById('trends-list').innerHTML=_msg; document.getElementById('demand-bars').innerHTML=_msg; document.getElementById('growth-bars').innerHTML=_msg; document.getElementById('trend-count').textContent='—'; document.getElementById('your-in-trend').textContent='—'; document.getElementById('launch-opps').textContent='—'; return; }
 
   trendState.allTrends=trends;
   document.getElementById('trend-count').textContent=trends.length;
