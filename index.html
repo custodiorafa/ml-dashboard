@@ -1721,7 +1721,9 @@ function goTab(el, page){
 const BASE = 'https://api.mercadolibre.com';
 
 // Cadeia de proxies CORS — tenta um por vez até funcionar
+const WORKER = 'https://square-hill-d05c.rafael-custodio.workers.dev';
 const PROXIES = [
+  WORKER,
   'https://corsproxy.io/?url=',
   'https://api.allorigins.win/raw?url=',
   'https://cors-anywhere.herokuapp.com/',
@@ -1757,9 +1759,11 @@ async function mlFetch(path, options={}){
 
   // Tenta cada proxy em sequência
   for(const proxy of PROXIES){
-    const proxyUrl = proxy.includes('?url=')
-      ? `${proxy}${encodeURIComponent(full)}`
-      : `${proxy}${full}`;
+    const proxyUrl = proxy === WORKER
+      ? `${WORKER}/?path=${encodeURIComponent(path)}`
+      : proxy.includes('?url=')
+        ? `${proxy}${encodeURIComponent(full)}`
+        : `${proxy}${full}`;
     try {
       setStep(`Conectando via proxy (${PROXIES.indexOf(proxy)+1}/${PROXIES.length})...`);
       const r = await fetchWithTimeout(proxyUrl, options, 14000);
