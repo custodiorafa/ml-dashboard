@@ -708,6 +708,42 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
         <div class="token-status token-ok" id="token-status">● Token ativo</div>
       </div>
 
+      <!-- ═══ FILTRO DE PERÍODO ═══ -->
+      <div class="period-bar">
+        <span class="period-label">Período:</span>
+        <button class="period-btn active" data-days="7" onclick="setPeriod(7)">7 dias</button>
+        <button class="period-btn" data-days="15" onclick="setPeriod(15)">15 dias</button>
+        <button class="period-btn" data-days="30" onclick="setPeriod(30)">30 dias</button>
+        <span class="period-range" id="period-range"></span>
+      </div>
+      <div class="kpi-row" style="grid-template-columns:repeat(5,1fr)">
+        <div class="kpi" style="--kpi-color:var(--purple)">
+          <div class="kpi-label">Visitas <span class="pd-lbl"></span></div>
+          <div class="kpi-val" id="pk-visits">—</div>
+          <div class="kpi-delta neutral" id="pk-visits-d">aguardando...</div>
+        </div>
+        <div class="kpi" style="--kpi-color:var(--green)">
+          <div class="kpi-label">Vendas <span class="pd-lbl"></span></div>
+          <div class="kpi-val" id="pk-orders">—</div>
+          <div class="kpi-delta neutral" id="pk-orders-d">aguardando...</div>
+        </div>
+        <div class="kpi" style="--kpi-color:var(--accent)">
+          <div class="kpi-label">Faturamento <span class="pd-lbl"></span></div>
+          <div class="kpi-val" id="pk-rev">—</div>
+          <div class="kpi-delta neutral" id="pk-rev-d">aguardando...</div>
+        </div>
+        <div class="kpi" style="--kpi-color:var(--orange)">
+          <div class="kpi-label">Ticket Médio <span class="pd-lbl"></span></div>
+          <div class="kpi-val" id="pk-ticket">—</div>
+          <div class="kpi-delta neutral" id="pk-ticket-d">aguardando...</div>
+        </div>
+        <div class="kpi" style="--kpi-color:var(--ml-yellow)">
+          <div class="kpi-label">Conversão <span class="pd-lbl"></span></div>
+          <div class="kpi-val" id="pk-conv">—</div>
+          <div class="kpi-delta neutral" id="pk-conv-d">aguardando...</div>
+        </div>
+      </div>
+
       <div class="kpi-row">
         <div class="kpi" style="--kpi-color:var(--accent)">
           <div class="kpi-label">Anúncios Ativos</div>
@@ -2109,6 +2145,8 @@ document.getElementById('top-today-bars').innerHTML = top5Today.length ? top5Tod
       document.getElementById('kpi-orders').textContent='—';
       document.getElementById('kpi-orders-d').innerHTML='<span class="neutral">sem permissão /orders</span>';
     }
+    // Filtro de período (7/15/30) — recalcula ao carregar/atualizar
+    try { for(const k in __visitsCache) delete __visitsCache[k]; let p = 7; try { p = Number(localStorage.getItem('ml_period')) || 7; } catch(e){} loadPeriodKpis(p); } catch(e){ console.warn('Período falhou:', e.message); }
     // Visitas + Conversão (7 dias) — endpoint do vendedor
     try {
       const dTo = new Date().toISOString().slice(0,10);
@@ -3072,6 +3110,67 @@ setInterval(()=>{
     show('auth-screen');
   }
 })();
+</script>
+<style>
+.period-bar{display:flex;align-items:center;gap:8px;margin:0 0 14px;flex-wrap:wrap}
+.period-label{font-size:12px;opacity:.7;margin-right:4px}
+.period-btn{background:var(--surface);border:1px solid var(--border);color:inherit;border-radius:8px;padding:6px 14px;font:inherit;font-size:13px;cursor:pointer;transition:all .15s}
+.period-btn:hover{border-color:var(--accent)}
+.period-btn.active{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.period-range{font-size:12px;opacity:.6;margin-left:6px}
+.pd-lbl{opacity:.75}
+@media(max-width:900px){.period-bar + .kpi-row{grid-template-columns:repeat(2,1fr)!important}}
+</style>
+<script>
+// ═══ Filtro de período (7/15/30 dias) — Visitas, Vendas, Faturamento, Ticket, Conversão ═══
+const __visitsCache = {};
+function setPeriod(d){
+  try { localStorage.setItem('ml_period', String(d)); } catch(e){}
+  loadPeriodKpis(d);
+}
+async function loadPeriodKpis(days){
+  days = Number(days) || 7;
+  state.period = days;
+  document.querySelectorAll('.period-btn').forEach(b => b.classList.toggle('active', Number(b.dataset.days) === days));
+  document.querySelectorAll('.pd-lbl').forEach(s => s.textContent = '(' + days + ' dias)');
+  const brl = n => n.toLocaleString('pt-BR', {style:'currency', currency:'BRL'});
+  const set = (id, v, d) => { document.getElementById(id).textContent = v; if(d !== undefined) document.getElementById(id + '-d').innerHTML = d; };
+  const now = Date.now(), lim = now - days*864e5;
+  const dFrom = new Date(lim).toISOString().slice(0,10), dTo = new Date(now).toISOString().slice(0,10);
+  document.getElementById('period-range').textContent = dFrom.split('-').reverse().join('/') + ' a ' + dTo.split('-').reverse().join('/');
+
+  if(state.isDemo){ ['pk-visits','pk-orders','pk-rev','pk-ticket','pk-conv'].forEach(id => set(id, '—', '<span class="neutral">modo demo</span>')); return; }
+
+  // Vendas / Faturamento / Ticket (a partir dos pedidos já carregados — últimos 30 dias)
+  const ped = (state.orders || []).filter(o => o.status !== 'cancelled' && new Date(o.date_created).getTime() >= lim);
+  const nPed = ped.length;
+  const rev = ped.reduce((s,o) => s + (Number(o.total_amount) || 0), 0);
+  const units = ped.reduce((s,o) => s + (o.order_items || []).reduce((a,i) => a + (Number(i.quantity) || 0), 0), 0);
+  const ticket = nPed ? rev / nPed : 0;
+  set('pk-orders', nPed.toLocaleString('pt-BR'), '<span class="neutral">' + units.toLocaleString('pt-BR') + ' unidades · ' + (nPed/days).toFixed(1).replace('.',',') + ' pedidos/dia</span>');
+  set('pk-rev', brl(rev), '<span class="neutral">' + brl(rev/days) + ' por dia</span>');
+  set('pk-ticket', brl(ticket), '<span class="neutral">' + (nPed ? (units/nPed).toFixed(2).replace('.',',') : '0') + ' un. por pedido</span>');
+
+  // Visitas (endpoint do vendedor, com cache por período)
+  set('pk-visits', '…');
+  let tv = __visitsCache[days];
+  if(tv === undefined){
+    try {
+      const vr = await mlGet('/users/' + state.sellerId + '/items_visits?date_from=' + dFrom + '&date_to=' + dTo);
+      tv = vr && typeof vr.total_visits === 'number' ? vr.total_visits : null;
+      if(tv !== null) __visitsCache[days] = tv;
+    } catch(e){ tv = null; }
+  }
+  if(state.period !== days) return; // usuário trocou o filtro no meio da carga
+  if(tv === null || tv === undefined){
+    set('pk-visits', '—', '<span class="neutral">sem dados de visitas</span>');
+    set('pk-conv', '—', '<span class="neutral">sem visitas</span>');
+    return;
+  }
+  const conv = tv > 0 ? nPed / tv * 100 : 0;
+  set('pk-visits', tv.toLocaleString('pt-BR'), '<span class="neutral">' + Math.round(tv/days).toLocaleString('pt-BR') + ' por dia</span>');
+  set('pk-conv', conv.toFixed(2).replace('.',',') + '%', '<span class="neutral">' + nPed.toLocaleString('pt-BR') + ' pedidos ÷ ' + tv.toLocaleString('pt-BR') + ' visitas</span>');
+}
 </script>
 </body>
 </html>
