@@ -2109,18 +2109,26 @@ document.getElementById('top-today-bars').innerHTML = top5Today.length ? top5Tod
       document.getElementById('kpi-orders').textContent='—';
       document.getElementById('kpi-orders-d').innerHTML='<span class="neutral">sem permissão /orders</span>';
     }
-    // Visitas
-    const ids5=items.slice(0,5).map(i=>i.id).join(',');
-    if(ids5){
-      const vr=await mlGet(`/items/visits?ids=${ids5}&date_from=${new Date(Date.now()-7*864e5).toISOString().slice(0,10)}&date_to=${new Date().toISOString().slice(0,10)}`);
-      if(vr){
-        const tv=Object.values(vr).reduce((s,v)=>s+(typeof v==='number'?v:v?.total_visits||0),0);
-        document.getElementById('kpi-visits').textContent=tv>1000?(tv/1000).toFixed(1)+'k':tv;
-        document.getElementById('kpi-visits-d').innerHTML='<span class="up">últimos 7 dias (amostra)</span>';
+    // Visitas + Conversão (7 dias) — endpoint do vendedor
+    try {
+      const dTo = new Date().toISOString().slice(0,10);
+      const dFrom = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
+      const vr = await mlGet(`/users/${state.sellerId}/items_visits?date_from=${dFrom}&date_to=${dTo}`);
+      const tv = vr && typeof vr.total_visits === 'number' ? vr.total_visits : null;
+      if(tv !== null){
+        const lim = Date.now()-7*864e5;
+        const ped7 = (state.orders||[]).filter(o => o.status !== 'cancelled' && new Date(o.date_created).getTime() >= lim).length;
+        const conv = tv > 0 ? (ped7/tv*100) : 0;
+        state.visits7 = tv; state.conv7 = conv;
+        document.getElementById('kpi-visits').textContent = tv.toLocaleString('pt-BR');
+        document.getElementById('kpi-visits-d').innerHTML = `<span class="up">Conversão ${conv.toFixed(2).replace('.',',')}%</span> · ${ped7.toLocaleString('pt-BR')} pedidos/7d`;
       } else {
-        document.getElementById('kpi-visits').textContent='—';
-        document.getElementById('kpi-visits-d').innerHTML='<span class="neutral">sem dados</span>';
+        document.getElementById('kpi-visits').textContent = '—';
+        document.getElementById('kpi-visits-d').innerHTML = '<span class="neutral">sem dados de visitas</span>';
       }
+    } catch(err){
+      console.warn('Visitas falhou:', err.message);
+      document.getElementById('kpi-visits').textContent = '—';
     }
   } else {
     document.getElementById('kpi-orders').textContent='187';
