@@ -714,6 +714,12 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
         <button class="period-btn active" data-days="7" onclick="setPeriod(7)">7 dias</button>
         <button class="period-btn" data-days="15" onclick="setPeriod(15)">15 dias</button>
         <button class="period-btn" data-days="30" onclick="setPeriod(30)">30 dias</button>
+        <span class="period-sep">|</span>
+        <span class="period-label">De</span>
+        <input type="date" class="period-date" id="pd-from">
+        <span class="period-label">até</span>
+        <input type="date" class="period-date" id="pd-to">
+        <button class="period-btn period-apply" id="pd-apply" onclick="applyCustomPeriod()">Aplicar</button>
         <span class="period-range" id="period-range"></span>
       </div>
       <div class="kpi-row" style="grid-template-columns:repeat(5,1fr)">
@@ -2146,7 +2152,7 @@ document.getElementById('top-today-bars').innerHTML = top5Today.length ? top5Tod
       document.getElementById('kpi-orders-d').innerHTML='<span class="neutral">sem permissão /orders</span>';
     }
     // Filtro de período (7/15/30) — recalcula ao carregar/atualizar
-    try { for(const k in __visitsCache) delete __visitsCache[k]; let p = 7; try { p = Number(localStorage.getItem('ml_period')) || 7; } catch(e){} loadPeriodKpis(p); } catch(e){ console.warn('Período falhou:', e.message); }
+    try { for(const k in __visitsCache) delete __visitsCache[k]; for(const k in __ordersCache) delete __ordersCache[k]; let p = 7; try { const sv = localStorage.getItem('ml_period') || '7'; if(sv.startsWith('custom:')){ const [, f, t] = sv.split(':'); p = {from:f, to:t}; } else p = Number(sv) || 7; } catch(e){} loadPeriodKpis(p); } catch(e){ console.warn('Período falhou:', e.message); }
     // Visitas + Conversão (7 dias) — endpoint do vendedor
     try {
       const dTo = new Date().toISOString().slice(0,10);
@@ -3119,30 +3125,87 @@ setInterval(()=>{
 .period-btn.active{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 .period-range{font-size:12px;opacity:.6;margin-left:6px}
 .pd-lbl{opacity:.75}
+.period-sep{opacity:.3;margin:0 4px}
+.period-date{background:var(--surface);border:1px solid var(--border);color:inherit;border-radius:8px;padding:5px 8px;font:inherit;font-size:13px;color-scheme:dark}
+.period-date:focus{outline:none;border-color:var(--accent)}
+.period-apply{border-color:var(--accent)}
 @media(max-width:900px){.period-bar + .kpi-row{grid-template-columns:repeat(2,1fr)!important}}
 </style>
 <script>
-// ═══ Filtro de período (7/15/30 dias) — Visitas, Vendas, Faturamento, Ticket, Conversão ═══
+// ═══ Filtro de período (7/15/30 dias + intervalo personalizado) — Visitas, Vendas, Faturamento, Ticket, Conversão ═══
 const __visitsCache = {};
+const __ordersCache = {};
+const __ymd = d => { const x = new Date(d); return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0') + '-' + String(x.getDate()).padStart(2,'0'); };
+const __br = s => s.split('-').reverse().join('/');
+
 function setPeriod(d){
   try { localStorage.setItem('ml_period', String(d)); } catch(e){}
   loadPeriodKpis(d);
 }
-async function loadPeriodKpis(days){
-  days = Number(days) || 7;
-  state.period = days;
-  document.querySelectorAll('.period-btn').forEach(b => b.classList.toggle('active', Number(b.dataset.days) === days));
-  document.querySelectorAll('.pd-lbl').forEach(s => s.textContent = '(' + days + ' dias)');
+function applyCustomPeriod(){
+  const f = document.getElementById('pd-from').value, t = document.getElementById('pd-to').value;
+  if(!f || !t){ alert('Escolha a data inicial e a final.'); return; }
+  if(f > t){ alert('A data inicial precisa ser anterior à final.'); return; }
+  if(t > __ymd(Date.now())){ alert('A data final não pode ser no futuro.'); return; }
+  try { localStorage.setItem('ml_period', 'custom:' + f + ':' + t); } catch(e){}
+  loadPeriodKpis({from:f, to:t});
+}
+
+// Busca pedidos de um intervalo qualquer na API (paginado, lotes paralelos)
+async function fetchOrdersRange(from, to){
+  const key = from + '_' + to;
+  if(__ordersCache[key]) return __ordersCache[key];
+  const df = encodeURIComponent(from + 'T00:00:00.000-03:00'), dt = encodeURIComponent(to + 'T23:59:59.999-03:00');
+  const base = '/orders/search?seller=' + state.sellerId + '&order.date_created.from=' + df + '&order.date_created.to=' + dt + '&limit=50&offset=';
+  const first = await mlGet(base + '0');
+  if(!first) return null;
+  const total = Math.min(first.paging?.total || 0, 10000);
+  let all = [...(first.results || [])];
+  const offs = []; for(let o = 50; o < total; o += 50) offs.push(o);
+  for(let i = 0; i < offs.length; i += 8){
+    const pages = await Promise.all(offs.slice(i, i+8).map(o => mlGet(base + o)));
+    pages.forEach(p => { if(p && p.results) all = all.concat(p.results); });
+    const vEl = document.getElementById('pk-orders'); if(vEl) vEl.textContent = all.length.toLocaleString('pt-BR') + '…';
+  }
+  __ordersCache[key] = all;
+  return all;
+}
+
+async function loadPeriodKpis(p){
+  // p = número de dias (7/15/30) ou {from:'AAAA-MM-DD', to:'AAAA-MM-DD'}
+  const today = __ymd(Date.now());
+  let from, to, label;
+  if(p && typeof p === 'object'){ from = p.from; to = p.to; }
+  else { const d = Number(p) || 7; from = __ymd(Date.now() - (d-1)*864e5); to = today; p = d; }
+  const fromTs = new Date(from + 'T00:00:00-03:00').getTime(), toTs = new Date(to + 'T23:59:59.999-03:00').getTime();
+  const days = Math.round((toTs - fromTs) / 864e5);
+  const isPreset = typeof p === 'number';
+  label = isPreset ? '(' + p + ' dias)' : '(' + __br(from).slice(0,5) + ' a ' + __br(to).slice(0,5) + ')';
+  const reqId = Symbol(); state.periodReq = reqId; state.period = isPreset ? p : 'custom';
+
+  document.querySelectorAll('.period-btn[data-days]').forEach(b => b.classList.toggle('active', isPreset && Number(b.dataset.days) === p));
+  const ap = document.getElementById('pd-apply'); if(ap) ap.classList.toggle('active', !isPreset);
+  const fi = document.getElementById('pd-from'), ti = document.getElementById('pd-to');
+  if(fi){ fi.value = from; fi.max = today; } if(ti){ ti.value = to; ti.max = today; }
+  document.querySelectorAll('.pd-lbl').forEach(s => s.textContent = label);
+  document.getElementById('period-range').textContent = days + (days === 1 ? ' dia' : ' dias');
+
   const brl = n => n.toLocaleString('pt-BR', {style:'currency', currency:'BRL'});
   const set = (id, v, d) => { document.getElementById(id).textContent = v; if(d !== undefined) document.getElementById(id + '-d').innerHTML = d; };
-  const now = Date.now(), lim = now - days*864e5;
-  const dFrom = new Date(lim).toISOString().slice(0,10), dTo = new Date(now).toISOString().slice(0,10);
-  document.getElementById('period-range').textContent = dFrom.split('-').reverse().join('/') + ' a ' + dTo.split('-').reverse().join('/');
-
   if(state.isDemo){ ['pk-visits','pk-orders','pk-rev','pk-ticket','pk-conv'].forEach(id => set(id, '—', '<span class="neutral">modo demo</span>')); return; }
 
-  // Vendas / Faturamento / Ticket (a partir dos pedidos já carregados — últimos 30 dias)
-  const ped = (state.orders || []).filter(o => o.status !== 'cancelled' && new Date(o.date_created).getTime() >= lim);
+  ['pk-visits','pk-orders','pk-rev','pk-ticket','pk-conv'].forEach(id => set(id, '…'));
+
+  // Pedidos: usa os já carregados (últimos 30 dias) se o intervalo couber; senão busca na API
+  let base = state.orders || [];
+  const loadedFrom = Date.now() - 30*864e5;
+  if(fromTs < loadedFrom){
+    const r = await fetchOrdersRange(from, to);
+    if(state.periodReq !== reqId) return;
+    if(!r){ ['pk-orders','pk-rev','pk-ticket'].forEach(id => set(id, '—', '<span class="neutral">sem permissão /orders</span>')); base = []; }
+    else base = r;
+  }
+  const ped = base.filter(o => { const t = new Date(o.date_created).getTime(); return o.status !== 'cancelled' && t >= fromTs && t <= toTs; });
   const nPed = ped.length;
   const rev = ped.reduce((s,o) => s + (Number(o.total_amount) || 0), 0);
   const units = ped.reduce((s,o) => s + (o.order_items || []).reduce((a,i) => a + (Number(i.quantity) || 0), 0), 0);
@@ -3151,17 +3214,18 @@ async function loadPeriodKpis(days){
   set('pk-rev', brl(rev), '<span class="neutral">' + brl(rev/days) + ' por dia</span>');
   set('pk-ticket', brl(ticket), '<span class="neutral">' + (nPed ? (units/nPed).toFixed(2).replace('.',',') : '0') + ' un. por pedido</span>');
 
-  // Visitas (endpoint do vendedor, com cache por período)
-  set('pk-visits', '…');
-  let tv = __visitsCache[days];
+  // Visitas (endpoint do vendedor; date_to é exclusivo, então soma 1 dia)
+  const vKey = from + '_' + to;
+  let tv = __visitsCache[vKey];
   if(tv === undefined){
     try {
-      const vr = await mlGet('/users/' + state.sellerId + '/items_visits?date_from=' + dFrom + '&date_to=' + dTo);
+      const vTo = __ymd(new Date(to + 'T12:00:00-03:00').getTime() + 864e5);
+      const vr = await mlGet('/users/' + state.sellerId + '/items_visits?date_from=' + from + '&date_to=' + vTo);
       tv = vr && typeof vr.total_visits === 'number' ? vr.total_visits : null;
-      if(tv !== null) __visitsCache[days] = tv;
+      if(tv !== null) __visitsCache[vKey] = tv;
     } catch(e){ tv = null; }
   }
-  if(state.period !== days) return; // usuário trocou o filtro no meio da carga
+  if(state.periodReq !== reqId) return; // usuário trocou o filtro no meio da carga
   if(tv === null || tv === undefined){
     set('pk-visits', '—', '<span class="neutral">sem dados de visitas</span>');
     set('pk-conv', '—', '<span class="neutral">sem visitas</span>');
