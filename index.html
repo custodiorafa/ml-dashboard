@@ -1127,9 +1127,12 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
       <div class="page-header">
         <div>
           <div class="page-title">Estoque <span>Preditivo</span></div>
-          <div class="page-meta">Gestão inteligente com previsão de ruptura — API /items</div>
+          <div class="page-meta" id="stock-meta">Gestão inteligente com previsão de ruptura — API /items</div>
         </div>
-        <button class="btn-sm btn-primary" onclick="loadStockData()">↻ Atualizar Estoque</button>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div id="stock-source-bar" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"></div>
+          <button class="btn-sm btn-primary" onclick="loadStockData(true)">↻ Atualizar Estoque</button>
+        </div>
       </div>
 
       <div class="kpi-row">
@@ -1155,7 +1158,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
         <div class="card">
           <div class="card-head">
             <span class="card-title">Monitor de Estoque — Análise Preditiva</span>
-            <span class="badge b-blue">API: /items (available_quantity)</span>
+            <span class="badge b-blue" id="stock-api-badge">API: /items (available_quantity)</span>
           </div>
           <div class="card-body" style="padding:0">
             <div class="scroll">
@@ -1174,6 +1177,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
                 <tbody id="stock-tbody"></tbody>
               </table>
             </div>
+            <div id="stock-unmatched" style="display:none;padding:12px 16px;border-top:1px solid var(--border);font-size:12px"></div>
           </div>
         </div>
 
@@ -2555,7 +2559,8 @@ async function fetchAndRenderTrends(catId){
 // ════════════════════════════════════════════
 // STOCK PREDICTIVE + sugestão de reposição
 // ════════════════════════════════════════════
-async function loadStockData(){
+async function loadStockDataML(){
+  resetStockHeader();
   const items = state.isDemo ? demoItems() : state.items;
   if(!items.length){ document.getElementById('stock-tbody').innerHTML='<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--muted)">Sem anúncios para analisar</td></tr>'; return; }
 
@@ -2648,6 +2653,214 @@ async function loadStockData(){
   }));
   state.alerts=[...state.alerts.filter(a=>!a.title.includes('Ruptura iminente')),...newAlerts];
   document.getElementById('alert-badge').textContent=state.alerts.length;
+  renderAlerts();
+}
+
+// ════════════════════════════════════════════
+// ESTOQUE VIA BLING (ERP) — fonte oficial do saldo
+// O ML entra só com anúncios, vendas 30d e estoque Full.
+// ════════════════════════════════════════════
+const BLING_CFG_KEY = 'bling_cfg_v1';
+function blingCfg(){ try { return JSON.parse(localStorage.getItem(BLING_CFG_KEY) || '{}'); } catch(e){ return {}; } }
+function saveBlingCfg(c){ try { localStorage.setItem(BLING_CFG_KEY, JSON.stringify(c)); } catch(e){} }
+function stockSource(){ return blingCfg().source || 'ml'; }
+
+function renderStockSourceBar(){
+  const bar = document.getElementById('stock-source-bar'); if(!bar) return;
+  const c = blingCfg(), src = stockSource();
+  const on  = 'background:var(--accent);color:#fff;border:1px solid var(--accent)';
+  const off = 'background:var(--bg2);color:var(--muted);border:1px solid var(--border)';
+  bar.innerHTML = `
+    <span class="c-muted" style="font-size:11px">Fonte:</span>
+    <button class="btn-sm" style="${src==='bling'?on:off}" onclick="setStockSource('bling')">Bling (ERP)</button>
+    <button class="btn-sm" style="${src==='ml'?on:off}" onclick="setStockSource('ml')">Mercado Livre</button>
+    <button class="btn-sm" style="${off}" title="Configurar Bling" onclick="configBling()">⚙</button>
+    ${src==='bling' ? `<button class="btn-sm" style="${off}" onclick="connectBling()">🔑 Conectar</button>
+      <label class="c-muted" style="font-size:11px;display:flex;gap:4px;align-items:center;cursor:pointer">
+        <input type="checkbox" ${c.addFull!==false?'checked':''} onchange="toggleAddFull(this.checked)"> somar Full ML</label>` : ''}`;
+}
+function setStockSource(src){
+  const c = blingCfg();
+  if(src==='bling' && (!c.url || !c.key)){ c.source='bling'; saveBlingCfg(c); return configBling(); }
+  c.source = src; saveBlingCfg(c); renderStockSourceBar(); loadStockData();
+}
+function toggleAddFull(v){ const c = blingCfg(); c.addFull = v; saveBlingCfg(c); loadStockData(); }
+function configBling(){
+  const c = blingCfg();
+  const url = prompt('URL do Worker do Bling (ex: https://bling-proxy.SEU-USUARIO.workers.dev):', c.url || '');
+  if(url === null) return renderStockSourceBar();
+  const key = prompt('Chave do painel (a DASH_KEY que você cadastrou no Worker):', c.key || '');
+  if(key === null) return renderStockSourceBar();
+  c.url = url.trim().replace(/\/+$/, ''); c.key = key.trim(); c.source = 'bling';
+  saveBlingCfg(c); renderStockSourceBar(); loadStockData(true);
+}
+function connectBling(){
+  const c = blingCfg(); if(!c.url) return configBling();
+  window.open(c.url + '/bling/auth', '_blank');
+}
+async function blingApi(path){
+  const c = blingCfg();
+  if(!c.url || !c.key) throw new Error('Bling não configurado');
+  const r = await fetchWithTimeout(c.url + path, { headers: { 'X-Dash-Key': c.key } }, 60000);
+  const data = await r.json().catch(()=>({}));
+  if(!r.ok){ const e = new Error(data.error || ('HTTP ' + r.status)); e.status = r.status; throw e; }
+  return data;
+}
+
+const normSku = s => String(s || '').trim().toUpperCase();
+function mlItemSkus(it){
+  const pick = attrs => { const a = (attrs || []).find(x => x.id === 'SELLER_SKU'); return a && a.value_name; };
+  const skus = new Set();
+  (it.variations || []).forEach(v => { const s = v.seller_custom_field || pick(v.attributes); if(s) skus.add(normSku(s)); });
+  if(!skus.size){ const s = it.seller_custom_field || pick(it.attributes); if(s) skus.add(normSku(s)); }
+  return [...skus];
+}
+
+function resetStockHeader(){
+  const m = document.getElementById('stock-meta'); if(m) m.textContent = 'Gestão inteligente com previsão de ruptura — API /items';
+  const b = document.getElementById('stock-api-badge'); if(b) b.textContent = 'API: /items (available_quantity)';
+  const u = document.getElementById('stock-unmatched'); if(u){ u.style.display='none'; u.innerHTML=''; }
+}
+
+async function loadStockData(force=false){
+  renderStockSourceBar();
+  if(state.isDemo || stockSource() !== 'bling') return loadStockDataML();
+  const tbody = document.getElementById('stock-tbody');
+  tbody.innerHTML = '<tr><td colspan="10" style="padding:20px;text-align:center;color:var(--muted)">Buscando saldos no Bling...</td></tr>';
+  let bling;
+  try {
+    bling = await blingApi('/bling/estoque' + (force ? '?refresh=1' : ''));
+  } catch(e){
+    const msg = e.status===428 ? 'Bling ainda não autorizado. Clique em <strong>🔑 Conectar</strong>, autorize e depois em Atualizar.'
+              : e.status===401 ? 'Chave do painel inválida. Clique em <strong>⚙</strong> e confira a DASH_KEY.'
+              : 'Erro ao consultar o Bling: ' + e.message;
+    tbody.innerHTML = `<tr><td colspan="10" style="padding:20px;text-align:center;color:var(--orange)">${msg}</td></tr>`;
+    showToast('Bling: ' + e.message, 'err');
+    return;
+  }
+  return renderStockBling(bling);
+}
+
+function renderStockBling(bling){
+  const cfg = blingCfg(), addFull = cfg.addFull !== false;
+  const blingBySku = {};
+  (bling.produtos || []).forEach(p => { if(p.codigo) blingBySku[normSku(p.codigo)] = p; });
+
+  // Anúncios ML por SKU
+  const listingsBySku = {}, itemSkus = {}, noSku = [], notInBling = new Set();
+  (state.items || []).forEach(it => {
+    const skus = mlItemSkus(it); itemSkus[it.id] = skus;
+    if(!skus.length){ noSku.push(it); return; }
+    skus.forEach(s => {
+      if(!blingBySku[s]){ notInBling.add(s + ' — ' + (it.title||'').slice(0,50)); return; }
+      (listingsBySku[s] = listingsBySku[s] || []).push(it);
+    });
+  });
+
+  // Vendas 30d por SKU (usa seller_sku do pedido; se faltar, SKU único do anúncio)
+  const sales = {}, revenue = {};
+  (state.orders || []).forEach(o => (o.order_items || []).forEach(oi => {
+    let s = oi.item?.seller_sku ? normSku(oi.item.seller_sku) : null;
+    if(!s){ const k = itemSkus[oi.item?.id]; if(k && k.length===1) s = k[0]; }
+    if(!s) return;
+    sales[s] = (sales[s]||0) + (oi.quantity||0);
+    revenue[s] = (revenue[s]||0) + (oi.quantity||0) * (oi.unit_price||0);
+  }));
+
+  // Monta linhas por SKU
+  let rows = Object.keys(listingsBySku).map(sku => {
+    const p = blingBySku[sku], lst = listingsBySku[sku];
+    const full = lst.filter(i => i.shipping?.logistic_type === 'fulfillment')
+                    .reduce((a,i) => a + (i.available_quantity||0), 0);
+    const s30 = sales[sku] || 0, r30 = revenue[sku] || 0;
+    const total = p.virtual + (addFull ? full : 0);
+    const daily = s30 / 30;
+    const cover = daily > 0 ? Math.round(total / daily) : (total > 0 ? 999 : 0);
+    return { sku, nome: p.nome, fisico: p.fisico, virtual: p.virtual, full, total, s30, r30, daily, cover,
+             ids: lst.map(i => i.id), title: lst[0].title };
+  });
+
+  // Curva ABC pela receita 30d (A 70% · B até 90% · C resto) → cobertura alvo A 60d, B/C 30d
+  const totRev = rows.reduce((a,r) => a + r.r30, 0) || 1;
+  let acc = 0;
+  [...rows].sort((a,b) => b.r30 - a.r30).forEach(r => {
+    acc += r.r30; const pct = acc / totRev;
+    r.curve = r.r30 <= 0 ? 'C' : (pct <= 0.70 || acc === r.r30) ? 'A' : pct <= 0.90 ? 'B' : 'C';
+    r.target = r.curve === 'A' ? 60 : 30;
+    r.suggest = Math.max(0, Math.ceil(r.daily * r.target - r.total));
+  });
+
+  const crit = rows.filter(r => r.s30 > 0 && r.cover <= 7);
+  const warn = rows.filter(r => r.s30 > 0 && r.cover > 7 && r.cover <= r.target);
+  const ok   = rows.length - crit.length - warn.length;
+  document.getElementById('stock-ok').textContent = ok;
+  document.getElementById('stock-warn').textContent = warn.length;
+  document.getElementById('stock-critical').textContent = crit.length;
+  const withSales = rows.filter(r => r.s30 > 0 && r.cover < 999);
+  document.getElementById('avg-turnover').textContent = withSales.length
+    ? Math.round(withSales.reduce((a,r) => a + r.cover, 0) / withSales.length) + 'd' : '—';
+
+  const upd = new Date(bling.updatedAt).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+  document.getElementById('stock-meta').textContent =
+    `Saldo do Bling (${bling.total} produtos · atualizado ${upd}${bling.fromCache?' · cache':''}) × vendas ML 30d`;
+  document.getElementById('stock-api-badge').textContent = 'API: Bling /estoques/saldos';
+
+  rows.sort((a,b) => {
+    const rank = r => r.s30 > 0 && r.cover <= 7 ? 0 : r.s30 > 0 && r.cover <= r.target ? 1 : 2;
+    return rank(a) - rank(b) || a.cover - b.cover || b.r30 - a.r30;
+  });
+
+  const thead = document.getElementById('stock-tbody').closest('table').querySelector('thead tr');
+  thead.innerHTML = '<th>Produto / SKU</th><th>Curva</th><th>Bling (fís./virt.)</th><th>Full ML</th><th>Vend. 30d</th><th>Cobertura</th><th>Ruptura em</th><th>Sugestão</th><th>Ação</th>';
+  const curveBadge = { A:'b-green', B:'b-yellow', C:'b-muted' };
+  document.getElementById('stock-tbody').innerHTML = rows.length ? rows.map(r => {
+    const pct = Math.min(100, Math.round(r.cover / r.target * 100));
+    const fill = r.cover <= 7 ? 'var(--red)' : r.cover <= r.target ? 'var(--orange)' : 'var(--green)';
+    const rupt = r.s30 === 0 ? 'Sem vendas' : r.cover > 90 ? 'Sem risco' : r.cover > r.target ? `${r.cover}d` : r.cover > 7 ? `⚠️ ${r.cover}d` : `🚨 ${r.cover}d`;
+    const ruptCls = r.s30 === 0 ? 'b-muted' : r.cover > r.target ? 'b-green' : r.cover > 7 ? 'b-orange' : 'b-red';
+    const sugg = r.suggest > 0
+      ? `<span class="c-orange fw6 mono">${r.suggest} un</span><span style="font-size:10px;color:var(--muted);display:block">(${r.target} dias)</span>`
+      : '<span class="c-muted" style="font-size:11px">OK</span>';
+    return `<tr>
+      <td class="fw6" style="max-width:220px"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r.nome}">${r.nome}</div>
+        <div class="c-muted mono" style="font-size:10px">${r.sku} · ${r.ids.length} anúncio${r.ids.length>1?'s':''}</div></td>
+      <td><span class="badge ${curveBadge[r.curve]}">${r.curve}</span></td>
+      <td class="mono fw6">${r.fisico} <span class="c-muted" style="font-weight:400">/ ${r.virtual}</span></td>
+      <td class="mono">${r.full || '—'}</td>
+      <td class="mono c-green fw6">${r.s30}</td>
+      <td style="min-width:90px"><div class="sbar"><div class="sbar-trk"><div class="sbar-fill" style="width:${pct}%;background:${fill}"></div></div><div class="sbar-pct">${r.cover>=999?'∞':r.cover+'d'}</div></div></td>
+      <td><span class="badge ${ruptCls}">${rupt}</span></td>
+      <td>${sugg}</td>
+      <td>${r.suggest>0?`<button class="btn-sm btn-primary" onclick="orderStock('${r.sku}',${r.suggest})">Pedir ${r.suggest} un</button>`:'<span class="c-muted" style="font-size:11px">—</span>'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="10" style="padding:20px;text-align:center;color:var(--muted)">Nenhum SKU do ML encontrado no Bling</td></tr>';
+
+  // Anúncios sem vínculo
+  const um = document.getElementById('stock-unmatched');
+  if(noSku.length || notInBling.size){
+    um.style.display = 'block';
+    um.innerHTML = `
+      <details><summary style="cursor:pointer" class="c-orange">⚠️ ${noSku.length} anúncio(s) sem SKU no ML · ${notInBling.size} SKU(s) do ML não encontrados no Bling — fora da análise</summary>
+      <div style="margin-top:8px;display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+        <div><div class="fw6" style="margin-bottom:4px">Sem SKU</div>${noSku.slice(0,100).map(i=>`<div class="c-muted" style="font-size:11px">${i.id} — ${(i.title||'').slice(0,60)}</div>`).join('') || '<span class="c-muted">—</span>'}</div>
+        <div><div class="fw6" style="margin-bottom:4px">SKU não existe no Bling</div>${[...notInBling].slice(0,100).map(t=>`<div class="c-muted mono" style="font-size:11px">${t}</div>`).join('') || '<span class="c-muted">—</span>'}</div>
+      </div></details>`;
+  } else { um.style.display = 'none'; }
+
+  // Caixa de previsão + alertas
+  const totalSuggest = rows.reduce((a,r) => a + r.suggest, 0);
+  document.getElementById('predict-rupture-val').textContent = `${crit.length} SKU${crit.length!==1?'s':''} críticos`;
+  document.getElementById('predict-rupture-desc').textContent = crit.length
+    ? `Repor urgente: ${crit.slice(0,2).map(r => r.nome.split(' ').slice(0,3).join(' ')).join(', ')}. Total sugerido: ${totalSuggest} unidades.`
+    : `Estoque do Bling seguro. Reposição sugerida total: ${totalSuggest} unidades (A 60d · B/C 30d).`;
+  const newAlerts = crit.slice(0,3).map(r => ({
+    type:'red', icon:'🚨',
+    title:`Ruptura iminente: ${r.nome.split(' ').slice(0,4).join(' ')}`,
+    desc:`Bling ${r.virtual} un${r.full?` + Full ${r.full}`:''} · ${r.s30} vendas/30d · ~${r.cover}d · Repor: ${r.suggest} un`,
+    time: new Date().toLocaleTimeString('pt-BR')
+  }));
+  state.alerts = [...state.alerts.filter(a => !a.title.includes('Ruptura iminente')), ...newAlerts];
+  document.getElementById('alert-badge').textContent = state.alerts.length;
   renderAlerts();
 }
 
