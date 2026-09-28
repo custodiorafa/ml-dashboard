@@ -649,7 +649,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .ec-tools { display:flex; gap:8px; }
 .ec-tools input { flex:1; background:var(--bg2); border:1px solid var(--border2); color:var(--text); padding:7px 10px; border-radius:8px; font-size:12px; }
 .ec-table-wrap { overflow:auto; max-height:70vh; }
-.ec-table { min-width:2600px; }
+.ec-table { min-width:2800px; }
 .ec-table th { position:sticky; top:0; background:var(--surface); z-index:2; cursor:pointer; white-space:nowrap; user-select:none; }
 .ec-table th.sorted { color:var(--accent); }
 .ec-table td { padding:8px 10px!important; font-size:12px!important; white-space:nowrap; vertical-align:top; }
@@ -3316,6 +3316,7 @@ function ecCompute() {
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
       deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds) || full > 0, anuncioFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
       compra: cp,
+      fornecedor: cp?.fornNome || '', refForn: cp?.ref || '',
       fullML, fullBling, mlInvs: m ? m.invs : [], mlOwn: m ? m.own : null, mlOwnIds: m ? m.ownIds : [],
     });
   }
@@ -3958,6 +3959,7 @@ function ecMatrix(a) {
 const EC_COLS = [
   ['sku', 'SKU', r => `<span class="mono">${ecEsc(r.sku)}</span>`, 's'],
   ['nome', 'Descrição', r => `<span class="ec-desc" title="${ecEsc(r.nome)}">${ecEsc(r.nome)}</span>${r.isKit ? ' <span class="ec-tag">kit</span>' : r.kitFisico ? ' <span class="ec-tag">kit físico</span>' : ''}`, 's'],
+  ['fornecedor', 'Fornecedor / Ref.', r => r.fornecedor || r.refForn ? `<span class="ec-desc" style="max-width:200px" title="${ecEsc(r.fornecedor)}">${ecEsc(r.fornecedor || '—')}</span>${r.refForn ? `<div class="ec-sub" title="Referência do fornecedor">ref. ${ecEsc(r.refForn)}</div>` : ''}` : '<span class="ec-muted">—</span>', 's'],
   ['ativo', 'Status', r => r.ativo ? 'Ativo' : '<span class="c-orange">Inativo</span>', 's'],
   ['curva', 'Curva', r => ecCurva(r.curva), 's'],
   ['matriz', 'Matriz', r => ecInt(r.matriz)], ['full', 'Full', r => r.temFull || r.full ? ecInt(r.full) : '—'], ['total', 'Total', r => `<b>${ecInt(r.total)}</b>`],
@@ -3982,7 +3984,7 @@ const EC_COLS = [
 function ecFilteredRows() {
   const f = EC_FILTERS[EC.view.filter] || EC_FILTERS.relevantes; const q = EC.view.q.trim().toUpperCase();
   let rs = EC.rows.filter(f.fn);
-  if (q) rs = rs.filter(r => r.sku.includes(q) || r.nome.toUpperCase().includes(q));
+  if (q) rs = rs.filter(r => r.sku.includes(q) || r.nome.toUpperCase().includes(q) || (r.fornecedor || '').toUpperCase().includes(q) || (r.refForn || '').toUpperCase().includes(q));
   const { k, d } = EC.view.sort;
   rs.sort((x, y) => {
     let a = x[k], b = y[k];
@@ -4004,7 +4006,7 @@ function ecRenderItens() {
   el.innerHTML = `<div class="card">
     <div class="ec-toolbar">
       <div class="ec-chips">${chips}</div>
-      <div class="ec-tools"><input id="ec-q" type="text" placeholder="Buscar SKU ou descrição…" value="${ecEsc(EC.view.q)}"><button class="btn-sm" onclick="ecExportCSV()">⬇ CSV</button></div>
+      <div class="ec-tools"><input id="ec-q" type="text" placeholder="Buscar SKU, descrição, fornecedor ou referência…" value="${ecEsc(EC.view.q)}"><button class="btn-sm" onclick="ecExportCSV()">⬇ CSV</button></div>
     </div>
     <div class="ec-table-wrap"><table class="t ec-table"><thead><tr>${EC_COLS.map(([k, l, , t]) => `<th class="${t === 's' ? '' : 'r'} ${sk === k ? 'sorted' : ''}" onclick="ecSort('${k}')">${l}${sk === k ? (sd > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead>
     <tbody>${slice.length ? slice.map(r => `<tr>${EC_COLS.map(([, , fn, t]) => `<td class="${t === 's' ? '' : 'r mono'}">${fn(r)}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${EC_COLS.length}" style="padding:24px;text-align:center;color:var(--text2)">Nenhum SKU neste filtro.</td></tr>`}</tbody></table></div>
@@ -4015,7 +4017,7 @@ function ecRenderItens() {
   qi.addEventListener('input', () => { EC.view.q = qi.value; EC.view.page = 0; clearTimeout(EC._qt); EC._qt = setTimeout(() => { ecRenderItens(); const n = document.getElementById('ec-q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250); });
 }
 function ecSetFilter(k) { EC.view.filter = k; EC.view.page = 0; ecRenderItens(); }
-function ecSort(k) { const s = EC.view.sort; EC.view.sort = { k, d: s.k === k ? -s.d : (['nome', 'sku', 'curva', 'rec', 'risco', 'tend', 'ativo', 'ultimaVenda'].includes(k) ? 1 : -1) }; ecRenderItens(); }
+function ecSort(k) { const s = EC.view.sort; EC.view.sort = { k, d: s.k === k ? -s.d : (['nome', 'fornecedor', 'sku', 'curva', 'rec', 'risco', 'tend', 'ativo', 'ultimaVenda'].includes(k) ? 1 : -1) }; ecRenderItens(); }
 function ecPage(d) { EC.view.page += d; ecRenderItens(); }
 function ecEditLT(sku) {
   const cfg = ecCfg(); const cur = cfg.ltSku[sku] || '';
@@ -4034,7 +4036,7 @@ function ecExportCSV() {
     ['Cobertura dias', r => isFinite(r.cob) ? Math.round(r.cob) : ''], ['Cobertura Matriz', r => isFinite(r.cobMatriz) ? Math.round(r.cobMatriz) : ''], ['Cobertura Full', r => isFinite(r.cobFull) ? Math.round(r.cobFull) : ''],
     ['Lead time', r => r.lt], ['Estoque segurança', r => r.ss], ['Estoque projetado', r => Math.round(r.projetado)], ['Última venda', r => r.ultimaVenda || ''], ['Dias sem venda', r => r.diasSemVenda],
     ['Risco ruptura', r => r.risco], ['Excesso un', r => r.excessoUn], ['Excesso R$', r => r.excessoR.toFixed(2)], ['Compra sugerida', r => r.sugCompra], ['Comprar até', r => r.comprarAte || ''], ['Envio Full', r => r.envioFull], ['Recomendação', r => r.rec],
-    ['Última compra', r => r.compra?.ultData || ''], ['Qtd última compra', r => r.compra?.ultQtd || ''], ['Último custo', r => r.compra?.ultCusto || ''], ['Fornecedor', r => r.compra?.fornNome || r.compra?.forn || '']];
+    ['Última compra', r => r.compra?.ultData || ''], ['Qtd última compra', r => r.compra?.ultQtd || ''], ['Último custo', r => r.compra?.ultCusto || ''], ['Fornecedor', r => r.compra?.fornNome || r.compra?.forn || ''], ['Referência fornecedor', r => r.refForn]];
   (EC.bling?.depositos || []).forEach(d => cols.splice(7, 0, ['Dep. ' + d.nome, r => r.deps[d.id] ? r.deps[d.id][1] : 0]));
   const esc = v => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const csv = '﻿' + cols.map(c => c[0]).join(';') + '\n' + rs.map(r => cols.map(c => esc(typeof c[1](r) === 'number' ? String(c[1](r)).replace('.', ',') : c[1](r))).join(';')).join('\n');
