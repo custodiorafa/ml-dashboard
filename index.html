@@ -1354,6 +1354,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
           <div class="ec-subtabs">
             <button class="ec-subtab active" data-t="dash" onclick="ecSetTab('dash')">Dashboard</button>
             <button class="ec-subtab" data-t="itens" onclick="ecSetTab('itens')">Itens em linha</button>
+            <button class="ec-subtab" data-t="conc" onclick="ecSetTab('conc')">Conciliação</button>
           </div>
           <button class="ec-iconbtn" id="ec-bell" onclick="ecToggleNotif()" title="Notificações">🔔</button>
           <button class="ec-iconbtn" onclick="ecOpenCfg()" title="Configurações">⚙</button>
@@ -1364,6 +1365,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
       <div class="ec-progress" id="ec-progress"><span class="ec-prog-msg">Carregando…</span><div class="ec-prog-trk"><div class="ec-prog-fill"></div></div></div>
       <div id="ec-dash"><div class="card"><div class="card-body" style="text-align:center;padding:40px;color:var(--text2)">Abra esta aba para carregar o módulo.</div></div></div>
       <div id="ec-itens" style="display:none"></div>
+      <div id="ec-conc" style="display:none"></div>
       <div class="ec-modal" id="ec-cfg" onclick="if(event.target===this)ecCloseCfg()"></div>
       <div id="ec-tip"></div>
     </div>
@@ -3173,6 +3175,8 @@ async function ecLoad(force = false) {
     catch (e) { EC.compras = null; EC.comprasErro = e.message; }
     ecProgress('Sincronizando histórico de vendas do Mercado Livre…', null);
     EC.histInfo = await ecSyncHistory(force);
+    ecProgress('Validando estoque Full no Mercado Livre…', null);
+    await ecFetchFullInv(force);
     try { EC.snaps = (await blingApi('/bling/snapshots')).snapshots || []; } catch (e) { EC.snaps = []; }
     ecCompute();
     EC.loadedAt = Date.now();
@@ -3186,6 +3190,25 @@ async function ecLoad(force = false) {
   } finally {
     EC.loading = false; ecProgress(null);
   }
+}
+
+// Estoque físico no Full do ML por inventory_id (total, disponível, indisponível + motivo) — usado só para conciliação
+async function ecFetchFullInv(force) {
+  if (!force && EC.fullInvAt && Date.now() - EC.fullInvAt < 30 * 60 * 1000) return;
+  const ids = new Set();
+  (state.items || []).forEach(it => {
+    if (it.shipping?.logistic_type !== 'fulfillment') return;
+    if (it.inventory_id) ids.add(it.inventory_id);
+    (it.variations || []).forEach(v => { if (v.inventory_id) ids.add(v.inventory_id); });
+  });
+  const list = [...ids]; const out = {}; let ok = 0;
+  for (let i = 0; i < list.length; i += 6) {
+    const batch = list.slice(i, i + 6);
+    const res = await Promise.all(batch.map(id => mlGet(`/inventories/${id}/stock/fulfillment`).catch(() => null)));
+    res.forEach((r, k) => { if (r && (r.total != null || r.available_quantity != null)) { out[batch[k]] = r; ok++; } });
+    if (list.length > 12) ecProgress(`Validando Full no ML: ${Math.min(i + 6, list.length)}/${list.length}`, ((i + 6) / list.length) * 100);
+  }
+  EC.fullInv = out; EC.fullInvAt = Date.now(); EC.fullInvCount = { total: list.length, ok };
 }
 
 async function ecSaveSnapshot() {
@@ -3246,17 +3269,22 @@ function ecCompute() {
   (state.items || []).forEach(it => {
     const skus = mlItemSkus(it);
     skus.forEach(sku => {
-      const m = ML[sku] || (ML[sku] = { ids: [], full: 0, fullIds: 0, qtyOther: 0, price: 0, active: 0 });
+      const m = ML[sku] || (ML[sku] = { ids: [], full: 0, fullIds: 0, own: null, ownIds: [], invs: [], price: 0, active: 0 });
       m.ids.push(it.id);
       if (it.status === 'active') m.active++;
-      if (it.shipping?.logistic_type === 'fulfillment') { m.full += (skus.length === 1 ? (it.available_quantity || 0) : 0); m.fullIds++; }
+      if (it.shipping?.logistic_type === 'fulfillment') {
+        m.full += (skus.length === 1 ? (it.available_quantity || 0) : 0); m.fullIds++;
+        if (skus.length === 1 && it.inventory_id) m.invs.push(it.inventory_id);
+      } else if (skus.length === 1 && it.status === 'active') {
+        m.own = Math.max(m.own ?? 0, it.available_quantity || 0); m.ownIds.push(it.id);
+      }
       if (!m.price || (it.price && it.price < m.price)) m.price = it.price || m.price;
     });
     // anúncio Full com variações: soma o estoque de cada variação no SKU dela
     if (it.shipping?.logistic_type === 'fulfillment' && skus.length > 1) {
       (it.variations || []).forEach(v => {
         const a = (v.attributes || []).find(x => x.id === 'SELLER_SKU');
-        const s = normSku(v.seller_custom_field || (a && a.value_name)); if (s && ML[s]) ML[s].full += v.available_quantity || 0;
+        const s = normSku(v.seller_custom_field || (a && a.value_name)); if (s && ML[s]) { ML[s].full += v.available_quantity || 0; if (v.inventory_id) ML[s].invs.push(v.inventory_id); }
       });
     }
   });
@@ -3335,8 +3363,11 @@ function ecCompute() {
     const mean = r90; const sd = w90.length ? Math.sqrt(w90.reduce((a, x) => a + (x - mean) ** 2, 0) / w90.length) : 0;
 
     // Estoques (sempre separados por localização)
+    // Fonte oficial = Bling (Matriz + Fulfillment). O ML é só validação (conciliação).
     const blingVirt = Math.max(0, p.virtual || 0);
-    const full = m ? m.full : 0;
+    const fullML = m ? m.full : 0;
+    const fullBling = depFull ? Math.max(0, (p.deps && p.deps[depFull.id]) ? p.deps[depFull.id][1] : 0) : null;
+    const full = fullBling != null ? fullBling : fullML;
     let matriz;
     if (depMatriz && p.deps && p.deps[depMatriz.id]) matriz = Math.max(0, p.deps[depMatriz.id][1]);
     else if (depMatriz && deps.filter(d => !d.desconsiderar).length === 1 && !depMatriz.desconsiderar) matriz = blingVirt; // total do Bling = só a Matriz
@@ -3361,8 +3392,9 @@ function ecCompute() {
       custo, preco, tarifaUn, margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
       v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, canc90, full90, tendPct, tend90Pct, tend, vol,
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
-      deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
+      deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds) || full > 0, anuncioFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
       compra: cp,
+      fullML, fullBling, mlInvs: m ? m.invs : [], mlOwn: m ? m.own : null, mlOwnIds: m ? m.ownIds : [],
     });
   }
 
@@ -3473,7 +3505,29 @@ function ecCompute() {
 
   EC.rows = rows;
   EC.depFull = depFull || null;
+  ecConcilia(rows);
   EC.agg = ecAggregate(rows);
+}
+
+// ───────── Conciliação: Bling (oficial) × Mercado Livre (validação) ─────────
+// Full: depósito "Fulfillment" do Bling × estoque físico no Full do ML (inventário /stock/fulfillment quando disponível).
+// Anúncios próprios: Matriz do Bling × estoque publicado no anúncio.
+function ecConcilia(rows) {
+  const inv = EC.fullInv || {};
+  rows.forEach(r => {
+    let tot = 0, disp = 0, indisp = 0, det = {}, got = false;
+    (r.mlInvs || []).forEach(id => { const x = inv[id]; if (!x) return; got = true; tot += x.total || 0; disp += x.available_quantity || 0; indisp += x.not_available_quantity || 0; (x.not_available_detail || []).forEach(d => { det[d.status] = (det[d.status] || 0) + (d.quantity || 0); }); });
+    r.mlFullTotal = got ? tot : r.fullML; r.mlFullDisp = got ? disp : r.fullML; r.mlFullIndisp = got ? indisp : 0; r.mlFullDet = det; r.mlInvOk = got;
+    r.concFull = null;
+    if (EC.depFull && (r.fullBling > 0 || r.anuncioFull || r.mlFullTotal > 0)) {
+      const d = (r.fullBling || 0) - r.mlFullTotal;
+      r.concFull = {
+        bling: r.fullBling || 0, ml: r.mlFullTotal, dif: d, difR: d * (r.custo || 0),
+        st: d === 0 ? 'OK' : !r.anuncioFull && r.mlFullTotal === 0 ? 'SÓ NO BLING' : (r.fullBling || 0) === 0 ? 'SÓ NO ML' : d > 0 ? 'BLING > ML' : 'ML > BLING',
+      };
+    }
+    r.concAnuncio = (r.mlOwn != null && !r.isKit) ? { bling: r.matriz, ml: r.mlOwn, dif: r.matriz - r.mlOwn } : null;
+  });
 }
 
 function ecAggregate(rows) {
@@ -3489,6 +3543,16 @@ function ecAggregate(rows) {
   a.unFull = inv.reduce((s, r) => s + r.full, 0);
   a.semCusto = inv.filter(r => r.total > 0 && !(r.custo > 0)).length;
   a.skusKitsVirtuais = rows.filter(r => r.isKit && r.ativo).length;
+  const cf = rows.filter(r => r.concFull && !r.isKit);
+  a.conc = {
+    skus: cf.length, ok: cf.filter(r => r.concFull.st === 'OK').length, div: cf.filter(r => r.concFull.st !== 'OK').length,
+    unBling: cf.reduce((s, r) => s + r.concFull.bling, 0), unML: cf.reduce((s, r) => s + r.concFull.ml, 0),
+    unMLdisp: cf.reduce((s, r) => s + (r.mlFullDisp || 0), 0), unMLindisp: cf.reduce((s, r) => s + (r.mlFullIndisp || 0), 0),
+    sobraUn: cf.reduce((s, r) => s + Math.max(0, r.concFull.dif), 0), faltaUn: cf.reduce((s, r) => s + Math.max(0, -r.concFull.dif), 0),
+    sobraR: cf.reduce((s, r) => s + Math.max(0, r.concFull.difR), 0), faltaR: cf.reduce((s, r) => s + Math.max(0, -r.concFull.difR), 0),
+    invOk: EC.fullInvAt || null,
+    anuncioDiv: rows.filter(r => r.concAnuncio && r.concAnuncio.dif !== 0).length, anuncioSkus: rows.filter(r => r.concAnuncio).length,
+  };
   a.skusComEstoque = inv.filter(r => r.total > 0).length;
   a.skusAtivosComEstoque = inv.filter(r => r.ativo && r.total > 0).length;
   a.skusAtivosSemEstoque = inv.filter(r => r.ativo && r.total <= 0).length;
@@ -3500,8 +3564,8 @@ function ecAggregate(rows) {
   a.depTable = (EC.bling?.depositos || []).map(d => {
     let sk = 0, un = 0, vc = 0, vv = 0;
     inv.forEach(r => { const x = r.deps[d.id]; const q = x ? Math.max(0, x[1]) : 0; if (q > 0) { sk++; un += q; vc += q * r.custo; vv += q * r.preco; } });
-    const isMatriz = !!(EC.depMatriz && d.id === EC.depMatriz.id);
-    return { nome: d.nome, sk, un, vc, vv, fonte: 'Bling', entra: isMatriz, obs: isMatriz ? 'Matriz — entra no total' : (d.desconsiderar ? 'Bling: "desconsiderar saldo"' : 'fora do total') };
+    const isMatriz = !!(EC.depMatriz && d.id === EC.depMatriz.id), isFull = !!(EC.depFull && d.id === EC.depFull.id);
+    return { nome: d.nome, sk, un, vc, vv, fonte: 'Bling', entra: isMatriz || isFull, ordem: isMatriz ? 0 : isFull ? 1 : 2, obs: (isMatriz || isFull) ? '' : (d.desconsiderar ? 'Bling: "desconsiderar saldo"' : 'fora do total') };
   });
 
   const dem = rows.filter(r => r.rate > 0.001);
@@ -3616,6 +3680,7 @@ const EC_FILTERS = {
   fullexc: { label: 'Full excessivo', fn: r => r.fullStatus === 'EXCESSIVO' },
   enviofull: { label: 'Enviar ao Full', fn: r => r.envioFull > 0, hidden: true },
   ativos: { label: 'Ativos', fn: r => r.ativo && r.relevante },
+  fulldiv: { label: 'Divergência Full Bling × ML', fn: r => !r.isKit && r.concFull && r.concFull.st !== 'OK', hidden: true },
   comestoque: { label: 'Com estoque', fn: r => !r.isKit && r.total > 0 },
   semestoque: { label: 'Ativos sem estoque', fn: r => r.ativo && !r.isKit && r.total <= 0, hidden: true },
   inativos: { label: 'Inativos c/ estoque', fn: r => !r.ativo && r.total > 0 },
@@ -3659,6 +3724,7 @@ function ecSetTab(t) {
   document.querySelectorAll('.ec-subtab').forEach(b => b.classList.toggle('active', b.dataset.t === t));
   document.getElementById('ec-dash').style.display = t === 'dash' ? '' : 'none';
   document.getElementById('ec-itens').style.display = t === 'itens' ? '' : 'none';
+  document.getElementById('ec-conc').style.display = t === 'conc' ? '' : 'none';
   ecRender();
 }
 function ecOpenFilter(f) { EC.view.filter = f; EC.view.page = 0; EC.view.q = ''; EC.view.sort = { k: 'prio', d: 1 }; ecSetTab('itens'); window.scrollTo({ top: 0, behavior: 'smooth' }); }
@@ -3673,7 +3739,7 @@ function ecRender() {
   const meta = document.getElementById('ec-meta');
   if (meta) meta.textContent = `Bling ${b ? new Date(b.updatedAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'} · ML ${EC.histDays} dias de vendas · lead time padrão ${ecCfg().leadTime}d`;
   ecRenderNotifBell();
-  if (EC.view.tab === 'dash') ecRenderDash(); else ecRenderItens();
+  if (EC.view.tab === 'dash') ecRenderDash(); else if (EC.view.tab === 'conc') ecRenderConc(); else ecRenderItens();
 }
 
 // ───────── Dashboard ─────────
@@ -3684,6 +3750,7 @@ function ecAlerts() {
   if (a.nRuptura) out.push(['crit', `${a.nRuptura} SKU${a.nRuptura > 1 ? 's' : ''} com demanda estão em ruptura agora`, 'ruptura']);
   if (a.full.crit) out.push(['crit', `${a.full.crit} produto${a.full.crit > 1 ? 's' : ''} no Full podem entrar em ruptura (≤ 7 dias)`, 'fullcrit']);
   if (a.nCompra15) out.push(['aten', `${a.nCompra15} SKU${a.nCompra15 > 1 ? 's' : ''} precisam de compra nos próximos 15 dias`, 'compra15']);
+  if (a.conc && a.conc.div) out.push(['aten', `${a.conc.div} SKUs com divergência entre Full do Bling e Full do ML (Bling ${ecInt(a.conc.sobraUn)} un a mais · ${ecInt(a.conc.faltaUn)} un a menos) — inventariar`, '@conc']);
   if (a.capSemGiro > 0) out.push(['mon', `${ecMoneyK(a.capSemGiro)} parados em produtos sem giro há mais de 90 dias`, 'semgiro']);
   if (a.capExcesso > 0) out.push(['mon', `${ecMoneyK(a.capExcesso)} alocados em estoque excessivo`, 'excesso']);
   const nKit = rs.filter(EC_FILTERS.kitsrisco.fn).length;
@@ -3713,7 +3780,7 @@ function ecRenderDash() {
   <div class="card ec-sec">
     <div class="card-head"><span class="card-title">⚠ Atenção necessária</span><span class="ec-muted">clique para ver os SKUs</span></div>
     <div class="ec-alerts">${alerts.length ? alerts.map(([t, txt, f]) => `
-      <button class="ec-alert" onclick="ecOpenFilter('${f}')"><span class="ec-dot" style="background:${EC_STATUS[t]}"></span><span>${ecEsc(txt)}</span><span class="ec-go">→</span></button>`).join('')
+      <button class="ec-alert" onclick="${f[0] === '@' ? `ecSetTab('${f.slice(1)}')` : `ecOpenFilter('${f}')`}"><span class="ec-dot" style="background:${EC_STATUS[t]}"></span><span>${ecEsc(txt)}</span><span class="ec-go">→</span></button>`).join('')
       : '<div class="ec-muted" style="padding:14px 18px">🟢 Nenhuma situação exige decisão agora.</div>'}
     </div>
   </div>
@@ -3744,12 +3811,12 @@ function ecRenderDash() {
       ${ecStat('Potencial de venda', ecMoneyK(a.valorVenda), 'Matriz + Full')}
     </div>
     <div style="padding:0 18px 16px"><table class="t ec-t"><thead><tr><th>Local</th><th>Fonte</th><th class="r">SKUs com saldo</th><th class="r">Unidades</th><th class="r">Valor a custo</th><th class="r">Valor de venda</th><th>No total?</th></tr></thead><tbody>
-      ${a.depTable.filter(d => d.entra).map(d => ecDepRow(d, 'matriz')).join('')}
-      ${ecDepRow({ nome: 'Full Mercado Livre', fonte: 'Mercado Livre', sk: a.skusFull, un: a.unFull, vc: a.valorFull, vv: a.valorVendaFull, entra: true, obs: 'Full — entra no total' }, 'fullbaixo')}
+      ${a.depTable.filter(d => d.entra).sort((x, y) => x.ordem - y.ordem).map(d => ecDepRow(d, d.ordem === 1 ? 'fullbaixo' : 'comestoque')).join('')}
       <tr class="ec-dep-total"><td><b>Total considerado</b></td><td></td><td class="r mono"><b>${ecInt(a.skusComEstoque)}</b></td><td class="r mono"><b>${ecInt(a.unidades)}</b></td><td class="r mono"><b>${ecMoney(a.valorCusto)}</b></td><td class="r mono"><b>${ecMoney(a.valorVenda)}</b></td><td></td></tr>
+      <tr class="ec-dep-out" style="cursor:pointer" onclick="ecSetTab('conc')"><td>Full Mercado Livre <span class="ec-tag">validação</span></td><td class="ec-muted">Mercado Livre</td><td class="r mono">${ecInt(a.conc.skus ? EC.rows.filter(r => !r.isKit && r.mlFullTotal > 0).length : 0)}</td><td class="r mono">${ecInt(a.conc.unML)}</td><td class="r mono">${ecMoney(EC.rows.filter(r => !r.isKit).reduce((s, r) => s + (r.mlFullTotal || 0) * r.custo, 0))}</td><td class="r mono">${ecMoney(EC.rows.filter(r => !r.isKit).reduce((s, r) => s + (r.mlFullTotal || 0) * r.preco, 0))}</td><td><span class="c-orange">${a.conc.div} SKUs divergentes →</span></td></tr>
       ${a.depTable.filter(d => !d.entra).map(d => ecDepRow(d)).join('')}
     </tbody></table>
-    <div class="ec-muted" style="margin-top:6px">Depósitos marcados como "desconsiderar saldo" no Bling aparecem para conferência e não entram no total nem nas decisões de compra. Kits virtuais não entram no valor (o capital está nos componentes).</div></div>
+    <div class="ec-muted" style="margin-top:6px">Todas as análises usam o Bling: Matriz + Fulfillment. O Full do Mercado Livre serve só para validar e apontar correções (aba Conciliação). Depósitos com "desconsiderar saldo" ficam fora. Kits virtuais não entram no valor (o capital está nos componentes).</div></div>
   </div>
 
   <!-- 2. AÇÃO DE COMPRA -->
@@ -3819,7 +3886,7 @@ function ecRenderDash() {
     <div class="card"><div class="card-head"><span class="card-title">Matriz ABC × giro</span><span class="ec-muted">SKUs · capital a custo</span></div><div class="card-body">${ecMatrix(a)}</div></div>
     <div class="card"><div class="card-head"><span class="card-title">Inteligência Full</span><span class="ec-muted">alvo ${cfg.fullAlvo}d · máx ${cfg.fullMax}d</span></div><div class="card-body">
       <div class="ec-strip ec-strip-sm">
-        ${ecStat('No Full', ecInt(a.full.un) + ' un', ecMoneyK(a.full.valor))}
+        ${ecStat('No Full (Bling)', ecInt(a.full.un) + ' un', ecMoneyK(a.full.valor))}
         ${ecStat('Vendas Full 30d', ecInt(a.full.vendas30))}
         ${ecStat('Cobertura Full', ecDays(a.full.cob))}
       </div>
@@ -3854,7 +3921,7 @@ function ecCounter(label, n, tone, f, sub) {
   return `<button class="ec-counter" onclick="ecOpenFilter('${f}')"><div class="ec-c-label"><span class="ec-dot" style="background:${EC_STATUS[tone]}"></span>${ecEsc(label)}</div><div class="ec-c-val">${ecInt(n)}</div><div class="ec-c-sub">${sub ? ecEsc(sub) : 'SKUs'}</div></button>`;
 }
 function ecDepRow(d, f) {
-  return `<tr ${f ? `style="cursor:pointer" onclick="ecOpenFilter('${f}')"` : 'class="ec-dep-out"'}><td>${d.entra ? '<b>' + ecEsc(d.nome) + '</b>' : ecEsc(d.nome)}</td><td class="ec-muted">${ecEsc(d.fonte)}</td><td class="r mono">${ecInt(d.sk)}</td><td class="r mono">${ecInt(d.un)}</td><td class="r mono">${ecMoney(d.vc)}</td><td class="r mono">${ecMoney(d.vv)}</td><td>${d.entra ? ecPill('Sim', 'ok') : '<span class="ec-muted">' + ecEsc(d.obs) + '</span>'}</td></tr>`;
+  return `<tr ${f ? `style="cursor:pointer" onclick="ecOpenFilter('${f}')"` : 'class="ec-dep-out"'}><td>${d.entra ? '<b>' + ecEsc(d.nome) + '</b>' + (d.ordem === 1 ? ' <span class="ec-tag">Full</span>' : '') : ecEsc(d.nome)}</td><td class="ec-muted">${ecEsc(d.fonte)}</td><td class="r mono">${ecInt(d.sk)}</td><td class="r mono">${ecInt(d.un)}</td><td class="r mono">${ecMoney(d.vc)}</td><td class="r mono">${ecMoney(d.vv)}</td><td>${d.entra ? ecPill('Sim', 'ok') : '<span class="ec-muted">' + ecEsc(d.obs) + '</span>'}</td></tr>`;
 }
 const ecStat = (l, v, s) => `<div class="ec-stat"><div class="ec-stat-l">${ecEsc(l)}</div><div class="ec-stat-v">${v}</div>${s ? `<div class="ec-stat-s">${s}</div>` : ''}</div>`;
 function ecMeter(label, pct, tone, f, detail) {
@@ -4070,7 +4137,7 @@ function ecOpenCfg() {
         ${inp('ec-fa2', c.fullAlvo, 'Cobertura alvo no Full')}${inp('ec-fm', c.fullMax, 'Acima disso = excesso no Full')}</div>
       <div><div class="ec-subhead">Estoque e margem</div>
         <label class="ec-f"><span>Saldo do Bling já inclui o Full</span><span><input type="checkbox" id="ec-bif" ${c.blingIncluiFull ? 'checked' : ''}></span></label>
-        <div class="ec-muted" style="font-size:11px;margin-bottom:8px">${EC.depMatriz ? `Matriz = depósito <b>${ecEsc(EC.depMatriz.nome)}</b> do Bling. Full = estoque Full informado pelo Mercado Livre${EC.depFull ? ` (o depósito "${ecEsc(EC.depFull.nome)}" do Bling não é somado)` : ''}. Esta opção só é usada se o depósito Matriz não for identificado.` : 'Depósito Matriz não identificado — com a opção marcada, Matriz = Bling − Full do ML.'}</div>
+        <div class="ec-muted" style="font-size:11px;margin-bottom:8px">${EC.depMatriz ? `Matriz = depósito <b>${ecEsc(EC.depMatriz.nome)}</b> do Bling. Full = ${EC.depFull ? `depósito <b>${ecEsc(EC.depFull.nome)}</b> do Bling` : 'Full do Mercado Livre (nenhum depósito Fulfillment no Bling)'}. O Mercado Livre é usado só para validação (aba Conciliação). Esta opção só vale se o depósito Matriz não for identificado.` : 'Depósito Matriz não identificado — com a opção marcada, Matriz = Bling − Full do ML.'}</div>
         ${inp('ec-imp', c.impostoPct, 'Impostos sobre a venda', '%')}
         <div class="ec-subhead" style="margin-top:12px">Curva ABC (receita 90d acumulada)</div>
         ${inp('ec-abcA', Math.round(c.abc.A * 100), 'Corte A até', '%')}${inp('ec-abcB', Math.round(c.abc.B * 100), 'Corte B até', '%')}</div>
@@ -4153,6 +4220,79 @@ function ecAskPerm() { try { Notification.requestPermission().then(() => { docum
     const x = Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 8); tip.style.left = x + 'px'; tip.style.top = (e.clientY + 16) + 'px';
   });
 })();
+
+// ───────── Conciliação Bling × Mercado Livre ─────────
+const EC_CONC_F = {
+  div: ['Divergentes', r => r.concFull && r.concFull.st !== 'OK'],
+  blingmais: ['Bling > ML', r => r.concFull && r.concFull.st === 'BLING > ML'],
+  mlmais: ['ML > Bling', r => r.concFull && r.concFull.st === 'ML > BLING'],
+  sobling: ['Só no Bling', r => r.concFull && r.concFull.st === 'SÓ NO BLING'],
+  soml: ['Só no ML', r => r.concFull && r.concFull.st === 'SÓ NO ML'],
+  ok: ['Conciliados', r => r.concFull && r.concFull.st === 'OK'],
+  todos: ['Todos no Full', r => !!r.concFull],
+  anuncio: ['Anúncios × Matriz', r => r.concAnuncio && r.concAnuncio.dif !== 0],
+};
+const EC_NA = { damaged: 'avariado', lost: 'perdido', withdrawal: 'em retirada', internal_process: 'processo interno', transfer: 'em transferência', noFiscalCoverage: 'sem cobertura fiscal', notSupported: 'não suportado', not_finished: 'não finalizado' };
+function ecConcAcao(r) {
+  const c = r.concFull; if (!c) return '';
+  const ind = r.mlFullIndisp > 0 ? ` · ${ecInt(r.mlFullIndisp)} indisponível no ML (${Object.entries(r.mlFullDet).map(([k, v]) => (EC_NA[k] || k) + ' ' + v).join(', ')})` : '';
+  if (c.st === 'OK') return 'Nenhuma' + ind;
+  if (c.st === 'BLING > ML') return 'Contar no Full; baixar a sobra no Bling (vendas não baixadas, perdas ou avarias)' + ind;
+  if (c.st === 'ML > BLING') return 'Lançar entrada/transferência para o depósito Fulfillment no Bling' + ind;
+  if (c.st === 'SÓ NO BLING') return 'Sem anúncio Full: zerar o depósito Fulfillment ou conferir o anúncio' + ind;
+  if (c.st === 'SÓ NO ML') return 'Transferir saldo para o depósito Fulfillment no Bling' + ind;
+  return '';
+}
+function ecRenderConc() {
+  const el = document.getElementById('ec-conc'); const a = EC.agg, c = a.conc;
+  if (!EC.depFull) { el.innerHTML = '<div class="card"><div class="card-body ec-muted">Nenhum depósito de Fulfillment encontrado no Bling.</div></div>'; return; }
+  const v = EC.view; if (!v.concF) v.concF = 'div';
+  const fn = EC_CONC_F[v.concF][1]; const q = (v.concQ || '').trim().toUpperCase();
+  let rs = EC.rows.filter(r => !r.isKit && fn(r) && (!q || r.sku.includes(q) || r.nome.toUpperCase().includes(q)));
+  const isAn = v.concF === 'anuncio';
+  rs.sort((x, y) => isAn ? Math.abs(y.concAnuncio.dif) - Math.abs(x.concAnuncio.dif) : Math.abs(y.concFull.difR) - Math.abs(x.concFull.difR) || Math.abs(y.concFull.dif) - Math.abs(x.concFull.dif));
+  const inv = EC.fullInvCount;
+  el.innerHTML = `
+  <div class="card ec-sec">
+    <div class="card-head"><span class="card-title">🔎 Conciliação do Full — Bling (oficial) × Mercado Livre (validação)</span><span class="ec-muted">${inv ? `inventário Full do ML: ${inv.ok}/${inv.total} anúncios lidos` : ''}</span></div>
+    <div class="ec-strip">
+      ${ecStat('SKUs no Full', ecInt(c.skus), `${ecInt(c.ok)} conciliados`)}
+      <div class="ec-stat ec-click" onclick="ecConcSet('div')"><div class="ec-stat-l">Divergentes</div><div class="ec-stat-v c-orange">${ecInt(c.div)}</div><div class="ec-stat-s">${ecPct(c.skus ? c.div / c.skus : 0)} dos SKUs</div></div>
+      ${ecStat('Full no Bling', ecInt(c.unBling) + ' un', ecMoneyK(a.valorFull))}
+      ${ecStat('Full no ML (físico)', ecInt(c.unML) + ' un', `${ecInt(c.unMLdisp)} disp. · ${ecInt(c.unMLindisp)} indisp.`)}
+      <div class="ec-stat ec-click" onclick="ecConcSet('blingmais')"><div class="ec-stat-l">Bling tem a mais</div><div class="ec-stat-v">${ecInt(c.sobraUn)} un</div><div class="ec-stat-s">${ecMoneyK(c.sobraR)} a custo</div></div>
+      <div class="ec-stat ec-click" onclick="ecConcSet('mlmais')"><div class="ec-stat-l">Bling tem a menos</div><div class="ec-stat-v">${ecInt(c.faltaUn)} un</div><div class="ec-stat-s">${ecMoneyK(c.faltaR)} a custo</div></div>
+    </div>
+    <div class="ec-muted" style="padding:0 18px 12px">Comparação: saldo do depósito <b>${ecEsc(EC.depFull.nome)}</b> no Bling × estoque físico no Full do Mercado Livre (disponível + indisponível). Divergência = Bling − ML. Resolva no Bling; o painel passa a refletir na próxima atualização.</div>
+  </div>
+  <div class="card">
+    <div class="ec-toolbar">
+      <div class="ec-chips">${Object.entries(EC_CONC_F).map(([k, [l, f]]) => `<button class="ec-chip ${k === v.concF ? 'active' : ''}" onclick="ecConcSet('${k}')">${l} <span>${EC.rows.filter(r => !r.isKit && f(r)).length}</span></button>`).join('')}</div>
+      <div class="ec-tools"><input id="ec-cq" type="text" placeholder="Buscar SKU ou descrição…" value="${ecEsc(v.concQ || '')}"><button class="btn-sm" onclick="ecExportConc()">⬇ Planilha de inventário (CSV)</button></div>
+    </div>
+    <div class="ec-table-wrap"><table class="t ec-table" style="min-width:1400px"><thead><tr>
+      ${isAn ? '<th>SKU</th><th>Descrição</th><th class="r">Matriz (Bling)</th><th class="r">Estoque no anúncio (ML)</th><th class="r">Diferença</th><th>Anúncios</th>'
+        : '<th>SKU</th><th>Descrição</th><th class="r">Full Bling</th><th class="r">Full ML físico</th><th class="r">ML disponível</th><th class="r">ML indisponível</th><th class="r">Diferença</th><th class="r">Valor dif.</th><th>Situação</th><th>Ação sugerida</th>'}
+    </tr></thead><tbody>
+    ${rs.slice(0, 300).map(r => isAn ? `<tr><td class="mono">${ecEsc(r.sku)}</td><td><span class="ec-desc" title="${ecEsc(r.nome)}">${ecEsc(r.nome)}</span></td><td class="r mono">${ecInt(r.concAnuncio.bling)}</td><td class="r mono">${ecInt(r.concAnuncio.ml)}</td><td class="r mono ${r.concAnuncio.dif ? 'c-orange' : ''}">${r.concAnuncio.dif > 0 ? '+' : ''}${ecInt(r.concAnuncio.dif)}</td><td class="mono ec-sub">${r.mlOwnIds.slice(0, 3).join(', ')}</td></tr>`
+      : `<tr><td class="mono">${ecEsc(r.sku)}</td><td><span class="ec-desc" title="${ecEsc(r.nome)}">${ecEsc(r.nome)}</span></td><td class="r mono">${ecInt(r.concFull.bling)}</td><td class="r mono">${ecInt(r.concFull.ml)}${r.mlInvOk ? '' : '<div class="ec-sub">anúncio</div>'}</td><td class="r mono">${ecInt(r.mlFullDisp)}</td><td class="r mono">${r.mlFullIndisp ? ecInt(r.mlFullIndisp) : '—'}</td><td class="r mono ${r.concFull.dif ? 'c-orange' : ''}"><b>${r.concFull.dif > 0 ? '+' : ''}${ecInt(r.concFull.dif)}</b></td><td class="r mono">${r.custo ? ecMoney(r.concFull.difR) : '—'}</td><td>${ecPill(r.concFull.st, r.concFull.st === 'OK' ? 'ok' : r.concFull.st === 'BLING > ML' || r.concFull.st === 'SÓ NO BLING' ? 'mon' : 'aten')}</td><td style="white-space:normal;min-width:320px;font-size:11px">${ecEsc(ecConcAcao(r))}</td></tr>`).join('')
+      || `<tr><td colspan="10" style="padding:24px;text-align:center;color:var(--text2)">Nada neste filtro.</td></tr>`}
+    </tbody></table></div>
+    <div class="ec-pager"><span class="ec-muted">${ecInt(rs.length)} SKUs${rs.length > 300 ? ' (mostrando 300 — exporte o CSV para ver todos)' : ''}</span></div>
+  </div>`;
+  const qi = document.getElementById('ec-cq');
+  qi.addEventListener('input', () => { v.concQ = qi.value; clearTimeout(EC._cq); EC._cq = setTimeout(() => { ecRenderConc(); const n = document.getElementById('ec-cq'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250); });
+}
+function ecConcSet(k) { EC.view.concF = k; ecRenderConc(); }
+function ecExportConc() {
+  const rs = EC.rows.filter(r => !r.isKit && r.concFull).sort((x, y) => Math.abs(y.concFull.difR) - Math.abs(x.concFull.difR));
+  const cols = [['SKU', r => r.sku], ['Descrição', r => r.nome], ['Full Bling', r => r.concFull.bling], ['Full ML físico', r => r.concFull.ml], ['ML disponível', r => r.mlFullDisp], ['ML indisponível', r => r.mlFullIndisp],
+    ['Motivo indisponível', r => Object.entries(r.mlFullDet).map(([k, v]) => (EC_NA[k] || k) + ' ' + v).join(', ')], ['Diferença (Bling − ML)', r => r.concFull.dif], ['Custo unitário', r => r.custo], ['Valor diferença', r => r.concFull.difR.toFixed(2)],
+    ['Situação', r => r.concFull.st], ['Ação sugerida', r => ecConcAcao(r)], ['Contagem física', () => ''], ['Ajuste lançado no Bling', () => ''], ['Anúncios Full', r => r.mlIds.join(' ')]];
+  const esc = x => { const s = String(x ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const csv = '﻿' + cols.map(c => c[0]).join(';') + '\n' + rs.map(r => cols.map(c => { const v = c[1](r); return esc(typeof v === 'number' ? String(v).replace('.', ',') : v); }).join(';')).join('\n');
+  const l = document.createElement('a'); l.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); l.download = `inventario_full_bling_x_ml_${ecDay()}.csv`; l.click();
+}
 
 function orderStock(id, qty){
   const msg = qty>0
