@@ -677,6 +677,11 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .ec-click { cursor:pointer; } .ec-click:hover .ec-stat-v { color:var(--accent); }
 .ec-dep-total td { border-top:1px solid var(--border2); }
 .ec-dep-out td { color:var(--text2); }
+
+.ec-bling-conn { display:grid; grid-template-columns:1.4fr 1fr auto; gap:12px; align-items:center; margin-bottom:6px; }
+.ec-bling-conn .ec-f { margin:0; }
+.ec-bling-conn input[type=text], .ec-bling-conn input[type=password] { flex:1; min-width:0; background:var(--bg2); border:1px solid var(--border2); color:var(--text); padding:6px 8px; border-radius:6px; font:12px var(--mono); }
+@media (max-width:900px) { .ec-bling-conn { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
@@ -826,7 +831,6 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
     <div class="tab" onclick="goTab(this,'pricing')">💰 Precificação</div>
     <div class="tab" onclick="goTab(this,'demand')">📈 Demanda & Trends</div>
     <div class="tab" onclick="goTab(this,'compras');ecOpen()">🧭 Estoque &amp; Compras</div>
-    <div class="tab" onclick="goTab(this,'stock')">📦 Estoque Preditivo</div>
     <div class="tab" onclick="goTab(this,'competitors')">👁 Concorrentes</div>
     <div class="tab" onclick="goTab(this,'abc')">🔺 Curva ABC</div>
     <div class="tab" onclick="goTab(this,'alerts')">🔔 Alertas <span class="tab-count red" id="alert-badge">0</span></div>
@@ -1254,89 +1258,6 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
           </div>
           <div class="card-body" id="meta-trends-body">
             <div class="c-muted" style="font-size:13px">Carregando...</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ═══ STOCK PREDICTIVE ═══ -->
-    <div class="page" id="page-stock">
-      <div class="page-header">
-        <div>
-          <div class="page-title">Estoque <span>Preditivo</span></div>
-          <div class="page-meta" id="stock-meta">Gestão inteligente com previsão de ruptura — API /items</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <div id="stock-source-bar" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"></div>
-          <button class="btn-sm btn-primary" onclick="loadStockData(true)">↻ Atualizar Estoque</button>
-        </div>
-      </div>
-
-      <div class="kpi-row">
-        <div class="kpi" style="--kpi-color:var(--green)">
-          <div class="kpi-label">SKUs OK</div>
-          <div class="kpi-val c-green" id="stock-ok">—</div>
-        </div>
-        <div class="kpi" style="--kpi-color:var(--orange)">
-          <div class="kpi-label">Reposição Necessária</div>
-          <div class="kpi-val c-orange" id="stock-warn">—</div>
-        </div>
-        <div class="kpi" style="--kpi-color:var(--red)">
-          <div class="kpi-label">Risco de Ruptura</div>
-          <div class="kpi-val c-red" id="stock-critical">—</div>
-        </div>
-        <div class="kpi" style="--kpi-color:var(--accent)">
-          <div class="kpi-label">Giro Médio (dias)</div>
-          <div class="kpi-val" id="avg-turnover">—</div>
-        </div>
-      </div>
-
-      <div class="gw">
-        <div class="card">
-          <div class="card-head">
-            <span class="card-title">Monitor de Estoque — Análise Preditiva</span>
-            <span class="badge b-blue" id="stock-api-badge">API: /items (available_quantity)</span>
-          </div>
-          <div class="card-body" style="padding:0">
-            <div class="scroll">
-              <table class="t">
-                <thead>
-                  <tr>
-                    <th>Produto</th>
-                    <th>ID</th>
-                    <th>Estoque</th>
-                    <th>Nível</th>
-                    <th>Giro Est.</th>
-                    <th>Ruptura em</th>
-                    <th>Ação</th>
-                  </tr>
-                </thead>
-                <tbody id="stock-tbody"></tbody>
-              </table>
-            </div>
-            <div id="stock-unmatched" style="display:none;padding:12px 16px;border-top:1px solid var(--border);font-size:12px"></div>
-          </div>
-        </div>
-
-        <div>
-          <div class="card" style="margin-bottom:16px">
-            <div class="card-head"><span class="card-title">Previsão de Ruptura</span></div>
-            <div class="card-body">
-              <div class="predict-box">
-                <div class="predict-label">🔮 Previsão IA (30 dias)</div>
-                <div class="predict-val" id="predict-rupture-val">—</div>
-                <div class="predict-desc" id="predict-rupture-desc">Calculando com base no histórico de vendas...</div>
-              </div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-head"><span class="card-title">Sazonalidade Prevista</span></div>
-            <div class="card-body">
-              <div class="bars" id="season-bars"></div>
-              <div style="margin-top:12px;font-size:11px;color:var(--muted);font-family:var(--mono)">
-                Baseado em histórico de vendas + datas comemorativas BR
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -2165,7 +2086,6 @@ async function renderAll(){
   await renderOverview();
   loadPricingData();
   loadTrends();
-  loadStockData();
   loadCompetitorsData();
   computeABC();
   renderAlerts();
@@ -2724,6 +2644,7 @@ async function fetchAndRenderTrends(catId){
 // STOCK PREDICTIVE + sugestão de reposição
 // ════════════════════════════════════════════
 async function loadStockDataML(){
+  if(!document.getElementById('stock-tbody')) return;
   resetStockHeader();
   const items = state.isDemo ? demoItems() : state.items;
   if(!items.length){ document.getElementById('stock-tbody').innerHTML='<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--muted)">Sem anúncios para analisar</td></tr>'; return; }
@@ -2887,6 +2808,7 @@ function resetStockHeader(){
 }
 
 async function loadStockData(force=false){
+  if(!document.getElementById('stock-tbody')) return; // aba Estoque Preditivo removida (substituída por Estoque & Compras)
   renderStockSourceBar();
   if(state.isDemo || stockSource() !== 'bling') return loadStockDataML();
   const tbody = document.getElementById('stock-tbody');
@@ -3165,7 +3087,7 @@ async function ecLoad(force = false) {
   if (EC.loading) return;
   if (state.isDemo) { ecRenderEmpty('Modo demonstração: conecte sua conta do Mercado Livre para usar o módulo.'); return; }
   const bc = blingCfg();
-  if (!bc.url || !bc.key) { ecRenderEmpty('Configure o Bling primeiro (aba Estoque Preditivo → ⚙).'); return; }
+  if (!bc.url || !bc.key) { ecRenderEmpty('Conecte o Bling: clique em ⚙ (Configurações) → Conexão com o Bling.'); return; }
   EC.loading = true;
   try {
     ecProgress('Lendo estoque do Bling…', null);
@@ -4126,6 +4048,15 @@ function ecOpenCfg() {
   const inp = (id, v, label, suf = 'dias') => `<label class="ec-f"><span>${label}</span><span><input type="number" id="${id}" value="${v}" min="0" step="any"> ${suf}</span></label>`;
   m.innerHTML = `<div class="ec-modal-box">
     <div class="card-head"><span class="card-title">⚙ Configurações — Estoque & Compras</span><button class="btn-sm" onclick="ecCloseCfg()">✕</button></div>
+    <div class="card-body" style="padding-bottom:0">
+      <div class="ec-subhead">Conexão com o Bling</div>
+      <div class="ec-bling-conn">
+        <label class="ec-f"><span>URL do Worker</span><input type="text" id="ec-burl" value="${ecEsc(blingCfg().url || '')}" placeholder="https://bling-proxy.SEU-USUARIO.workers.dev"></label>
+        <label class="ec-f"><span>Chave do painel (DASH_KEY)</span><input type="password" id="ec-bkey" value="${ecEsc(blingCfg().key || '')}" autocomplete="off"></label>
+        <button class="btn-sm" onclick="ecBlingAuth()">🔑 Autorizar Bling</button>
+      </div>
+      <div class="ec-muted" style="font-size:11px">A chave fica só neste navegador. "Autorizar Bling" abre a tela de permissão do Bling (necessário só na 1ª vez ou se o acesso for revogado).</div>
+    </div>
     <div class="card-body ec-cfg-grid">
       <div><div class="ec-subhead">Reposição</div>
         ${inp('ec-lt', c.leadTime, 'Lead time padrão')}
@@ -4146,9 +4077,17 @@ function ecOpenCfg() {
   </div>`;
   m.style.display = 'flex';
 }
+function ecBlingAuth() {
+  const u = (document.getElementById('ec-burl').value || '').trim().replace(/\/+$/, '');
+  if (!u) { alert('Informe a URL do Worker.'); return; }
+  window.open(u + '/bling/auth', '_blank');
+}
 function ecCloseCfg() { document.getElementById('ec-cfg').style.display = 'none'; }
 function ecApplyCfg() {
   const c = ecCfg(); const g = id => parseFloat(document.getElementById(id).value);
+  const bc = blingCfg(); const nu = document.getElementById('ec-burl').value.trim().replace(/\/+$/, ''), nk = document.getElementById('ec-bkey').value.trim();
+  const blingMudou = nu !== (bc.url || '') || nk !== (bc.key || '');
+  bc.url = nu; bc.key = nk; bc.source = 'bling'; saveBlingCfg(bc);
   const pos = (v, d) => (isFinite(v) && v >= 0 ? v : d);
   c.leadTime = Math.max(1, Math.round(pos(g('ec-lt'), c.leadTime)));
   c.alvo = { A: pos(g('ec-aA'), c.alvo.A), B: pos(g('ec-aB'), c.alvo.B), C: pos(g('ec-aC'), c.alvo.C) };
@@ -4157,7 +4096,8 @@ function ecApplyCfg() {
   c.blingIncluiFull = document.getElementById('ec-bif').checked; c.impostoPct = pos(g('ec-imp'), 0);
   c.abc = { A: ecClamp(pos(g('ec-abcA'), 70) / 100, 0.3, 0.95), B: ecClamp(pos(g('ec-abcB'), 90) / 100, 0.5, 0.99) };
   if (c.abc.B <= c.abc.A) c.abc.B = Math.min(0.99, c.abc.A + 0.1);
-  ecSaveCfg(); ecCloseCfg(); if (EC.bling) { ecCompute(); ecRender(); }
+  ecSaveCfg(); ecCloseCfg();
+  if (blingMudou || !EC.bling) ecLoad(true); else { ecCompute(); ecRender(); }
 }
 function ecResetCfg() { const lt = ecCfg().ltSku; EC.cfg = { ...JSON.parse(JSON.stringify(EC_DEFAULT_CFG)), ltSku: lt }; ecSaveCfg(); ecOpenCfg(); }
 
