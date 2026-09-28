@@ -541,6 +541,138 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .modal-desc { font-size:13px; color:var(--text2); margin-bottom:24px; line-height:1.6; }
 .modal-actions { display:flex; gap:10px; justify-content:center; }
 .modal-actions button { flex:1; padding:11px; border-radius:10px; font-size:13px; font-weight:700; border:none; cursor:pointer; font-family:var(--sans); }
+
+/* ═══ MÓDULO ESTOQUE & COMPRAS ═══ */
+#page-compras .ec-sec { margin-bottom:18px; }
+.ec-muted { color:var(--text2); font-size:11px; }
+.ec-sub { font-size:10px; color:var(--text2); font-family:var(--mono); margin-top:2px; font-weight:400; }
+.ec-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; flex-shrink:0; }
+.ec-subtabs { display:flex; gap:4px; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:3px; }
+.ec-subtab { background:transparent; border:none; color:var(--text2); padding:7px 14px; border-radius:7px; font:600 12px var(--sans); cursor:pointer; }
+.ec-subtab.active { background:var(--accent); color:#fff; }
+.ec-head-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; position:relative; }
+.ec-iconbtn { background:var(--surface); border:1px solid var(--border2); color:var(--text); padding:7px 11px; border-radius:8px; cursor:pointer; font-size:13px; display:flex; gap:4px; align-items:center; }
+.ec-progress { display:none; align-items:center; gap:12px; background:var(--surface); border:1px solid var(--border2); border-radius:10px; padding:10px 14px; margin-bottom:16px; font-size:12px; color:var(--text2); }
+.ec-prog-trk { flex:1; height:4px; background:var(--surface3); border-radius:99px; overflow:hidden; }
+.ec-prog-fill { height:100%; background:var(--accent); border-radius:99px; transition:width .3s; }
+.ec-prog-fill.ec-indet { width:30%!important; animation:ecIndet 1.2s infinite ease-in-out; }
+@keyframes ecIndet { 0%{margin-left:-30%} 100%{margin-left:100%} }
+.ec-alerts { display:flex; flex-direction:column; }
+.ec-alert { display:flex; align-items:center; gap:4px; background:transparent; border:none; border-bottom:1px solid var(--border); padding:12px 18px; color:var(--text); font:500 14px var(--sans); text-align:left; cursor:pointer; }
+.ec-alert:last-child { border-bottom:none; }
+.ec-alert:hover { background:rgba(52,131,250,.05); }
+.ec-alert span:nth-child(2) { flex:1; }
+.ec-go { color:var(--text2); }
+.ec-hero { padding:20px 22px; cursor:pointer; position:relative; transition:border-color .2s; }
+.ec-hero::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--tone); }
+.ec-hero:hover { border-color:var(--border2); }
+.ec-hero-label { font:600 11px var(--mono); text-transform:uppercase; letter-spacing:1px; color:var(--text2); margin-bottom:8px; }
+.ec-hero-val { font-size:40px; font-weight:700; letter-spacing:-1px; line-height:1.05; }
+.ec-hero-val span { font-size:14px; font-weight:500; color:var(--text2); letter-spacing:0; }
+.ec-hero-sub { margin-top:8px; font-size:13px; color:var(--text2); }
+.ec-hero-sub b { color:var(--text); }
+.ec-buy-row { display:grid; grid-template-columns:repeat(4,1fr) 1.4fr; gap:10px; padding:16px 18px 6px; }
+.ec-counter { background:var(--surface2); border:1px solid var(--border); border-radius:12px; padding:12px 14px; text-align:left; cursor:pointer; color:var(--text); font-family:var(--sans); }
+.ec-counter:hover { border-color:var(--border2); }
+.ec-counter-total { cursor:default; background:var(--surface3); }
+.ec-c-label { font-size:11px; color:var(--text2); display:flex; align-items:center; }
+.ec-c-val { font-size:26px; font-weight:700; margin-top:6px; letter-spacing:-.5px; }
+.ec-c-sub { font-size:11px; color:var(--text2); margin-top:2px; }
+.ec-buy-grid { display:grid; grid-template-columns:2fr 1fr; gap:18px; padding:10px 18px 18px; }
+.ec-subhead { font:600 11px var(--mono); text-transform:uppercase; letter-spacing:.8px; color:var(--text2); margin:6px 0 8px; }
+.ec-mini-h { font-size:12px; color:var(--text2); margin-bottom:4px; }
+.ec-li { display:flex; justify-content:space-between; gap:10px; padding:6px 0; border-bottom:1px solid var(--border); font-size:12px; cursor:pointer; }
+.ec-li:hover { color:var(--accent); }
+.ec-li-empty { padding:4px 0; }
+.ec-prod-inline { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:260px; }
+.ec-t td, .ec-t th { padding:7px 8px!important; font-size:12px!important; }
+.ec-t .r, .ec-table .r { text-align:right; }
+.ec-prod { max-width:260px; }
+.ec-prod-n { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600; }
+.ec-prod-s { font-size:10px; color:var(--text2); }
+.ec-link { background:none; border:none; color:var(--accent); cursor:pointer; font:600 12px var(--sans); padding:8px 0; }
+.ec-strip { display:grid; grid-template-columns:repeat(6,1fr); gap:1px; background:var(--border); border-bottom:1px solid var(--border); margin-bottom:12px; }
+.ec-strip-sm { grid-template-columns:repeat(3,1fr); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+.ec-stat { background:var(--surface); padding:12px 16px; }
+.ec-stat-l { font-size:10px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.8px; color:var(--text2); }
+.ec-stat-v { font-size:19px; font-weight:700; margin-top:4px; }
+.ec-stat-s { font-size:11px; color:var(--text2); font-family:var(--mono); }
+.ec-meter { padding:6px 0 8px; cursor:pointer; }
+.ec-meter-top { display:flex; justify-content:space-between; font-size:12px; margin-bottom:5px; align-items:center; }
+.ec-meter-top > span:first-child { display:flex; align-items:center; }
+.ec-meter-trk { height:8px; background:var(--surface3); border-radius:99px; overflow:hidden; }
+.ec-meter-fill { height:100%; border-radius:0 4px 4px 0; }
+.ec-counts { display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:10px; font-size:12px; color:var(--text2); }
+.ec-counts span { cursor:pointer; } .ec-counts span:hover { color:var(--accent); }
+.ec-counts b { color:var(--text); }
+.ec-hbars { display:flex; flex-direction:column; gap:10px; }
+.ec-hbar { display:grid; grid-template-columns:150px 1fr 90px; align-items:center; gap:10px; cursor:pointer; font-size:12px; }
+.ec-hbar-l { display:flex; align-items:center; color:var(--text2); }
+.ec-hbar-trk { height:18px; }
+.ec-hbar-fill { height:100%; border-radius:0 4px 4px 0; min-width:2px; }
+.ec-hbar-v { text-align:right; }
+.ec-cols { display:flex; align-items:flex-end; gap:14px; height:170px; padding:0 4px; border-bottom:1px solid rgba(143,163,184,.25); }
+.ec-col { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; position:relative; }
+.ec-col-bar { width:100%; max-width:24px; border-radius:4px 4px 0 0; }
+.ec-col-v { font-size:11px; margin-bottom:4px; }
+.ec-col-l { position:absolute; bottom:-20px; font-size:10px; color:var(--text2); white-space:nowrap; }
+.ec-legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:28px; font-size:11px; color:var(--text2); }
+.ec-legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+.ec-stack-row { display:grid; grid-template-columns:110px 1fr; gap:10px; align-items:center; margin-bottom:10px; font-size:12px; }
+.ec-stack-l { color:var(--text2); }
+.ec-stack { display:flex; gap:2px; height:22px; }
+.ec-seg { height:100%; display:flex; align-items:center; justify-content:center; font:600 11px var(--mono); color:#fff; overflow:visible; white-space:nowrap; }
+.ec-seg:first-child { border-radius:4px 0 0 4px; } .ec-seg:last-child { border-radius:0 4px 4px 0; }
+.ec-abc { display:inline-block; min-width:20px; text-align:center; padding:2px 6px; border-radius:6px; font:700 11px var(--mono); background:var(--surface3); border:1px solid var(--border2); color:var(--text); }
+.ec-abc-A { box-shadow:inset 3px 0 0 #3987e5; } .ec-abc-B { box-shadow:inset 3px 0 0 #d95926; } .ec-abc-C { box-shadow:inset 3px 0 0 #199e70; }
+.ec-spark-t { font-size:11px; color:var(--text2); margin:6px 0 2px; }
+.ec-spark { width:100%; height:64px; display:block; margin-bottom:6px; }
+.ec-mx { display:grid; grid-template-columns:36px 1fr 1fr; gap:8px; }
+.ec-mx-h { font:600 11px var(--mono); color:var(--text2); text-transform:uppercase; text-align:center; }
+.ec-mx-r { display:flex; align-items:center; justify-content:center; }
+.ec-mx-cell { background:var(--surface2); border:1px solid var(--border); border-left:3px solid var(--tone); border-radius:10px; padding:10px 12px; cursor:pointer; }
+.ec-mx-cell:hover { border-color:var(--border2); }
+.ec-mx-crit { --tone:var(--red); } .ec-mx-mon { --tone:var(--ml-yellow); } .ec-mx-ok { --tone:var(--green); } .ec-mx-aten { --tone:var(--orange); }
+.ec-mx-n { font-size:18px; font-weight:700; } .ec-mx-n span { font-size:11px; color:var(--text2); font-weight:500; }
+.ec-mx-v { font-size:11px; color:var(--text2); }
+.ec-mx-t { font-size:11px; margin-top:4px; }
+.ec-notes { font-size:11px; color:var(--text2); display:flex; flex-direction:column; gap:4px; margin:4px 0 18px; }
+.ec-pill { display:inline-block; padding:3px 8px; border-radius:99px; font:600 10px var(--mono); white-space:nowrap; background:var(--surface3); border:1px solid var(--border2); color:var(--text); }
+.ec-pill::before { content:''; display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:6px; vertical-align:1px; background:var(--tone); }
+.ec-t-crit { --tone:var(--red); } .ec-t-aten { --tone:var(--orange); } .ec-t-mon { --tone:var(--ml-yellow); } .ec-t-ok { --tone:var(--green); } .ec-t-neutral { --tone:var(--text2); }
+.ec-risco .ec-pill::before { display:none; }
+.ec-toolbar { padding:12px 16px; border-bottom:1px solid var(--border); display:flex; flex-direction:column; gap:10px; }
+.ec-chips { display:flex; flex-wrap:wrap; gap:6px; }
+.ec-chip { background:var(--surface2); border:1px solid var(--border); color:var(--text2); border-radius:99px; padding:5px 11px; font:600 11px var(--sans); cursor:pointer; }
+.ec-chip span { font-family:var(--mono); opacity:.7; margin-left:3px; }
+.ec-chip.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+.ec-tools { display:flex; gap:8px; }
+.ec-tools input { flex:1; background:var(--bg2); border:1px solid var(--border2); color:var(--text); padding:7px 10px; border-radius:8px; font-size:12px; }
+.ec-table-wrap { overflow:auto; max-height:70vh; }
+.ec-table { min-width:2600px; }
+.ec-table th { position:sticky; top:0; background:var(--surface); z-index:2; cursor:pointer; white-space:nowrap; user-select:none; }
+.ec-table th.sorted { color:var(--accent); }
+.ec-table td { padding:8px 10px!important; font-size:12px!important; white-space:nowrap; vertical-align:top; }
+.ec-table th:nth-child(1), .ec-table td:nth-child(1) { position:sticky; left:0; background:var(--surface); z-index:1; }
+.ec-table th:nth-child(1) { z-index:3; }
+.ec-desc { display:inline-block; max-width:280px; overflow:hidden; text-overflow:ellipsis; vertical-align:bottom; }
+.ec-tag { font:600 9px var(--mono); padding:1px 5px; border-radius:4px; background:var(--surface3); color:var(--text2); }
+.ec-lt { background:none; border:1px dashed var(--border2); color:var(--text); border-radius:6px; padding:2px 6px; font:12px var(--mono); cursor:pointer; }
+.ec-pager { display:flex; justify-content:space-between; align-items:center; padding:10px 16px; border-top:1px solid var(--border); }
+.ec-modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:1000; align-items:center; justify-content:center; padding:16px; }
+.ec-modal-box { background:var(--surface); border:1px solid var(--border2); border-radius:14px; width:min(980px,100%); max-height:90vh; overflow:auto; }
+.ec-cfg-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:22px; }
+.ec-f { display:flex; justify-content:space-between; align-items:center; gap:10px; font-size:12px; margin-bottom:8px; color:var(--text2); }
+.ec-f input[type=number] { width:70px; background:var(--bg2); border:1px solid var(--border2); color:var(--text); padding:5px 8px; border-radius:6px; font:12px var(--mono); text-align:right; }
+.ec-modal-foot { display:flex; justify-content:flex-end; gap:8px; padding:12px 18px; border-top:1px solid var(--border); }
+.ec-notif { display:none; position:absolute; right:0; top:42px; width:380px; max-height:460px; overflow:auto; background:var(--surface); border:1px solid var(--border2); border-radius:12px; z-index:50; box-shadow:0 12px 40px rgba(0,0,0,.5); }
+.ec-notif-head { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; border-bottom:1px solid var(--border); font-size:13px; }
+.ec-notif-i { display:flex; gap:4px; padding:9px 14px; border-bottom:1px solid var(--border); font-size:12px; cursor:pointer; align-items:flex-start; }
+.ec-notif-i .ec-dot { margin-top:5px; }
+.ec-notif-i.new { background:rgba(52,131,250,.07); }
+#ec-tip { display:none; position:fixed; z-index:2000; background:var(--surface3); border:1px solid var(--border2); color:var(--text); padding:7px 10px; border-radius:8px; font-size:12px; pointer-events:none; max-width:320px; box-shadow:0 8px 24px rgba(0,0,0,.5); }
+@media (max-width:1100px) { .ec-buy-row { grid-template-columns:repeat(2,1fr); } .ec-strip { grid-template-columns:repeat(3,1fr); } .ec-buy-grid { grid-template-columns:1fr; } .ec-cfg-grid { grid-template-columns:1fr; } }
+@media (max-width:700px) { #page-compras .g2 { grid-template-columns:1fr; } .ec-hero-val { font-size:30px; } .ec-hbar { grid-template-columns:110px 1fr 70px; } .ec-notif { width:calc(100vw - 32px); } }
 </style>
 </head>
 <body>
@@ -689,6 +821,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
     <div class="tab active" onclick="goTab(this,'overview')">📊 Visão Geral</div>
     <div class="tab" onclick="goTab(this,'pricing')">💰 Precificação</div>
     <div class="tab" onclick="goTab(this,'demand')">📈 Demanda & Trends</div>
+    <div class="tab" onclick="goTab(this,'compras');ecOpen()">🧭 Estoque &amp; Compras</div>
     <div class="tab" onclick="goTab(this,'stock')">📦 Estoque Preditivo</div>
     <div class="tab" onclick="goTab(this,'competitors')">👁 Concorrentes</div>
     <div class="tab" onclick="goTab(this,'abc')">🔺 Curva ABC</div>
@@ -1206,6 +1339,31 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
     </div>
 
     <!-- ═══ COMPETITORS ═══ -->
+    <!-- ═══ ESTOQUE & COMPRAS ═══ -->
+    <div class="page" id="page-compras">
+      <div class="page-header" style="flex-wrap:wrap;gap:12px">
+        <div>
+          <div class="page-title">Estoque <span>&amp; Compras</span></div>
+          <div class="page-meta" id="ec-meta">Copiloto de compras e estoque — Bling + Mercado Livre</div>
+        </div>
+        <div class="ec-head-actions">
+          <div class="ec-subtabs">
+            <button class="ec-subtab active" data-t="dash" onclick="ecSetTab('dash')">Dashboard</button>
+            <button class="ec-subtab" data-t="itens" onclick="ecSetTab('itens')">Itens em linha</button>
+          </div>
+          <button class="ec-iconbtn" id="ec-bell" onclick="ecToggleNotif()" title="Notificações">🔔</button>
+          <button class="ec-iconbtn" onclick="ecOpenCfg()" title="Configurações">⚙</button>
+          <button class="btn-sm btn-primary" onclick="ecLoad(true)">↻ Atualizar</button>
+          <div class="ec-notif" id="ec-notif"></div>
+        </div>
+      </div>
+      <div class="ec-progress" id="ec-progress"><span class="ec-prog-msg">Carregando…</span><div class="ec-prog-trk"><div class="ec-prog-fill"></div></div></div>
+      <div id="ec-dash"><div class="card"><div class="card-body" style="text-align:center;padding:40px;color:var(--text2)">Abra esta aba para carregar o módulo.</div></div></div>
+      <div id="ec-itens" style="display:none"></div>
+      <div class="ec-modal" id="ec-cfg" onclick="if(event.target===this)ecCloseCfg()"></div>
+      <div id="ec-tip"></div>
+    </div>
+
     <div class="page" id="page-competitors">
       <div class="page-header">
         <div>
@@ -2863,6 +3021,1101 @@ function renderStockBling(bling){
   document.getElementById('alert-badge').textContent = state.alerts.length;
   renderAlerts();
 }
+
+// ════════════════════════════════════════════════════════════════
+// MÓDULO ESTOQUE & COMPRAS — copiloto de compras e estoque
+// Fontes: Bling (Worker bling-proxy) + Mercado Livre (anúncios e pedidos)
+// ════════════════════════════════════════════════════════════════
+const EC = {
+  cfg: null, bling: null, compras: null, hist: null, snaps: [],
+  rows: [], agg: null, loading: false, loadedAt: null,
+  view: { tab: 'dash', filter: 'relevantes', sort: { k: 'prio', d: 1 }, q: '', page: 0, pageSize: 100 },
+};
+
+const EC_CFG_KEY = 'ec_cfg_v1', EC_HIST_KEY = 'ec_hist_v1', EC_NOTIF_KEY = 'ec_notif_v1';
+const EC_DEFAULT_CFG = {
+  leadTime: 15,                              // dias (padrão para todos os SKUs)
+  faixas: { crit: 15, aten: 30, saud: 90 },  // faixas de cobertura (dias)
+  alvo: { A: 45, B: 30, C: 20 },             // cobertura desejada após a reposição (dias)
+  z: { A: 1.65, B: 1.28, C: 1.04 },          // nível de serviço do estoque de segurança (95% / 90% / 85%)
+  abc: { A: 0.70, B: 0.90 },                 // cortes da curva ABC (receita 90d acumulada)
+  fullAlvo: 30, fullMax: 60,                 // cobertura alvo e máxima no Full (dias)
+  blingIncluiFull: true,                     // saldo do Bling já contém o estoque Full
+  impostoPct: 0,                             // % de impostos sobre a venda (para margem)
+  ltSku: {},                                 // lead time por SKU {SKU: dias}
+};
+function ecCfg() {
+  if (EC.cfg) return EC.cfg;
+  let c = {};
+  try { c = JSON.parse(localStorage.getItem(EC_CFG_KEY) || '{}'); } catch (e) {}
+  EC.cfg = { ...EC_DEFAULT_CFG, ...c,
+    faixas: { ...EC_DEFAULT_CFG.faixas, ...(c.faixas || {}) }, alvo: { ...EC_DEFAULT_CFG.alvo, ...(c.alvo || {}) },
+    z: { ...EC_DEFAULT_CFG.z, ...(c.z || {}) }, abc: { ...EC_DEFAULT_CFG.abc, ...(c.abc || {}) }, ltSku: { ...(c.ltSku || {}) } };
+  return EC.cfg;
+}
+function ecSaveCfg() { try { localStorage.setItem(EC_CFG_KEY, JSON.stringify(EC.cfg)); } catch (e) {} }
+
+// ───────── datas (fuso de Brasília) ─────────
+const ecDay = (offsetDays = 0) => new Date(Date.now() - 3 * 3600e3 - offsetDays * 864e5).toISOString().slice(0, 10);
+const ecDaysBetween = (a, b) => Math.round((new Date(b + 'T12:00:00Z') - new Date(a + 'T12:00:00Z')) / 864e5);
+const ecFmtDate = d => d ? d.slice(8, 10) + '/' + d.slice(5, 7) + (d.slice(0, 4) !== ecDay().slice(0, 4) ? '/' + d.slice(2, 4) : '') : '—';
+const ecAddDays = (d, n) => new Date(new Date(d + 'T12:00:00Z').getTime() + n * 864e5).toISOString().slice(0, 10);
+
+// ───────── progresso ─────────
+function ecProgress(msg, pct) {
+  const el = document.getElementById('ec-progress'); if (!el) return;
+  if (msg == null) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  el.querySelector('.ec-prog-msg').textContent = msg;
+  el.querySelector('.ec-prog-fill').style.width = (pct == null ? 100 : Math.max(3, Math.min(100, pct))) + '%';
+  el.querySelector('.ec-prog-fill').classList.toggle('ec-indet', pct == null);
+}
+
+// ───────── Bling (Worker) com builds retomáveis ─────────
+async function ecBlingLoop(path, force, label) {
+  let first = true;
+  for (let i = 0; i < 60; i++) {
+    const d = await blingApi(path + (force && first ? '?refresh=1' : ''));
+    first = false;
+    if (!d.partial) return d;
+    ecProgress(`${label}: ${d.stage === 'S' ? 'saldos ' + d.progress + '%' : d.stage === 'K' ? 'composição dos kits ' + d.progress + '%' : d.stage === 'P' ? 'pedidos ' + d.progress + '%' : d.stage === 'F' ? 'fornecedores' : 'lendo cadastro (' + (d.produtos || d.pedidos || 0) + ')'}`, d.progress || null);
+  }
+  throw new Error(label + ': tempo esgotado');
+}
+
+// ───────── Histórico de vendas ML (180 dias, cache diário por SKU) ─────────
+// Estrutura: { v:1, days: { 'AAAA-MM-DD': { KEY: [qtd, receita, tarifa, qtdCancelada, qtdFull] } } }
+function ecLoadHist() {
+  if (EC.hist) return EC.hist;
+  let h = null;
+  try { h = JSON.parse(localStorage.getItem(EC_HIST_KEY) || 'null'); } catch (e) {}
+  EC.hist = (h && h.v === 1 && h.seller === state.sellerId) ? h : { v: 1, seller: state.sellerId, days: {} };
+  return EC.hist;
+}
+function ecSaveHist() {
+  const h = EC.hist; const min = ecDay(186);
+  Object.keys(h.days).forEach(d => { if (d < min) delete h.days[d]; });
+  try { localStorage.setItem(EC_HIST_KEY, JSON.stringify(h)); } catch (e) { console.warn('hist cache', e); }
+}
+function ecItemIndex() {
+  const idx = {};
+  (state.items || []).forEach(it => {
+    const skus = mlItemSkus(it);
+    idx[it.id] = { skus, full: it.shipping?.logistic_type === 'fulfillment' };
+  });
+  return idx;
+}
+async function ecFetchDay(day, itemIdx) {
+  const from = encodeURIComponent(day + 'T00:00:00.000-03:00'), to = encodeURIComponent(day + 'T23:59:59.999-03:00');
+  const agg = {}; let offset = 0, total = 1, guard = 0;
+  while (offset < total && guard++ < 40) {
+    const page = await mlGet(`/orders/search?seller=${state.sellerId}&order.date_created.from=${from}&order.date_created.to=${to}&limit=50&offset=${offset}`);
+    if (!page || !page.results) return null; // falhou: não grava no cache
+    total = page.paging?.total ?? page.results.length;
+    for (const o of page.results) {
+      const canc = o.status === 'cancelled';
+      for (const oi of (o.order_items || [])) {
+        const iid = oi.item?.id; const info = itemIdx[iid];
+        let key = oi.item?.seller_sku ? normSku(oi.item.seller_sku) : null;
+        if (!key && info && info.skus.length === 1) key = info.skus[0];
+        if (!key) key = '#' + iid;
+        const q = oi.quantity || 0;
+        const r = agg[key] || (agg[key] = [0, 0, 0, 0, 0]);
+        if (canc) { r[3] += q; continue; }
+        r[0] += q; r[1] += q * (oi.unit_price || 0); r[2] += (oi.sale_fee || 0) * q;
+        if (info && info.full) r[4] += q;
+      }
+    }
+    offset += 50;
+  }
+  Object.values(agg).forEach(r => { r[1] = Math.round(r[1] * 100) / 100; r[2] = Math.round(r[2] * 100) / 100; });
+  return agg;
+}
+async function ecSyncHistory(force) {
+  const h = ecLoadHist(); const itemIdx = ecItemIndex();
+  const today = ecDay();
+  const need = [];
+  for (let i = 0; i <= 180; i++) {
+    const d = ecDay(i);
+    if (i <= 2 || force === 'all' || !h.days[d]) need.push(d); // últimos 3 dias sempre (cancelamentos/atrasos)
+  }
+  let done = 0, failed = 0;
+  const conc = 5;
+  for (let i = 0; i < need.length; i += conc) {
+    const batch = need.slice(i, i + conc);
+    const res = await Promise.all(batch.map(d => ecFetchDay(d, itemIdx).catch(() => null)));
+    res.forEach((agg, k) => { if (agg) h.days[batch[k]] = agg; else failed++; });
+    done += batch.length;
+    if (need.length > 6) ecProgress(`Histórico de vendas ML: ${done}/${need.length} dias`, (done / need.length) * 100);
+    if (i % 25 === 0) ecSaveHist();
+  }
+  h.updatedAt = Date.now(); h.today = today;
+  ecSaveHist();
+  return { fetched: need.length, failed };
+}
+
+// ───────── carga completa ─────────
+async function ecLoad(force = false) {
+  if (EC.loading) return;
+  if (state.isDemo) { ecRenderEmpty('Modo demonstração: conecte sua conta do Mercado Livre para usar o módulo.'); return; }
+  const bc = blingCfg();
+  if (!bc.url || !bc.key) { ecRenderEmpty('Configure o Bling primeiro (aba Estoque Preditivo → ⚙).'); return; }
+  EC.loading = true;
+  try {
+    ecProgress('Lendo estoque do Bling…', null);
+    EC.bling = await ecBlingLoop('/bling/estoque', force, 'Estoque Bling');
+    ecProgress('Lendo pedidos de compra do Bling…', null);
+    try { EC.compras = await ecBlingLoop('/bling/compras', force, 'Compras Bling'); EC.comprasErro = null; }
+    catch (e) { EC.compras = null; EC.comprasErro = e.message; }
+    ecProgress('Sincronizando histórico de vendas do Mercado Livre…', null);
+    EC.histInfo = await ecSyncHistory(force);
+    try { EC.snaps = (await blingApi('/bling/snapshots')).snapshots || []; } catch (e) { EC.snaps = []; }
+    ecCompute();
+    EC.loadedAt = Date.now();
+    ecSaveSnapshot();
+    ecNotify();
+    ecRender();
+  } catch (e) {
+    const msg = e.status === 428 ? 'O Bling precisa ser autorizado de novo: abra /bling/auth no Worker.' : e.message;
+    ecRenderEmpty('Erro ao carregar: ' + msg);
+    showToast('Estoque & Compras: ' + msg, 'err');
+  } finally {
+    EC.loading = false; ecProgress(null);
+  }
+}
+
+async function ecSaveSnapshot() {
+  const a = EC.agg; if (!a) return;
+  const body = { date: ecDay(), valorCusto: Math.round(a.valorCusto), valorVenda: Math.round(a.valorVenda), unidades: a.unidades,
+    unidadesMatriz: a.unMatriz, unidadesFull: a.unFull, cobertura: a.coberturaGeral, vendas30: a.vendas30,
+    capitalEmpatado: Math.round(a.capEmpatado), ruptura: a.nRuptura, risco: a.nRisco };
+  try {
+    const c = blingCfg();
+    await fetch(c.url + '/bling/snapshot', { method: 'POST', headers: { 'X-Dash-Key': c.key, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const i = EC.snaps.findIndex(s => s.date === body.date);
+    if (i >= 0) EC.snaps[i] = body; else EC.snaps.push(body);
+  } catch (e) {}
+}
+
+// ════════════════════════════════════════════════════════════════
+// MOTOR DE CÁLCULO — transforma dados em decisão por SKU
+// ════════════════════════════════════════════════════════════════
+const EC_REC = {
+  COMPRAR: 'COMPRAR AGORA', KIT: 'REPOR COMPONENTES', PROGRAMAR: 'PROGRAMAR COMPRA', ADEQUADO: 'ESTOQUE ADEQUADO',
+  REDUZIR: 'REDUZIR PRÓXIMA COMPRA', NAO: 'NÃO COMPRAR', DESC: 'ANALISAR DESCONTINUAÇÃO',
+};
+const EC_RISK = { CRIT: 'CRÍTICO', ALTO: 'ALTO', ATEN: 'ATENÇÃO', OK: 'SAUDÁVEL', SEM: 'SEM DEMANDA' };
+const EC_TREND = { UP2: '↑ CRESCIMENTO FORTE', UP: '↑ CRESCIMENTO', EST: '→ ESTÁVEL', DOWN: '↓ QUEDA', DOWN2: '↓↓ QUEDA FORTE' };
+
+const ecSum = (arr, a, b) => { let s = 0; for (let i = a; i < b && i < arr.length; i++) s += arr[i]; return s; };
+const ecClamp = (v, a, b) => Math.max(a, Math.min(b, v));
+function ecMedian(xs) { if (!xs.length) return 0; const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+
+// Limita picos isolados: um dia não pode valer mais que 3× a mediana dos dias com venda (mín. 2 un).
+function ecWinsorize(daily, n) {
+  const sl = daily.slice(0, n); const nz = sl.filter(v => v > 0);
+  if (nz.length < 3) return sl;
+  const cap = Math.max(2, 3 * ecMedian(nz));
+  return sl.map(v => Math.min(v, cap));
+}
+
+function ecNewSeries(H) { return { q: new Array(H).fill(0), r: new Array(H).fill(0), f: new Array(H).fill(0), c: new Array(H).fill(0), fq: new Array(H).fill(0), qk: new Array(H).fill(0) }; }
+
+function ecCompute() {
+  const cfg = ecCfg(); const today = ecDay();
+  const H = 181;
+  // ── 1. Histórico → séries diárias por SKU
+  const S = {}; // sku -> {q:[], r:[], f:[], c:[], fq:[]}
+  const days = EC.hist?.days || {};
+  let histDays = 0;
+  for (let i = 0; i < H; i++) {
+    const d = days[ecDay(i)]; if (!d) continue; histDays++;
+    for (const [k, v] of Object.entries(d)) {
+      const s = S[k] || (S[k] = ecNewSeries(H));
+      s.q[i] += v[0]; s.r[i] += v[1]; s.f[i] += v[2]; s.c[i] += v[3]; s.fq[i] += v[4] || 0;
+    }
+  }
+  EC.histDays = histDays;
+
+  // ── 2. Anúncios ML por SKU (estoque Full, preço, status)
+  const ML = {};
+  (state.items || []).forEach(it => {
+    const skus = mlItemSkus(it);
+    skus.forEach(sku => {
+      const m = ML[sku] || (ML[sku] = { ids: [], full: 0, fullIds: 0, qtyOther: 0, price: 0, active: 0 });
+      m.ids.push(it.id);
+      if (it.status === 'active') m.active++;
+      if (it.shipping?.logistic_type === 'fulfillment') { m.full += (skus.length === 1 ? (it.available_quantity || 0) : 0); m.fullIds++; }
+      if (!m.price || (it.price && it.price < m.price)) m.price = it.price || m.price;
+    });
+    // anúncio Full com variações: soma o estoque de cada variação no SKU dela
+    if (it.shipping?.logistic_type === 'fulfillment' && skus.length > 1) {
+      (it.variations || []).forEach(v => {
+        const a = (v.attributes || []).find(x => x.id === 'SELLER_SKU');
+        const s = normSku(v.seller_custom_field || (a && a.value_name)); if (s && ML[s]) ML[s].full += v.available_quantity || 0;
+      });
+    }
+  });
+
+  // ── 3. Compras por produto
+  const CP = {};
+  (EC.compras?.produtos || []).forEach(p => { if (p.pid) CP['id:' + p.pid] = p; if (p.cod) CP['c:' + normSku(p.cod)] = p; });
+
+  // ── 4. Depósito Full no Bling (se existir com "full" no nome)
+  // Matriz = depósito padrão do Bling (quando existir); Full = estoque Full do ML (fonte oficial do Full).
+  const deps = EC.bling?.depositos || [];
+  const depFull = deps.find(d => /full|fulfil/i.test(d.nome || ''));
+  const depMatriz = deps.find(d => d.padrao) || deps.find(d => /matriz/i.test(d.nome || ''));
+  EC.depMatriz = depMatriz || null;
+
+  // ── 5. Produtos Bling (exclui pais de variação)
+  const prods = EC.bling?.produtos || [];
+  const parents = new Set(prods.filter(p => p.pai).map(p => p.pai));
+  const bySku = {};
+  prods.forEach(p => { if (!p.codigo || parents.has(p.id) || p.formato === 'V') return; const k = normSku(p.codigo); if (!bySku[k]) bySku[k] = p; });
+
+  // Kits (formato E): a venda do kit vira consumo dos componentes (qtd × composição)
+  const idToSku = {}; prods.forEach(p => { if (p.codigo) idToSku[p.id] = normSku(p.codigo); });
+  let kitsComComp = 0;
+  prods.forEach(p => {
+    if (p.formato !== 'E' || !p.comp || p.comp.t === 'F' || !p.comp.c || !p.comp.c.length) return; // kit físico tem estoque próprio
+    kitsComComp++;
+    const ks = S[normSku(p.codigo)]; if (!ks) return;
+    p.comp.c.forEach(([cid, qty]) => {
+      const cs = idToSku[cid]; if (!cs || cs === normSku(p.codigo)) return;
+      const t = S[cs] || (S[cs] = ecNewSeries(H));
+      for (let i = 0; i < H; i++) if (ks.q[i]) t.qk[i] += ks.q[i] * qty;
+    });
+  });
+  EC.kitsComComp = kitsComComp;
+
+  // taxa média de tarifa ML (para SKUs sem venda recente)
+  let tr = 0, tf = 0; Object.values(S).forEach(s => { tr += ecSum(s.r, 0, 90); tf += ecSum(s.f, 0, 90); });
+  const feePctGlobal = tr > 0 ? tf / tr : 0.16;
+
+  const rows = [];
+  for (const [sku, p] of Object.entries(bySku)) {
+    const s = S[sku]; const m = ML[sku]; const cp = CP['id:' + p.id] || CP['c:' + sku] || null;
+    const isKit = p.formato === 'E' && !(p.comp && p.comp.t === 'F');   // kit virtual: estoque derivado dos componentes
+    const kitFisico = p.formato === 'E' && !!(p.comp && p.comp.t === 'F');
+    const ativo = p.situacao === 'A';
+    const q = s ? s.q.map((x, i) => x + s.qk[i]) : null;   // consumo total (venda direta + via kits)
+    const vKit30 = s ? ecSum(s.qk, 0, 30) : 0, vKit90 = s ? ecSum(s.qk, 0, 90) : 0;
+    const v = n => q ? ecSum(q, 0, n) : 0;
+    const v7 = v(7), v15 = v(15), v30 = v(30), v60 = v(60), v90 = v(90);
+    const prev30 = q ? ecSum(q, 30, 60) : 0, prev90 = q ? ecSum(q, 90, 180) : 0;
+    const rev90 = s ? ecSum(s.r, 0, 90) : 0, rev30 = s ? ecSum(s.r, 0, 30) : 0, fee90 = s ? ecSum(s.f, 0, 90) : 0;
+    const canc90 = s ? ecSum(s.c, 0, 90) : 0;
+    const full90 = s ? ecSum(s.fq, 0, 90) : 0;
+    let lastIdx = -1; if (q) for (let i = 0; i < H; i++) if (q[i] > 0) { lastIdx = i; break; }
+    const ultimaVenda = lastIdx >= 0 ? ecDay(lastIdx) : null;
+    const diasSemVenda = lastIdx >= 0 ? lastIdx : 181;
+
+    // Tendência (30 × 30 anteriores; 90 × 90 anteriores)
+    const vol = v30 + prev30;
+    const tendPct = prev30 > 0 ? (v30 - prev30) / prev30 : (v30 > 0 ? 1 : 0);
+    const tend90Pct = prev90 > 0 ? (v90 - prev90) / prev90 : (v90 > 0 ? 1 : 0);
+    let tend = EC_TREND.EST;
+    if (vol >= 4) {
+      if (tendPct >= 0.4) tend = EC_TREND.UP2; else if (tendPct >= 0.1) tend = EC_TREND.UP;
+      else if (tendPct <= -0.4) tend = EC_TREND.DOWN2; else if (tendPct <= -0.1) tend = EC_TREND.DOWN;
+    }
+
+    // Previsão: média ponderada (recente pesa mais) sobre série sem picos + fator de tendência amortecido
+    const w90 = q ? ecWinsorize(q, 90) : [];
+    const r7 = ecSum(w90, 0, 7) / 7, r30 = ecSum(w90, 0, 30) / 30, r60 = ecSum(w90, 0, 60) / 60, r90 = ecSum(w90, 0, 90) / 90;
+    let base = 0.15 * Math.min(r7, 2 * r30 + 0.1) + 0.35 * r30 + 0.30 * r60 + 0.20 * r90;
+    const trendFactor = vol >= 6 ? ecClamp(1 + 0.5 * ecClamp(tendPct, -0.5, 0.6), 0.75, 1.3) : 1;
+    const rate = base * trendFactor;             // un/dia previstas
+    const prev = { d30: rate * 30, d60: rate * 60, d90: rate * 90 };
+    const mean = r90; const sd = w90.length ? Math.sqrt(w90.reduce((a, x) => a + (x - mean) ** 2, 0) / w90.length) : 0;
+
+    // Estoques (sempre separados por localização)
+    const blingVirt = Math.max(0, p.virtual || 0);
+    const full = m ? m.full : 0;
+    let matriz;
+    if (depMatriz && p.deps && p.deps[depMatriz.id]) matriz = Math.max(0, p.deps[depMatriz.id][1]);
+    else if (depMatriz && deps.filter(d => !d.desconsiderar).length === 1 && !depMatriz.desconsiderar) matriz = blingVirt; // total do Bling = só a Matriz
+    else if (depFull && p.deps && p.deps[depFull.id] && !depFull.desconsiderar) matriz = Math.max(0, blingVirt - Math.max(0, p.deps[depFull.id][1]));
+    else if (cfg.blingIncluiFull) matriz = Math.max(0, blingVirt - full);
+    else matriz = blingVirt;
+    const total = matriz + full;
+    const transito = cp ? cp.transito || 0 : 0;
+    const lt = Number(cfg.ltSku[sku]) || cfg.leadTime;
+
+    // Custos, preços, margem
+    const custo = p.custo > 0 ? p.custo : (cp && cp.ultCusto > 0 ? cp.ultCusto : 0);
+    const vDir90 = s ? ecSum(s.q, 0, 90) : 0;
+    const precoReal = vDir90 > 0 ? rev90 / vDir90 : 0;
+    const preco = precoReal || (m ? m.price : 0) || p.preco || 0;
+    const tarifaUn = vDir90 > 0 ? fee90 / vDir90 : preco * feePctGlobal;
+    const margemUn = preco > 0 && custo > 0 ? preco - tarifaUn - custo - preco * (cfg.impostoPct / 100) : null;
+    const margemPct = margemUn != null && preco > 0 ? margemUn / preco : null;
+
+    rows.push({
+      sku, id: p.id, nome: p.nome, ativo, isKit, kitFisico, formato: p.formato, blingVirt, matriz, full, total, transito, lt,
+      custo, preco, tarifaUn, margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
+      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, canc90, full90, tendPct, tend90Pct, tend, vol,
+      rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
+      mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
+      compra: cp,
+    });
+  }
+
+  // ── 6. Curva ABC (receita 90d)
+  const totRev = rows.reduce((a, r) => a + r.rev90, 0) || 1;
+  let acc = 0;
+  [...rows].sort((a, b) => b.rev90 - a.rev90).forEach(r => {
+    const before = acc / totRev; acc += r.rev90;
+    r.curva = r.rev90 <= 0 ? 'C' : before < cfg.abc.A ? 'A' : before < cfg.abc.B ? 'B' : 'C';
+  });
+
+  // ── 7. Cobertura, risco, projeção, compra, excesso, Full, recomendação
+  const F = cfg.faixas;
+  rows.forEach(r => {
+    const rate = r.rate;
+    r.ss = rate > 0 ? Math.ceil(cfg.z[r.curva] * r.sd * Math.sqrt(r.lt)) : 0;
+    r.cob = rate > 0 ? r.total / rate : (r.total > 0 ? Infinity : 0);
+    r.cobMatriz = rate > 0 ? r.matriz / rate : (r.matriz > 0 ? Infinity : 0);
+    r.fullShare = r.v90 > 0 ? Math.min(1, r.full90 / r.v90) : (r.temFull ? 0.5 : 0);
+    r.fullRate = rate * r.fullShare;
+    r.cobFull = r.fullRate > 0 ? r.full / r.fullRate : (r.full > 0 ? Infinity : 0);
+    const chega = r.compra && r.transito > 0 && (!r.compra.prevChegada || ecDaysBetween(ecDay(), r.compra.prevChegada) <= r.lt);
+    r.transitoNoLT = chega ? r.transito : 0;
+    r.consumoLT = rate * r.lt;
+    r.projetado = r.total + r.transitoNoLT - r.consumoLT;
+
+    // risco de ruptura
+    if (rate <= 0.001) r.risco = EC_RISK.SEM;
+    else if (r.total <= 0) r.risco = EC_RISK.CRIT;
+    else if (r.projetado <= 0) r.risco = EC_RISK.CRIT;
+    else if (r.projetado < r.ss || r.cob < r.lt + 7) r.risco = EC_RISK.ALTO;
+    else if (r.cob <= Math.max(F.aten, r.lt + F.crit)) r.risco = EC_RISK.ATEN;
+    else r.risco = EC_RISK.OK;
+    r.ruptura = rate > 0.001 && r.total <= 0;
+    r.rupturaAntes = rate > 0.001 && r.total > 0 && r.projetado <= 0;
+
+    // faixa de cobertura
+    r.faixa = rate <= 0.001 ? (r.total > 0 ? 'SEM GIRO' : '—') : r.cob <= F.crit ? 'CRÍTICO' : r.cob <= F.aten ? 'ATENÇÃO' : r.cob <= F.saud ? 'SAUDÁVEL' : 'EXCESSO';
+
+    // compra sugerida = demanda no LT + estoque de segurança + estoque alvo − disponível − trânsito
+    const alvo = rate * cfg.alvo[r.curva];
+    r.alvoUn = Math.ceil(r.consumoLT + r.ss + alvo);
+    r.sugCompra = rate > 0.001 ? Math.max(0, Math.ceil(r.consumoLT + r.ss + alvo - r.total - r.transito)) : 0;
+    const diasAteComprar = rate > 0.001 ? (r.total + r.transito - r.ss) / rate - r.lt : Infinity;
+    r.comprarAte = rate > 0.001 && isFinite(diasAteComprar) ? ecAddDays(ecDay(), Math.max(0, Math.floor(diasAteComprar))) : null;
+    r.diasAteComprar = diasAteComprar;
+
+    // excesso: disponível muito acima da necessidade projetada (horizonte = faixa saudável)
+    const necessidade = rate * F.saud + r.ss;
+    r.excessoUn = rate > 0.001 && r.total > necessidade ? Math.floor(r.total - necessidade) : 0;
+    r.excessoR = r.excessoUn * r.custo;
+
+    // sem giro
+    r.semGiro = r.total > 0 && r.diasSemVenda >= 30;
+    r.semGiroFaixa = !r.semGiro ? '' : r.diasSemVenda > 180 ? '180+' : r.diasSemVenda > 90 ? '90–180' : r.diasSemVenda > 60 ? '60–90' : '30–60';
+
+    // valores
+    r.valorCusto = r.isKit ? 0 : r.total * r.custo;
+    r.valorVenda = r.isKit ? 0 : r.total * r.preco;
+    r.valorCustoMatriz = r.isKit ? 0 : r.matriz * r.custo;
+    r.valorCustoFull = r.isKit ? 0 : r.full * r.custo;
+
+    // giro: alto = vende e cobre até 60 dias
+    r.giro = rate > 0.001 && r.v30 > 0 && r.cob <= 60 ? 'ALTO' : 'BAIXO';
+
+    // Full: envio sugerido
+    r.envioFull = 0; r.fullStatus = '';
+    if (r.temFull && r.fullRate > 0.03) {
+      const reservaMatriz = Math.ceil((rate - r.fullRate) * r.lt);
+      const alvoFull = r.fullRate * cfg.fullAlvo;
+      r.envioFull = Math.max(0, Math.min(Math.ceil(alvoFull - r.full), Math.floor(r.matriz - reservaMatriz)));
+      r.cobFullApos = (r.full + r.envioFull) / r.fullRate;
+      r.fullStatus = r.cobFull <= 7 ? 'CRÍTICO' : r.cobFull < F.crit ? 'BAIXO' : r.cobFull > cfg.fullMax ? 'EXCESSIVO' : 'OK';
+    } else if (r.full > 0 && r.fullRate <= 0.03) { r.fullStatus = 'EXCESSIVO'; r.cobFullApos = r.cobFull; }
+
+    // kits: estoque vem dos componentes — a decisão de compra é nos componentes
+    if (r.isKit) {
+      r.semGiro = false; r.semGiroFaixa = ''; r.excessoUn = 0; r.excessoR = 0; r.sugCompra = 0; r.ajustePct = null;
+      r.rec = (r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO) ? EC_REC.KIT : EC_REC.ADEQUADO;
+      r.bloqueado = false;
+    }
+    // recomendação
+    if (r.isKit) { /* definida acima */ }
+    else if (!r.ativo && r.total > 0) r.rec = EC_REC.DESC;
+    else if (r.total > 0 && r.diasSemVenda > 180) r.rec = EC_REC.DESC;
+    else if (r.total > 0 && r.diasSemVenda > 90) r.rec = EC_REC.NAO;
+    else if (r.sugCompra > 0 && (r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO)) r.rec = EC_REC.COMPRAR;
+    else if (r.sugCompra > 0) r.rec = EC_REC.PROGRAMAR;
+    else if (r.excessoUn > 0 && r.cob > F.saud * 2) r.rec = EC_REC.NAO;
+    else if (r.excessoUn > 0) r.rec = EC_REC.REDUZIR;
+    else r.rec = EC_REC.ADEQUADO;
+    if (!r.isKit) r.bloqueado = r.rec === EC_REC.NAO || r.rec === EC_REC.DESC;
+
+    // ajuste da próxima compra vs última compra
+    const ult = r.compra?.ultQtd || 0;
+    if (!r.isKit) r.ajustePct = ult > 0 && r.sugCompra > 0 ? (r.sugCompra - ult) / ult : null;
+
+    r.relevante = r.total > 0 || r.v90 > 0 || r.transito > 0;
+    r.receitaRisco30 = (r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO) ? r.rate * 30 * r.preco : 0;
+    // prioridade para ordenação padrão
+    const rk = { [EC_RISK.CRIT]: 0, [EC_RISK.ALTO]: 1, [EC_RISK.ATEN]: 2, [EC_RISK.OK]: 3, [EC_RISK.SEM]: 4 }[r.risco];
+    r.prio = (r.curva === 'A' ? 0 : r.curva === 'B' ? 1 : 2) + rk * 3 - (r.receitaRisco30 > 0 ? r.receitaRisco30 / 1e6 : 0);
+  });
+
+  // ── 8. SKUs vendidos no ML sem cadastro no Bling (pendências)
+  EC.pendencias = Object.keys(S).filter(k => !bySku[k] && ecSum(S[k].q, 0, 90) > 0)
+    .map(k => ({ key: k, v90: ecSum(S[k].q, 0, 90), rev90: ecSum(S[k].r, 0, 90) })).sort((a, b) => b.rev90 - a.rev90);
+
+  EC.rows = rows;
+  EC.depFull = depFull || null;
+  EC.agg = ecAggregate(rows);
+}
+
+function ecAggregate(rows) {
+  const cfg = ecCfg(); const a = {};
+  const inv = rows.filter(r => !r.isKit);
+  a.valorCusto = inv.reduce((s, r) => s + r.valorCusto, 0);
+  a.valorVenda = inv.reduce((s, r) => s + r.valorVenda, 0);
+  a.valorMatriz = inv.reduce((s, r) => s + r.valorCustoMatriz, 0);
+  a.valorFull = inv.reduce((s, r) => s + r.valorCustoFull, 0);
+  a.skusAtivos = rows.filter(r => r.ativo).length;
+  a.unidades = inv.reduce((s, r) => s + r.total, 0);
+  a.unMatriz = inv.reduce((s, r) => s + r.matriz, 0);
+  a.unFull = inv.reduce((s, r) => s + r.full, 0);
+  a.semCusto = inv.filter(r => r.total > 0 && !(r.custo > 0)).length;
+
+  const dem = rows.filter(r => r.rate > 0.001);
+  a.nDemanda = dem.length;
+  a.nRuptura = rows.filter(r => r.ruptura).length;
+  a.nRisco = rows.filter(r => !r.ruptura && (r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO)).length;
+  a.nRiscoTotal = rows.filter(r => r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO).length;
+  a.nAtencao = rows.filter(r => r.risco === EC_RISK.ATEN).length;
+  a.nSaudavel = rows.filter(r => r.risco === EC_RISK.OK && r.excessoUn === 0).length;
+  a.nExcesso = rows.filter(r => r.excessoUn > 0).length;
+  a.nSemGiro90 = inv.filter(r => r.total > 0 && r.diasSemVenda > 90).length;
+  a.nInativosEstoque = rows.filter(r => !r.ativo && r.total > 0).length;
+  a.capSemGiro = inv.filter(r => r.total > 0 && r.diasSemVenda > 90).reduce((s, r) => s + r.valorCusto, 0);
+  a.capExcesso = inv.filter(r => !(r.total > 0 && r.diasSemVenda > 90)).reduce((s, r) => s + r.excessoR, 0);
+  a.capEmpatado = a.capSemGiro + a.capExcesso;
+  a.nEmpatado = inv.filter(r => (r.total > 0 && r.diasSemVenda > 90) || r.excessoUn > 0).length;
+  a.pctEmpatado = a.valorCusto > 0 ? a.capEmpatado / a.valorCusto : 0;
+  a.receitaRisco30 = rows.reduce((s, r) => s + r.receitaRisco30, 0);
+
+  a.nComprar = rows.filter(r => r.rec === EC_REC.COMPRAR).length;
+  a.nProgramar = rows.filter(r => r.rec === EC_REC.PROGRAMAR).length;
+  a.nNaoPrecisa = rows.filter(r => r.relevante && (r.rec === EC_REC.ADEQUADO || r.rec === EC_REC.REDUZIR)).length;
+  a.nBloqueado = rows.filter(r => r.bloqueado).length;
+  a.valorSugerido = inv.filter(r => r.rec === EC_REC.COMPRAR || r.rec === EC_REC.PROGRAMAR).reduce((s, r) => s + r.sugCompra * r.custo, 0);
+  a.valorComprarAgora = inv.filter(r => r.rec === EC_REC.COMPRAR).reduce((s, r) => s + r.sugCompra * r.custo, 0);
+  a.nCompra15 = rows.filter(r => r.sugCompra > 0 && r.comprarAte && ecDaysBetween(ecDay(), r.comprarAte) <= 15 && !r.bloqueado).length;
+
+  // valor por classificação (cada SKU em uma classe só)
+  const cls = r => (!r.isKit && r.total > 0 && r.diasSemVenda > 90) ? 'semgiro' : (r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO) ? 'risco' : r.excessoUn > 0 ? 'excesso' : 'saudavel';
+  a.valorClasse = { saudavel: 0, excesso: 0, semgiro: 0, risco: 0 };
+  inv.forEach(r => { if (r.valorCusto > 0) a.valorClasse[cls(r)] += r.valorCusto; });
+  // no excesso, só o capital excedente conta como excesso; o restante é saudável
+  inv.filter(r => cls(r) === 'excesso').forEach(r => { a.valorClasse.excesso -= r.valorCusto - r.excessoR; a.valorClasse.saudavel += r.valorCusto - r.excessoR; });
+
+  // cobertura (distribuição dos SKUs com demanda)
+  const bins = [['0–15', 0, 15], ['16–30', 15, 30], ['31–60', 30, 60], ['61–90', 60, 90], ['91–180', 90, 180], ['180+', 180, Infinity]];
+  a.cobBins = bins.map(([l, lo, hi]) => ({ label: l, lo, hi, n: dem.filter(r => (lo === 0 ? r.cob >= 0 : r.cob > lo) && r.cob <= hi).length }));
+  const totalRate = inv.reduce((s, r) => s + r.rate, 0);
+  a.coberturaGeral = totalRate > 0 ? Math.round(a.unidades / totalRate) : 0;
+  a.vendas30 = rows.reduce((s, r) => s + r.v30, 0);
+
+  // ABC
+  a.abc = {};
+  ['A', 'B', 'C'].forEach(c => {
+    const rs = rows.filter(r => r.curva === c);
+    a.abc[c] = {
+      n: rs.length, nVenda: rs.filter(r => r.rev90 > 0).length,
+      receita: rs.reduce((s, r) => s + r.rev90, 0),
+      margem: rs.reduce((s, r) => s + (r.margemUn != null ? Math.max(0, r.margemUn) * r.v90 : 0), 0),
+      estoque: rs.filter(r => !r.isKit).reduce((s, r) => s + r.valorCusto, 0),
+      risco: rs.filter(r => r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO).length,
+    };
+  });
+  // tendência
+  const withVol = rows.filter(r => r.vol >= 4);
+  a.tend = {
+    cresc: withVol.filter(r => r.tend === EC_TREND.UP || r.tend === EC_TREND.UP2).length,
+    est: withVol.filter(r => r.tend === EC_TREND.EST).length,
+    queda: withVol.filter(r => r.tend === EC_TREND.DOWN || r.tend === EC_TREND.DOWN2).length,
+  };
+  // matriz ABC × giro
+  a.matriz = {};
+  ['A', 'B', 'C'].forEach(c => ['ALTO', 'BAIXO'].forEach(g => {
+    const rs = rows.filter(r => r.relevante && r.curva === c && r.giro === g);
+    a.matriz[c + g] = { n: rs.length, valor: rs.reduce((s, r) => s + r.valorCusto, 0) };
+  }));
+  // Full
+  const fr = rows.filter(r => r.temFull || r.full > 0);
+  a.full = {
+    skus: fr.length, un: a.unFull, valor: a.valorFull,
+    vendas30: rows.reduce((s, r) => s + (r.v90 > 0 ? r.v30 * r.fullShare : 0), 0),
+    crit: fr.filter(r => r.fullStatus === 'CRÍTICO').length, baixo: fr.filter(r => r.fullStatus === 'BAIXO' || r.fullStatus === 'CRÍTICO').length,
+    excessivo: fr.filter(r => r.fullStatus === 'EXCESSIVO').length,
+    envioUn: fr.reduce((s, r) => s + r.envioFull, 0), envioSkus: fr.filter(r => r.envioFull > 0).length,
+  };
+  a.full.cob = (() => { const rt = fr.reduce((s, r) => s + r.fullRate, 0); return rt > 0 ? Math.round(a.unFull / rt) : 0; })();
+  // saúde (composição objetiva)
+  a.saude = {
+    saudavel: a.valorCusto > 0 ? a.valorClasse.saudavel / a.valorCusto : 0,
+    excesso: a.valorCusto > 0 ? a.capExcesso / a.valorCusto : 0,
+    semgiro: a.valorCusto > 0 ? a.capSemGiro / a.valorCusto : 0,
+    ruptura: a.nDemanda > 0 ? a.nRuptura / a.nDemanda : 0,
+    risco: a.nDemanda > 0 ? a.nRisco / a.nDemanda : 0,
+  };
+  return a;
+}
+
+// ───────── filtros rápidos (usados nos alertas, KPIs e na tabela) ─────────
+const EC_FILTERS = {
+  relevantes: { label: 'Todos', fn: r => r.relevante },
+  todos_bling: { label: 'Todo o cadastro', fn: r => true, hidden: true },
+  comprar: { label: 'Comprar agora', fn: r => r.rec === EC_REC.COMPRAR },
+  programar: { label: 'Programar compra', fn: r => r.rec === EC_REC.PROGRAMAR, hidden: true },
+  compra15: { label: 'Comprar em 15 dias', fn: r => r.sugCompra > 0 && !r.bloqueado && r.comprarAte && ecDaysBetween(ecDay(), r.comprarAte) <= 15, hidden: true },
+  naoprecisa: { label: 'Não precisa comprar', fn: r => r.relevante && (r.rec === EC_REC.ADEQUADO || r.rec === EC_REC.REDUZIR), hidden: true },
+  bloqueado: { label: 'Compra bloqueada', fn: r => r.bloqueado, hidden: true },
+  risco: { label: 'Risco de ruptura', fn: r => r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO },
+  ruptura: { label: 'Em ruptura', fn: r => r.ruptura, hidden: true },
+  riscoA: { label: 'Curva A em risco', fn: r => r.curva === 'A' && (r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO), hidden: true },
+  A: { label: 'Curva A', fn: r => r.relevante && r.curva === 'A' },
+  B: { label: 'Curva B', fn: r => r.relevante && r.curva === 'B' },
+  C: { label: 'Curva C', fn: r => r.relevante && r.curva === 'C' },
+  cresc: { label: 'Crescendo', fn: r => r.tend === EC_TREND.UP || r.tend === EC_TREND.UP2 },
+  queda: { label: 'Caindo', fn: r => r.tend === EC_TREND.DOWN || r.tend === EC_TREND.DOWN2 },
+  excesso: { label: 'Excesso', fn: r => r.excessoUn > 0 },
+  semgiro: { label: 'Sem giro >90d', fn: r => !r.isKit && r.total > 0 && r.diasSemVenda > 90 },
+  empatado: { label: 'Capital empatado', fn: r => !r.isKit && ((r.total > 0 && r.diasSemVenda > 90) || r.excessoUn > 0), hidden: true },
+  kitsrisco: { label: 'Kits: repor componentes', fn: r => r.rec === EC_REC.KIT, hidden: true },
+  saudavel: { label: 'Saudável', fn: r => r.risco === EC_RISK.OK && r.excessoUn === 0 && r.relevante, hidden: true },
+  fullbaixo: { label: 'Full baixo', fn: r => r.fullStatus === 'BAIXO' || r.fullStatus === 'CRÍTICO' },
+  fullcrit: { label: 'Full crítico', fn: r => r.fullStatus === 'CRÍTICO', hidden: true },
+  fullexc: { label: 'Full excessivo', fn: r => r.fullStatus === 'EXCESSIVO' },
+  enviofull: { label: 'Enviar ao Full', fn: r => r.envioFull > 0, hidden: true },
+  ativos: { label: 'Ativos', fn: r => r.ativo && r.relevante },
+  inativos: { label: 'Inativos c/ estoque', fn: r => !r.ativo && r.total > 0 },
+  aumentar: { label: 'Aumentar próxima compra', fn: r => r.ajustePct != null && r.ajustePct >= 0.2, hidden: true },
+  reduzir: { label: 'Reduzir próxima compra', fn: r => r.rec === EC_REC.REDUZIR || (r.ajustePct != null && r.ajustePct <= -0.2), hidden: true },
+  margembaixa: { label: 'Alto giro + margem baixa', fn: r => r.giro === 'ALTO' && r.margemPct != null && r.margemPct < 0.15, hidden: true },
+  margemboa: { label: 'Alto giro + boa margem', fn: r => r.giro === 'ALTO' && r.margemPct != null && r.margemPct >= 0.25, hidden: true },
+};
+['A', 'B', 'C'].forEach(c => ['ALTO', 'BAIXO'].forEach(g => {
+  EC_FILTERS['mx' + c + g] = { label: `Curva ${c} · ${g === 'ALTO' ? 'alto' : 'baixo'} giro`, fn: r => r.relevante && r.curva === c && r.giro === g, hidden: true };
+}));
+
+// ════════════════════════════════════════════════════════════════
+// INTERFACE — Dashboard executivo + Itens em linha
+// ════════════════════════════════════════════════════════════════
+const ecEsc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ecInt = v => (v == null || !isFinite(v)) ? '—' : Math.round(v).toLocaleString('pt-BR');
+const ecMoney = v => (v == null || !isFinite(v)) ? '—' : 'R$ ' + Math.round(v).toLocaleString('pt-BR');
+const ecMoney2 = v => (v == null || !isFinite(v)) ? '—' : 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function ecMoneyK(v) {
+  if (v == null || !isFinite(v)) return '—';
+  const a = Math.abs(v);
+  if (a >= 1e6) return 'R$ ' + (v / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + ' mi';
+  if (a >= 1e4) return 'R$ ' + (v / 1e3).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' mil';
+  return ecMoney(v);
+}
+const ecPct = (v, d = 0) => (v == null || !isFinite(v)) ? '—' : (v * 100).toLocaleString('pt-BR', { maximumFractionDigits: d, minimumFractionDigits: d }) + '%';
+const ecSigned = v => (v == null || !isFinite(v)) ? '—' : (v > 0 ? '+' : '') + Math.round(v * 100) + '%';
+const ecDays = v => v == null ? '—' : !isFinite(v) ? '∞' : Math.round(v) + 'd';
+
+const EC_STATUS = { crit: 'var(--red)', aten: 'var(--orange)', mon: 'var(--ml-yellow)', ok: 'var(--green)', neutral: 'var(--text2)' };
+const ecRiskTone = r => r === EC_RISK.CRIT ? 'crit' : r === EC_RISK.ALTO ? 'aten' : r === EC_RISK.ATEN ? 'mon' : r === EC_RISK.OK ? 'ok' : 'neutral';
+const ecRiskIcon = r => ({ [EC_RISK.CRIT]: '🔴', [EC_RISK.ALTO]: '🟠', [EC_RISK.ATEN]: '🟡', [EC_RISK.OK]: '🟢', [EC_RISK.SEM]: '⚪' }[r] || '');
+const ecRecTone = r => ({ [EC_REC.KIT]: 'aten', [EC_REC.COMPRAR]: 'crit', [EC_REC.PROGRAMAR]: 'aten', [EC_REC.ADEQUADO]: 'ok', [EC_REC.REDUZIR]: 'mon', [EC_REC.NAO]: 'mon', [EC_REC.DESC]: 'neutral' }[r] || 'neutral');
+const ecPill = (txt, tone) => `<span class="ec-pill ec-t-${tone}">${ecEsc(txt)}</span>`;
+
+// ───────── navegação ─────────
+function ecOpen() { if (!EC.rows.length && !EC.loading) ecLoad(false); else ecRender(); }
+function ecSetTab(t) {
+  EC.view.tab = t;
+  document.querySelectorAll('.ec-subtab').forEach(b => b.classList.toggle('active', b.dataset.t === t));
+  document.getElementById('ec-dash').style.display = t === 'dash' ? '' : 'none';
+  document.getElementById('ec-itens').style.display = t === 'itens' ? '' : 'none';
+  ecRender();
+}
+function ecOpenFilter(f) { EC.view.filter = f; EC.view.page = 0; EC.view.q = ''; EC.view.sort = { k: 'prio', d: 1 }; ecSetTab('itens'); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+function ecRenderEmpty(msg) {
+  const el = document.getElementById('ec-dash');
+  if (el) el.innerHTML = `<div class="card"><div class="card-body" style="text-align:center;padding:40px;color:var(--text2)">${ecEsc(msg)}</div></div>`;
+}
+
+function ecRender() {
+  if (!EC.agg) return;
+  const a = EC.agg, b = EC.bling;
+  const meta = document.getElementById('ec-meta');
+  if (meta) meta.textContent = `Bling ${b ? new Date(b.updatedAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'} · ML ${EC.histDays} dias de vendas · lead time padrão ${ecCfg().leadTime}d`;
+  ecRenderNotifBell();
+  if (EC.view.tab === 'dash') ecRenderDash(); else ecRenderItens();
+}
+
+// ───────── Dashboard ─────────
+function ecAlerts() {
+  const a = EC.agg, rs = EC.rows; const out = [];
+  const nA = rs.filter(EC_FILTERS.riscoA.fn).length;
+  if (nA) out.push(['crit', `${nA} SKU${nA > 1 ? 's' : ''} curva A podem entrar em ruptura`, 'riscoA']);
+  if (a.nRuptura) out.push(['crit', `${a.nRuptura} SKU${a.nRuptura > 1 ? 's' : ''} com demanda estão em ruptura agora`, 'ruptura']);
+  if (a.full.crit) out.push(['crit', `${a.full.crit} produto${a.full.crit > 1 ? 's' : ''} no Full podem entrar em ruptura (≤ 7 dias)`, 'fullcrit']);
+  if (a.nCompra15) out.push(['aten', `${a.nCompra15} SKU${a.nCompra15 > 1 ? 's' : ''} precisam de compra nos próximos 15 dias`, 'compra15']);
+  if (a.capSemGiro > 0) out.push(['mon', `${ecMoneyK(a.capSemGiro)} parados em produtos sem giro há mais de 90 dias`, 'semgiro']);
+  if (a.capExcesso > 0) out.push(['mon', `${ecMoneyK(a.capExcesso)} alocados em estoque excessivo`, 'excesso']);
+  const nKit = rs.filter(EC_FILTERS.kitsrisco.fn).length;
+  if (nKit) out.push(['aten', `${nKit} kit${nKit > 1 ? 's' : ''} com risco de ruptura — repor componentes`, 'kitsrisco']);
+  if (a.nInativosEstoque) out.push(['mon', `${a.nInativosEstoque} produto${a.nInativosEstoque > 1 ? 's' : ''} inativo${a.nInativosEstoque > 1 ? 's' : ''} no Bling ainda com estoque`, 'inativos']);
+  return out;
+}
+
+function ecRenderDash() {
+  const a = EC.agg, cfg = ecCfg(); const el = document.getElementById('ec-dash');
+  const alerts = ecAlerts();
+  const topCompra = EC.rows.filter(r => r.rec === EC_REC.COMPRAR).sort((x, y) => x.prio - y.prio).slice(0, 10);
+  const aumentar = EC.rows.filter(EC_FILTERS.aumentar.fn).sort((x, y) => y.ajustePct - x.ajustePct).slice(0, 5);
+  const reduzir = EC.rows.filter(r => r.rec === EC_REC.REDUZIR).sort((x, y) => y.excessoR - x.excessoR).slice(0, 5);
+  const semGiro = EC.rows.filter(EC_FILTERS.semgiro.fn).sort((x, y) => y.valorCusto - x.valorCusto).slice(0, 8);
+  const envios = EC.rows.filter(r => r.envioFull > 0).sort((x, y) => x.cobFull - y.cobFull).slice(0, 8);
+  const mBaixa = EC.rows.filter(EC_FILTERS.margembaixa.fn).sort((x, y) => y.rev90 - x.rev90).slice(0, 5);
+  const mBoa = EC.rows.filter(EC_FILTERS.margemboa.fn).sort((x, y) => y.rev90 - x.rev90).slice(0, 5);
+  const avisos = [];
+  if (EC.comprasErro) avisos.push('Pedidos de compra do Bling indisponíveis (' + EC.comprasErro + ') — estoque em trânsito considerado zero.');
+  if (a.semCusto) avisos.push(`${a.semCusto} SKUs com estoque estão sem custo no Bling — ficam fora dos valores em R$.`);
+  if (EC.pendencias.length) avisos.push(`${EC.pendencias.length} SKUs vendidos no ML nos últimos 90 dias não existem no Bling (fora da análise).`);
+  if (EC.histDays < 150) avisos.push(`Histórico de vendas com ${EC.histDays} dias — tendência de 90 dias ainda incompleta.`);
+
+  el.innerHTML = `
+  <!-- 1. ALERTAS -->
+  <div class="card ec-sec">
+    <div class="card-head"><span class="card-title">⚠ Atenção necessária</span><span class="ec-muted">clique para ver os SKUs</span></div>
+    <div class="ec-alerts">${alerts.length ? alerts.map(([t, txt, f]) => `
+      <button class="ec-alert" onclick="ecOpenFilter('${f}')"><span class="ec-dot" style="background:${EC_STATUS[t]}"></span><span>${ecEsc(txt)}</span><span class="ec-go">→</span></button>`).join('')
+      : '<div class="ec-muted" style="padding:14px 18px">🟢 Nenhuma situação exige decisão agora.</div>'}
+    </div>
+  </div>
+
+  <!-- HERO: risco × dinheiro parado -->
+  <div class="g2">
+    <div class="card ec-hero" style="--tone:var(--red)" onclick="ecOpenFilter('risco')">
+      <div class="ec-hero-label">Risco de perder venda</div>
+      <div class="ec-hero-val">${ecInt(a.nRuptura + a.nRisco)} <span>SKUs</span></div>
+      <div class="ec-hero-sub">${ecInt(a.nRuptura)} em ruptura · ${ecInt(a.nRisco)} vão romper antes da reposição · <b>${ecMoneyK(a.receitaRisco30)}/mês</b> de faturamento exposto</div>
+    </div>
+    <div class="card ec-hero" style="--tone:var(--ml-yellow)" onclick="ecOpenFilter('empatado')">
+      <div class="ec-hero-label">Capital empatado</div>
+      <div class="ec-hero-val">${ecMoneyK(a.capEmpatado)} <span>${ecPct(a.pctEmpatado)} do estoque</span></div>
+      <div class="ec-hero-sub">${ecMoneyK(a.capSemGiro)} sem giro &gt;90d · ${ecMoneyK(a.capExcesso)} em excesso · ${ecInt(a.nEmpatado)} SKUs</div>
+    </div>
+  </div>
+
+  <!-- 2. AÇÃO DE COMPRA -->
+  <div class="card ec-sec">
+    <div class="card-head"><span class="card-title">🛒 Ação de compra</span><span class="ec-muted">lead time ${cfg.leadTime}d · cobertura alvo A ${cfg.alvo.A}d · B ${cfg.alvo.B}d · C ${cfg.alvo.C}d</span></div>
+    <div class="ec-buy-row">
+      ${ecCounter('Comprar agora', a.nComprar, 'crit', 'comprar', ecMoneyK(a.valorComprarAgora))}
+      ${ecCounter('Programar compra', a.nProgramar, 'aten', 'programar')}
+      ${ecCounter('Não precisa comprar', a.nNaoPrecisa, 'ok', 'naoprecisa')}
+      ${ecCounter('Compra bloqueada', a.nBloqueado, 'mon', 'bloqueado', 'sem giro / descontinuar')}
+      <div class="ec-counter ec-counter-total"><div class="ec-c-label">Valor sugerido — próximas compras</div><div class="ec-c-val">${ecMoneyK(a.valorSugerido)}</div><div class="ec-c-sub">a custo · comprar agora + programar</div></div>
+    </div>
+    <div class="ec-buy-grid">
+      <div>
+        <div class="ec-subhead">Comprar agora — prioridade</div>
+        ${topCompra.length ? `<table class="t ec-t"><thead><tr><th>Produto</th><th>Curva</th><th class="r">Matriz / Full</th><th class="r">Cobertura</th><th>Comprar até</th><th class="r">Qtd</th><th class="r">Valor</th></tr></thead><tbody>
+        ${topCompra.map(r => `<tr><td>${ecProd(r)}</td><td>${ecCurva(r.curva)}</td><td class="r mono">${ecInt(r.matriz)} / ${ecInt(r.full)}</td><td class="r mono">${ecDays(r.cob)}</td><td class="mono">${r.comprarAte ? (r.diasAteComprar <= 0 ? '<b>hoje</b>' : ecFmtDate(r.comprarAte)) : '—'}</td><td class="r mono"><b>${ecInt(r.sugCompra)}</b></td><td class="r mono">${r.custo ? ecMoneyK(r.sugCompra * r.custo) : '—'}</td></tr>`).join('')}
+        </tbody></table>${a.nComprar > 10 ? `<button class="ec-link" onclick="ecOpenFilter('comprar')">ver todos os ${a.nComprar} →</button>` : ''}` : '<div class="ec-muted" style="padding:10px 0">Nenhum SKU exige compra imediata.</div>'}
+      </div>
+      <div>
+        <div class="ec-subhead">Ajustar a próxima compra</div>
+        <div class="ec-mini-h">↑ Aumentar (vs. última compra)</div>
+        ${aumentar.length ? aumentar.map(r => `<div class="ec-li" onclick="ecOpenFilter('aumentar')"><span>${ecProdShort(r)}</span><span class="mono">${ecSigned(r.ajustePct)}</span></div>`).join('') : '<div class="ec-muted ec-li-empty">—</div>'}
+        <div class="ec-mini-h" style="margin-top:10px">↓ Reduzir (excesso projetado)</div>
+        ${reduzir.length ? reduzir.map(r => `<div class="ec-li" onclick="ecOpenFilter('reduzir')"><span>${ecProdShort(r)}</span><span class="mono">${ecMoneyK(r.excessoR)}</span></div>`).join('') : '<div class="ec-muted ec-li-empty">—</div>'}
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. SAÚDE DO ESTOQUE -->
+  <div class="card ec-sec">
+    <div class="card-head"><span class="card-title">Saúde do estoque</span><span class="ec-muted">disponível · Matriz e Full separados</span></div>
+    <div class="ec-strip">
+      ${ecStat('Estoque a custo', ecMoneyK(a.valorCusto))}
+      ${ecStat('Potencial de venda', ecMoneyK(a.valorVenda))}
+      ${ecStat('SKUs ativos', ecInt(a.skusAtivos))}
+      ${ecStat('Unidades', ecInt(a.unidades))}
+      ${ecStat('Matriz', ecInt(a.unMatriz) + ' un', ecMoneyK(a.valorMatriz))}
+      ${ecStat('Full ML', ecInt(a.unFull) + ' un', ecMoneyK(a.valorFull))}
+    </div>
+    <div class="g2" style="margin:0;padding:0 18px 18px">
+      <div>
+        <div class="ec-subhead">Composição (objetiva)</div>
+        ${ecMeter('Capital em estoque saudável', a.saude.saudavel, 'ok', 'saudavel', ecMoneyK(a.valorClasse.saudavel))}
+        ${ecMeter('Capital em excesso', a.saude.excesso, 'mon', 'excesso', ecMoneyK(a.capExcesso))}
+        ${ecMeter('Capital sem giro >90d', a.saude.semgiro, 'aten', 'semgiro', ecMoneyK(a.capSemGiro))}
+        ${ecMeter('SKUs em ruptura', a.saude.ruptura, 'crit', 'ruptura', a.nRuptura + ' de ' + a.nDemanda)}
+        ${ecMeter('SKUs com risco de ruptura', a.saude.risco, 'crit', 'risco', a.nRisco + ' de ' + a.nDemanda)}
+        <div class="ec-counts">
+          <span onclick="ecOpenFilter('excesso')">Excesso: <b>${a.nExcesso}</b></span>
+          <span onclick="ecOpenFilter('semgiro')">Sem giro &gt;90d: <b>${a.nSemGiro90}</b></span>
+          <span onclick="ecOpenFilter('inativos')">Inativos c/ estoque: <b>${a.nInativosEstoque}</b></span>
+          <span onclick="ecOpenFilter('saudavel')">Saudáveis: <b>${a.nSaudavel}</b></span>
+        </div>
+      </div>
+      <div>
+        <div class="ec-subhead">Valor de estoque por classificação</div>
+        ${ecClassBars(a)}
+      </div>
+    </div>
+  </div>
+
+  <!-- 4/5. PERFORMANCE -->
+  <div class="g2">
+    <div class="card"><div class="card-head"><span class="card-title">Cobertura do estoque</span><span class="ec-muted">SKUs com demanda, por dias</span></div><div class="card-body">${ecCobChart(a)}</div></div>
+    <div class="card"><div class="card-head"><span class="card-title">Curva ABC</span><span class="ec-muted">participação (90 dias)</span></div><div class="card-body">${ecAbcChart(a)}</div></div>
+  </div>
+  <div class="g2">
+    <div class="card"><div class="card-head"><span class="card-title">Tendência dos produtos</span><span class="ec-muted">30d × 30d anteriores</span></div><div class="card-body">${ecTrendChart(a)}</div></div>
+    <div class="card"><div class="card-head"><span class="card-title">Evolução</span><span class="ec-muted">vendas × estoque × cobertura</span></div><div class="card-body">${ecEvolucao()}</div></div>
+  </div>
+
+  <!-- 6. ANÁLISES -->
+  <div class="g2">
+    <div class="card"><div class="card-head"><span class="card-title">Matriz ABC × giro</span><span class="ec-muted">SKUs · capital a custo</span></div><div class="card-body">${ecMatrix(a)}</div></div>
+    <div class="card"><div class="card-head"><span class="card-title">Inteligência Full</span><span class="ec-muted">alvo ${cfg.fullAlvo}d · máx ${cfg.fullMax}d</span></div><div class="card-body">
+      <div class="ec-strip ec-strip-sm">
+        ${ecStat('No Full', ecInt(a.full.un) + ' un', ecMoneyK(a.full.valor))}
+        ${ecStat('Vendas Full 30d', ecInt(a.full.vendas30))}
+        ${ecStat('Cobertura Full', ecDays(a.full.cob))}
+      </div>
+      <div class="ec-counts">
+        <span onclick="ecOpenFilter('fullcrit')">🔴 Ruptura Full: <b>${a.full.crit}</b></span>
+        <span onclick="ecOpenFilter('fullbaixo')">🟠 Repor Full: <b>${a.full.baixo}</b></span>
+        <span onclick="ecOpenFilter('fullexc')">🟡 Excesso no Full: <b>${a.full.excessivo}</b></span>
+      </div>
+      <div class="ec-subhead" style="margin-top:12px">Sugestão de envio para o Full — ${ecInt(a.full.envioUn)} un em ${a.full.envioSkus} SKUs</div>
+      ${envios.length ? `<table class="t ec-t"><thead><tr><th>Produto</th><th class="r">Full</th><th class="r">Cob. atual</th><th class="r">Enviar</th><th class="r">Cob. após</th></tr></thead><tbody>
+      ${envios.map(r => `<tr><td>${ecProd(r)}</td><td class="r mono">${ecInt(r.full)}</td><td class="r mono">${ecDays(r.cobFull)}</td><td class="r mono"><b>${ecInt(r.envioFull)}</b></td><td class="r mono">${ecDays(r.cobFullApos)}</td></tr>`).join('')}
+      </tbody></table>${a.full.envioSkus > 8 ? `<button class="ec-link" onclick="ecOpenFilter('enviofull')">ver todos →</button>` : ''}` : '<div class="ec-muted">Nenhum envio necessário agora.</div>'}
+    </div></div>
+  </div>
+  <div class="g2">
+    <div class="card"><div class="card-head"><span class="card-title">Sem giro — bloquear recompra</span><button class="ec-link" onclick="ecOpenFilter('semgiro')">ver todos →</button></div><div class="card-body" style="padding:0">
+      ${semGiro.length ? `<table class="t ec-t"><thead><tr><th>Produto</th><th>Última venda</th><th class="r">Dias</th><th class="r">Un</th><th class="r">Custo</th><th class="r">Venda</th></tr></thead><tbody>
+      ${semGiro.map(r => `<tr><td>${ecProd(r)}</td><td class="mono">${r.ultimaVenda ? ecFmtDate(r.ultimaVenda) : '&gt;180d'}</td><td class="r mono">${r.diasSemVenda > 180 ? '180+' : r.diasSemVenda}</td><td class="r mono">${ecInt(r.total)}</td><td class="r mono">${ecMoneyK(r.valorCusto)}</td><td class="r mono">${ecMoneyK(r.valorVenda)}</td></tr>`).join('')}
+      </tbody></table>` : '<div class="ec-muted" style="padding:16px">Nenhum produto sem giro há mais de 90 dias.</div>'}
+    </div></div>
+    <div class="card"><div class="card-head"><span class="card-title">Margem × giro</span><span class="ec-muted">margem de contribuição (preço − tarifa ML − custo${cfg.impostoPct ? ' − impostos' : ''})</span></div><div class="card-body">
+      <div class="ec-mini-h">🟢 Alto giro + boa margem (≥ 25%)</div>
+      ${mBoa.length ? mBoa.map(r => `<div class="ec-li" onclick="ecOpenFilter('margemboa')"><span>${ecProdShort(r)}</span><span class="mono">${ecPct(r.margemPct)} · ${ecMoneyK(r.rev90)}</span></div>`).join('') : '<div class="ec-muted ec-li-empty">—</div>'}
+      <div class="ec-mini-h" style="margin-top:12px">🟠 Alto giro + margem baixa (&lt; 15%) — rever preço/custo</div>
+      ${mBaixa.length ? mBaixa.map(r => `<div class="ec-li" onclick="ecOpenFilter('margembaixa')"><span>${ecProdShort(r)}</span><span class="mono">${ecPct(r.margemPct)} · ${ecMoneyK(r.rev90)}</span></div>`).join('') : '<div class="ec-muted ec-li-empty">—</div>'}
+    </div></div>
+  </div>
+  ${avisos.length ? `<div class="ec-notes">${avisos.map(t => `<div>ⓘ ${ecEsc(t)}</div>`).join('')}</div>` : ''}`;
+}
+
+function ecCounter(label, n, tone, f, sub) {
+  return `<button class="ec-counter" onclick="ecOpenFilter('${f}')"><div class="ec-c-label"><span class="ec-dot" style="background:${EC_STATUS[tone]}"></span>${ecEsc(label)}</div><div class="ec-c-val">${ecInt(n)}</div><div class="ec-c-sub">${sub ? ecEsc(sub) : 'SKUs'}</div></button>`;
+}
+const ecStat = (l, v, s) => `<div class="ec-stat"><div class="ec-stat-l">${ecEsc(l)}</div><div class="ec-stat-v">${v}</div>${s ? `<div class="ec-stat-s">${s}</div>` : ''}</div>`;
+function ecMeter(label, pct, tone, f, detail) {
+  return `<div class="ec-meter" onclick="ecOpenFilter('${f}')" data-tip="${ecEsc(label)}: ${ecPct(pct, 1)} (${ecEsc(detail)})">
+    <div class="ec-meter-top"><span><span class="ec-dot" style="background:${EC_STATUS[tone]}"></span>${ecEsc(label)}</span><span class="mono"><b>${ecPct(pct, 1)}</b> <span class="ec-muted">${ecEsc(detail)}</span></span></div>
+    <div class="ec-meter-trk"><div class="ec-meter-fill" style="width:${Math.min(100, pct * 100)}%;background:${EC_STATUS[tone]}"></div></div></div>`;
+}
+const ecCurva = c => `<span class="ec-abc ec-abc-${c}">${c}</span>`;
+function ecProd(r) {
+  return `<div class="ec-prod" title="${ecEsc(r.nome)}"><div class="ec-prod-n">${ecEsc(r.nome)}</div><div class="ec-prod-s mono">${ecEsc(r.sku)}${r.isKit ? ' · kit' : ''}${!r.ativo ? ' · inativo' : ''}</div></div>`;
+}
+const ecProdShort = r => `<span class="ec-prod-inline" title="${ecEsc(r.nome)}"><b class="mono">${ecEsc(r.sku)}</b> ${ecEsc(r.nome)}</span>`;
+
+// ───────── gráficos (HTML/SVG puros) ─────────
+function ecClassBars(a) {
+  const items = [['Saudável', a.valorClasse.saudavel, 'ok', 'saudavel'], ['Excesso', a.valorClasse.excesso, 'mon', 'excesso'], ['Sem giro >90d', a.valorClasse.semgiro, 'aten', 'semgiro'], ['Em risco de ruptura', a.valorClasse.risco, 'crit', 'risco']];
+  const max = Math.max(1, ...items.map(i => i[1])); const tot = items.reduce((s, i) => s + i[1], 0) || 1;
+  return `<div class="ec-hbars">${items.map(([l, v, t, f]) => `
+    <div class="ec-hbar" onclick="ecOpenFilter('${f}')" data-tip="${l}: ${ecMoney(v)} (${ecPct(v / tot, 1)} do estoque a custo)">
+      <div class="ec-hbar-l"><span class="ec-dot" style="background:${EC_STATUS[t]}"></span>${l}</div>
+      <div class="ec-hbar-trk"><div class="ec-hbar-fill" style="width:${(v / max) * 100}%;background:${EC_STATUS[t]}"></div></div>
+      <div class="ec-hbar-v mono">${ecMoneyK(v)}</div></div>`).join('')}</div>`;
+}
+function ecCobChart(a) {
+  const F = ecCfg().faixas;
+  const tone = b => b.hi <= F.crit ? 'crit' : b.hi <= F.aten ? 'aten' : b.hi <= F.saud ? 'ok' : 'mon';
+  const max = Math.max(1, ...a.cobBins.map(b => b.n));
+  return `<div class="ec-cols">${a.cobBins.map(b => `
+    <div class="ec-col" data-tip="${b.label} dias: ${b.n} SKUs">
+      <div class="ec-col-v mono">${b.n}</div>
+      <div class="ec-col-bar" style="height:${Math.max(2, (b.n / max) * 120)}px;background:${EC_STATUS[tone(b)]}"></div>
+      <div class="ec-col-l mono">${b.label}</div></div>`).join('')}</div>
+    <div class="ec-legend"><span><i style="background:${EC_STATUS.crit}"></i>crítico ≤${F.crit}d</span><span><i style="background:${EC_STATUS.aten}"></i>atenção ≤${F.aten}d</span><span><i style="background:${EC_STATUS.ok}"></i>saudável ≤${F.saud}d</span><span><i style="background:${EC_STATUS.mon}"></i>excesso</span></div>
+    <div class="ec-muted" style="font-size:11px;margin-top:6px">Cobertura geral: <b>${ecDays(a.coberturaGeral)}</b> · faixas cruzadas com lead time e curva na classificação de risco</div>`;
+}
+const EC_ABC_COL = { A: '#3987e5', B: '#d95926', C: '#199e70' };
+function ecAbcChart(a) {
+  const rowsDef = [['Faturamento', 'receita'], ['Margem', 'margem'], ['Estoque (custo)', 'estoque']];
+  const bars = rowsDef.map(([l, k]) => {
+    const tot = ['A', 'B', 'C'].reduce((s, c) => s + a.abc[c][k], 0) || 1;
+    return `<div class="ec-stack-row"><div class="ec-stack-l">${l}</div><div class="ec-stack">${['A', 'B', 'C'].map(c => {
+      const p = a.abc[c][k] / tot; if (p <= 0) return '';
+      return `<div class="ec-seg" style="width:${p * 100}%;background:${EC_ABC_COL[c]}" data-tip="Curva ${c} · ${l}: ${ecPct(p, 1)} (${ecMoney(a.abc[c][k])})">${p >= 0.12 ? `<span>${c} ${ecPct(p)}</span>` : ''}</div>`;
+    }).join('')}</div></div>`;
+  }).join('');
+  return `${bars}
+    <div class="ec-legend"><span><i style="background:${EC_ABC_COL.A}"></i>A</span><span><i style="background:${EC_ABC_COL.B}"></i>B</span><span><i style="background:${EC_ABC_COL.C}"></i>C</span></div>
+    <table class="t ec-t" style="margin-top:10px"><thead><tr><th>Curva</th><th class="r">SKUs c/ venda</th><th class="r">Faturamento</th><th class="r">Estoque</th><th class="r">Em risco</th></tr></thead><tbody>
+    ${['A', 'B', 'C'].map(c => `<tr style="cursor:pointer" onclick="ecOpenFilter('${c}')"><td>${ecCurva(c)}</td><td class="r mono">${a.abc[c].nVenda}</td><td class="r mono">${ecMoneyK(a.abc[c].receita)}</td><td class="r mono">${ecMoneyK(a.abc[c].estoque)}</td><td class="r mono">${a.abc[c].risco}</td></tr>`).join('')}
+    </tbody></table>`;
+}
+function ecTrendChart(a) {
+  const items = [['↑ Crescendo', a.tend.cresc, 'cresc'], ['→ Estáveis', a.tend.est, null], ['↓ Caindo', a.tend.queda, 'queda']];
+  const max = Math.max(1, ...items.map(i => i[1]));
+  return `<div class="ec-hbars">${items.map(([l, n, f]) => `
+    <div class="ec-hbar" ${f ? `onclick="ecOpenFilter('${f}')"` : ''} data-tip="${l}: ${n} SKUs">
+      <div class="ec-hbar-l">${l}</div>
+      <div class="ec-hbar-trk"><div class="ec-hbar-fill" style="width:${(n / max) * 100}%;background:var(--accent)"></div></div>
+      <div class="ec-hbar-v mono">${n}</div></div>`).join('')}</div>
+    <div class="ec-muted" style="font-size:11px;margin-top:8px">Considera SKUs com ≥ 4 vendas nos últimos 60 dias. Crescimento forte ≥ +40%, queda forte ≤ −40%.</div>`;
+}
+function ecEvolucao() {
+  // vendas semanais (histórico ML) + estoque/cobertura (snapshots diários gravados no Worker)
+  const days = EC.hist?.days || {}; const weeks = [];
+  for (let w = 25; w >= 0; w--) {
+    let q = 0, ok = false;
+    for (let i = w * 7; i < w * 7 + 7; i++) { const d = days[ecDay(i)]; if (d) { ok = true; for (const v of Object.values(d)) q += v[0]; } }
+    weeks.push({ label: ecFmtDate(ecDay(w * 7 + 6)), v: ok ? q : null });
+  }
+  const snaps = (EC.snaps || []).slice(-120);
+  const out = [ecSpark('Vendas por semana (un)', weeks.map(w => w.v), weeks.map(w => 'semana de ' + w.label), ecInt)];
+  if (snaps.length >= 2) {
+    out.push(ecSpark('Estoque a custo', snaps.map(s => s.valorCusto), snaps.map(s => ecFmtDate(s.date)), ecMoneyK));
+    out.push(ecSpark('Cobertura geral (dias)', snaps.map(s => s.cobertura), snaps.map(s => ecFmtDate(s.date)), v => ecInt(v) + 'd'));
+  } else {
+    out.push(`<div class="ec-muted" style="font-size:12px;padding:8px 0">Estoque e cobertura: o histórico diário começou em ${ecFmtDate((EC.snaps[0] || {}).date || ecDay())}. As linhas aparecem a partir do 2º dia de uso.</div>`);
+  }
+  return out.join('');
+}
+function ecSpark(title, vals, labels, fmt) {
+  const W = 520, Hh = 64, P = 6; const pts = vals.map((v, i) => [i, v]).filter(p => p[1] != null);
+  if (pts.length < 2) return `<div class="ec-spark-t">${title}</div><div class="ec-muted" style="font-size:12px">dados insuficientes</div>`;
+  const max = Math.max(...pts.map(p => p[1])), min = Math.min(0, ...pts.map(p => p[1]));
+  const x = i => P + (i / (vals.length - 1)) * (W - 2 * P - 60), y = v => Hh - P - ((v - min) / ((max - min) || 1)) * (Hh - 2 * P);
+  const d = pts.map((p, k) => (k ? 'L' : 'M') + x(p[0]).toFixed(1) + ' ' + y(p[1]).toFixed(1)).join(' ');
+  const last = pts[pts.length - 1];
+  const hits = vals.map((v, i) => v == null ? '' : `<rect x="${x(i) - (W / vals.length) / 2}" y="0" width="${W / vals.length}" height="${Hh}" fill="transparent" data-tip="${ecEsc(labels[i])}: ${ecEsc(fmt(v))}"></rect>`).join('');
+  return `<div class="ec-spark-t">${title}</div>
+  <svg viewBox="0 0 ${W} ${Hh}" class="ec-spark" preserveAspectRatio="none">
+    <line x1="${P}" x2="${W - 60}" y1="${Hh - P}" y2="${Hh - P}" stroke="rgba(143,163,184,.18)" stroke-width="1"/>
+    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+    <circle cx="${x(last[0])}" cy="${y(last[1])}" r="4" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/>
+    <text x="${x(last[0]) + 8}" y="${y(last[1]) + 4}" fill="var(--text)" font-size="12" font-family="IBM Plex Mono, monospace">${ecEsc(fmt(last[1]))}</text>
+    ${hits}
+  </svg>`;
+}
+function ecMatrix(a) {
+  const cell = (c, g, txt, tone) => {
+    const m = a.matriz[c + g];
+    return `<div class="ec-mx-cell ec-mx-${tone}" onclick="ecOpenFilter('mx${c}${g}')" data-tip="Curva ${c} · ${g === 'ALTO' ? 'alto' : 'baixo'} giro: ${m.n} SKUs · ${ecMoney(m.valor)}">
+      <div class="ec-mx-n">${m.n} <span>SKUs</span></div><div class="ec-mx-v mono">${ecMoneyK(m.valor)}</div><div class="ec-mx-t">${txt}</div></div>`;
+  };
+  return `<div class="ec-mx">
+    <div></div><div class="ec-mx-h">Alto giro</div><div class="ec-mx-h">Baixo giro</div>
+    <div class="ec-mx-r">${ecCurva('A')}</div>${cell('A', 'ALTO', 'Prioridade máxima de disponibilidade', 'crit')}${cell('A', 'BAIXO', 'Analisar capital parado', 'mon')}
+    <div class="ec-mx-r">${ecCurva('B')}</div>${cell('B', 'ALTO', 'Manter disponível', 'ok')}${cell('B', 'BAIXO', 'Reduzir lotes de compra', 'mon')}
+    <div class="ec-mx-r">${ecCurva('C')}</div>${cell('C', 'ALTO', 'Avaliar potencial de crescimento', 'ok')}${cell('C', 'BAIXO', 'Reduzir estoque / descontinuar', 'aten')}
+  </div><div class="ec-muted" style="font-size:11px;margin-top:8px">Alto giro = vendeu nos últimos 30 dias e cobertura ≤ 60 dias.</div>`;
+}
+
+// ───────── Itens em linha ─────────
+const EC_COLS = [
+  ['sku', 'SKU', r => `<span class="mono">${ecEsc(r.sku)}</span>`, 's'],
+  ['nome', 'Descrição', r => `<span class="ec-desc" title="${ecEsc(r.nome)}">${ecEsc(r.nome)}</span>${r.isKit ? ' <span class="ec-tag">kit</span>' : r.kitFisico ? ' <span class="ec-tag">kit físico</span>' : ''}`, 's'],
+  ['ativo', 'Status', r => r.ativo ? 'Ativo' : '<span class="c-orange">Inativo</span>', 's'],
+  ['curva', 'Curva', r => ecCurva(r.curva), 's'],
+  ['matriz', 'Matriz', r => ecInt(r.matriz)], ['full', 'Full', r => r.temFull || r.full ? ecInt(r.full) : '—'], ['total', 'Total', r => `<b>${ecInt(r.total)}</b>`],
+  ['transito', 'Trânsito', r => r.transito ? ecInt(r.transito) + (r.compra?.prevChegada ? `<div class="ec-sub">${ecFmtDate(r.compra.prevChegada)}</div>` : '') : '—'],
+  ['custo', 'Custo un.', r => r.custo ? ecMoney2(r.custo) : '—'], ['valorCusto', 'Estoque a custo', r => r.isKit ? '—' : ecMoney(r.valorCusto)],
+  ['preco', 'Preço venda', r => r.preco ? ecMoney2(r.preco) : '—'], ['valorVenda', 'Potencial venda', r => r.isKit ? '—' : ecMoney(r.valorVenda)],
+  ['margemUn', 'Margem R$', r => r.margemUn != null ? ecMoney2(r.margemUn) : '—'], ['margemPct', 'Margem %', r => r.margemPct != null ? ecPct(r.margemPct, 1) : '—'],
+  ['v7', 'Venda 7D', r => ecInt(r.v7)], ['v30', 'Venda 30D', r => ecInt(r.v30) + (r.vKit30 ? `<div class="ec-sub">${ecInt(r.vKit30)} via kits</div>` : '')], ['v60', 'Venda 60D', r => ecInt(r.v60)], ['v90', 'Venda 90D', r => ecInt(r.v90)],
+  ['rate', 'Média mensal', r => (r.v90 / 3).toLocaleString('pt-BR', { maximumFractionDigits: 1 })],
+  ['tendPct', 'Tendência %', r => r.vol >= 4 ? ecSigned(r.tendPct) : '—'], ['tend', 'Tendência', r => r.vol >= 4 ? ecEsc(r.tend) : '<span class="ec-muted">sem volume</span>', 's'],
+  ['cob', 'Cobertura', r => r.rate > 0.001 ? `${ecDays(r.cob)}<div class="ec-sub">${(r.cob / 30).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} m · M ${ecDays(r.cobMatriz)} · F ${r.temFull ? ecDays(r.cobFull) : '—'}</div>` : '—'],
+  ['lt', 'Lead time', r => `<button class="ec-lt" onclick="ecEditLT('${ecEsc(r.sku)}')" title="Editar lead time deste SKU">${r.lt}d${ecCfg().ltSku[r.sku] ? '*' : ''}</button>`],
+  ['projetado', 'Projetado na reposição', r => r.rate > 0.001 ? `<span class="${r.projetado <= 0 ? 'c-red' : ''}">${ecInt(r.projetado)}</span><div class="ec-sub">consumo LT ${ecInt(r.consumoLT)}</div>` : '—'],
+  ['ultimaVenda', 'Última venda', r => r.ultimaVenda ? ecFmtDate(r.ultimaVenda) : '&gt;180d', 's'],
+  ['diasSemVenda', 'Dias sem venda', r => r.diasSemVenda > 180 ? '180+' : r.diasSemVenda],
+  ['risco', 'Risco ruptura', r => ecPill(ecRiskIcon(r.risco) + ' ' + r.risco, ecRiskTone(r.risco)) + (r.rupturaAntes ? '<div class="ec-sub c-red">rompe antes da reposição</div>' : ''), 's'],
+  ['excessoUn', 'Excesso', r => r.excessoUn ? `${ecInt(r.excessoUn)} un<div class="ec-sub">${ecMoneyK(r.excessoR)}</div>` : '—'],
+  ['sugCompra', 'Compra sugerida', r => r.sugCompra ? `<b>${ecInt(r.sugCompra)}</b>${r.comprarAte ? `<div class="ec-sub">até ${r.diasAteComprar <= 0 ? 'hoje' : ecFmtDate(r.comprarAte)}</div>` : ''}` : '—'],
+  ['envioFull', 'Envio Full', r => r.envioFull ? `<b>${ecInt(r.envioFull)}</b><div class="ec-sub">→ ${ecDays(r.cobFullApos)}</div>` : (r.fullStatus === 'EXCESSIVO' ? '<span class="ec-sub">excesso</span>' : '—')],
+  ['rec', 'Recomendação', r => ecPill(r.rec, ecRecTone(r.rec)) + (r.ajustePct != null && Math.abs(r.ajustePct) >= 0.2 ? `<div class="ec-sub">${ecSigned(r.ajustePct)} vs última compra</div>` : ''), 's'],
+];
+function ecFilteredRows() {
+  const f = EC_FILTERS[EC.view.filter] || EC_FILTERS.relevantes; const q = EC.view.q.trim().toUpperCase();
+  let rs = EC.rows.filter(f.fn);
+  if (q) rs = rs.filter(r => r.sku.includes(q) || r.nome.toUpperCase().includes(q));
+  const { k, d } = EC.view.sort;
+  rs.sort((x, y) => {
+    let a = x[k], b = y[k];
+    if (k === 'ultimaVenda') { a = a || ''; b = b || ''; }
+    if (typeof a === 'string' || typeof b === 'string') return String(a ?? '').localeCompare(String(b ?? '')) * d;
+    a = a == null ? -Infinity : a; b = b == null ? -Infinity : b;
+    return (a === b ? 0 : a > b ? 1 : -1) * d;
+  });
+  return rs;
+}
+function ecRenderItens() {
+  const el = document.getElementById('ec-itens'); const rs = ecFilteredRows();
+  const { page, pageSize } = EC.view; const pages = Math.max(1, Math.ceil(rs.length / pageSize));
+  if (page >= pages) EC.view.page = 0;
+  const slice = rs.slice(EC.view.page * pageSize, EC.view.page * pageSize + pageSize);
+  const chips = Object.entries(EC_FILTERS).filter(([k, f]) => !f.hidden || k === EC.view.filter)
+    .map(([k, f]) => `<button class="ec-chip ${k === EC.view.filter ? 'active' : ''}" onclick="ecSetFilter('${k}')">${ecEsc(f.label)} <span>${EC.rows.filter(f.fn).length}</span></button>`).join('');
+  const { k: sk, d: sd } = EC.view.sort;
+  el.innerHTML = `<div class="card">
+    <div class="ec-toolbar">
+      <div class="ec-chips">${chips}</div>
+      <div class="ec-tools"><input id="ec-q" type="text" placeholder="Buscar SKU ou descrição…" value="${ecEsc(EC.view.q)}"><button class="btn-sm" onclick="ecExportCSV()">⬇ CSV</button></div>
+    </div>
+    <div class="ec-table-wrap"><table class="t ec-table"><thead><tr>${EC_COLS.map(([k, l, , t]) => `<th class="${t === 's' ? '' : 'r'} ${sk === k ? 'sorted' : ''}" onclick="ecSort('${k}')">${l}${sk === k ? (sd > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead>
+    <tbody>${slice.length ? slice.map(r => `<tr>${EC_COLS.map(([, , fn, t]) => `<td class="${t === 's' ? '' : 'r mono'}">${fn(r)}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${EC_COLS.length}" style="padding:24px;text-align:center;color:var(--text2)">Nenhum SKU neste filtro.</td></tr>`}</tbody></table></div>
+    <div class="ec-pager"><span class="ec-muted">${ecInt(rs.length)} SKUs · página ${EC.view.page + 1} de ${pages}</span>
+      <span><button class="btn-sm" ${EC.view.page <= 0 ? 'disabled' : ''} onclick="ecPage(-1)">←</button> <button class="btn-sm" ${EC.view.page >= pages - 1 ? 'disabled' : ''} onclick="ecPage(1)">→</button></span></div>
+  </div>`;
+  const qi = document.getElementById('ec-q');
+  qi.addEventListener('input', () => { EC.view.q = qi.value; EC.view.page = 0; clearTimeout(EC._qt); EC._qt = setTimeout(() => { ecRenderItens(); const n = document.getElementById('ec-q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250); });
+}
+function ecSetFilter(k) { EC.view.filter = k; EC.view.page = 0; ecRenderItens(); }
+function ecSort(k) { const s = EC.view.sort; EC.view.sort = { k, d: s.k === k ? -s.d : (['nome', 'sku', 'curva', 'rec', 'risco', 'tend', 'ativo', 'ultimaVenda'].includes(k) ? 1 : -1) }; ecRenderItens(); }
+function ecPage(d) { EC.view.page += d; ecRenderItens(); }
+function ecEditLT(sku) {
+  const cfg = ecCfg(); const cur = cfg.ltSku[sku] || '';
+  const v = prompt(`Lead time (dias) para ${sku}.\nDeixe vazio para usar o padrão (${cfg.leadTime}d).`, cur);
+  if (v === null) return;
+  const n = parseInt(v, 10);
+  if (!v.trim() || !(n > 0)) delete cfg.ltSku[sku]; else cfg.ltSku[sku] = n;
+  ecSaveCfg(); ecCompute(); ecRender();
+}
+function ecExportCSV() {
+  const rs = ecFilteredRows();
+  const cols = [['SKU', r => r.sku], ['Descrição', r => r.nome], ['Status', r => r.ativo ? 'Ativo' : 'Inativo'], ['Curva', r => r.curva], ['Estoque Matriz', r => r.matriz], ['Estoque Full', r => r.full], ['Estoque Total', r => r.total], ['Em trânsito', r => r.transito],
+    ['Custo unitário', r => r.custo], ['Estoque a custo', r => r.valorCusto], ['Preço venda', r => r.preco.toFixed(2)], ['Potencial venda', r => r.valorVenda.toFixed(2)], ['Margem R$', r => r.margemUn != null ? r.margemUn.toFixed(2) : ''], ['Margem %', r => r.margemPct != null ? (r.margemPct * 100).toFixed(1) : ''],
+    ['Venda 7D', r => r.v7], ['Venda 15D', r => r.v15], ['Venda 30D', r => r.v30], ['Venda 60D', r => r.v60], ['Venda 90D', r => r.v90], ['Consumo via kits 90D', r => r.vKit90], ['Média mensal', r => (r.v90 / 3).toFixed(1)], ['Tendência %', r => (r.tendPct * 100).toFixed(0)], ['Tendência', r => r.tend],
+    ['Previsão 30d', r => r.prev.d30.toFixed(1)], ['Previsão 60d', r => r.prev.d60.toFixed(1)], ['Previsão 90d', r => r.prev.d90.toFixed(1)],
+    ['Cobertura dias', r => isFinite(r.cob) ? Math.round(r.cob) : ''], ['Cobertura Matriz', r => isFinite(r.cobMatriz) ? Math.round(r.cobMatriz) : ''], ['Cobertura Full', r => isFinite(r.cobFull) ? Math.round(r.cobFull) : ''],
+    ['Lead time', r => r.lt], ['Estoque segurança', r => r.ss], ['Estoque projetado', r => Math.round(r.projetado)], ['Última venda', r => r.ultimaVenda || ''], ['Dias sem venda', r => r.diasSemVenda],
+    ['Risco ruptura', r => r.risco], ['Excesso un', r => r.excessoUn], ['Excesso R$', r => r.excessoR.toFixed(2)], ['Compra sugerida', r => r.sugCompra], ['Comprar até', r => r.comprarAte || ''], ['Envio Full', r => r.envioFull], ['Recomendação', r => r.rec],
+    ['Última compra', r => r.compra?.ultData || ''], ['Qtd última compra', r => r.compra?.ultQtd || ''], ['Último custo', r => r.compra?.ultCusto || ''], ['Fornecedor', r => r.compra?.fornNome || r.compra?.forn || '']];
+  const esc = v => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const csv = '﻿' + cols.map(c => c[0]).join(';') + '\n' + rs.map(r => cols.map(c => esc(typeof c[1](r) === 'number' ? String(c[1](r)).replace('.', ',') : c[1](r))).join(';')).join('\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `estoque_compras_${EC.view.filter}_${ecDay()}.csv`; a.click();
+}
+
+// ───────── Configurações ─────────
+function ecOpenCfg() {
+  const c = ecCfg(); const m = document.getElementById('ec-cfg');
+  const inp = (id, v, label, suf = 'dias') => `<label class="ec-f"><span>${label}</span><span><input type="number" id="${id}" value="${v}" min="0" step="any"> ${suf}</span></label>`;
+  m.innerHTML = `<div class="ec-modal-box">
+    <div class="card-head"><span class="card-title">⚙ Configurações — Estoque & Compras</span><button class="btn-sm" onclick="ecCloseCfg()">✕</button></div>
+    <div class="card-body ec-cfg-grid">
+      <div><div class="ec-subhead">Reposição</div>
+        ${inp('ec-lt', c.leadTime, 'Lead time padrão')}
+        ${inp('ec-aA', c.alvo.A, 'Cobertura alvo — curva A')}${inp('ec-aB', c.alvo.B, 'Cobertura alvo — curva B')}${inp('ec-aC', c.alvo.C, 'Cobertura alvo — curva C')}
+        <div class="ec-muted" style="font-size:11px">Lead time por SKU: clique no valor na coluna "Lead time" dos Itens em linha (${Object.keys(c.ltSku).length} personalizados).</div></div>
+      <div><div class="ec-subhead">Faixas de cobertura</div>
+        ${inp('ec-fc', c.faixas.crit, 'Crítico até')}${inp('ec-fa', c.faixas.aten, 'Atenção até')}${inp('ec-fs', c.faixas.saud, 'Saudável até (acima = excesso)')}
+        <div class="ec-subhead" style="margin-top:12px">Full</div>
+        ${inp('ec-fa2', c.fullAlvo, 'Cobertura alvo no Full')}${inp('ec-fm', c.fullMax, 'Acima disso = excesso no Full')}</div>
+      <div><div class="ec-subhead">Estoque e margem</div>
+        <label class="ec-f"><span>Saldo do Bling já inclui o Full</span><span><input type="checkbox" id="ec-bif" ${c.blingIncluiFull ? 'checked' : ''}></span></label>
+        <div class="ec-muted" style="font-size:11px;margin-bottom:8px">${EC.depMatriz ? `Matriz = depósito <b>${ecEsc(EC.depMatriz.nome)}</b> do Bling. Full = estoque Full informado pelo Mercado Livre${EC.depFull ? ` (o depósito "${ecEsc(EC.depFull.nome)}" do Bling não é somado)` : ''}. Esta opção só é usada se o depósito Matriz não for identificado.` : 'Depósito Matriz não identificado — com a opção marcada, Matriz = Bling − Full do ML.'}</div>
+        ${inp('ec-imp', c.impostoPct, 'Impostos sobre a venda', '%')}
+        <div class="ec-subhead" style="margin-top:12px">Curva ABC (receita 90d acumulada)</div>
+        ${inp('ec-abcA', Math.round(c.abc.A * 100), 'Corte A até', '%')}${inp('ec-abcB', Math.round(c.abc.B * 100), 'Corte B até', '%')}</div>
+    </div>
+    <div class="ec-modal-foot"><button class="btn-sm" onclick="ecResetCfg()">Restaurar padrão</button><button class="btn-sm btn-primary" onclick="ecApplyCfg()">Salvar e recalcular</button></div>
+  </div>`;
+  m.style.display = 'flex';
+}
+function ecCloseCfg() { document.getElementById('ec-cfg').style.display = 'none'; }
+function ecApplyCfg() {
+  const c = ecCfg(); const g = id => parseFloat(document.getElementById(id).value);
+  const pos = (v, d) => (isFinite(v) && v >= 0 ? v : d);
+  c.leadTime = Math.max(1, Math.round(pos(g('ec-lt'), c.leadTime)));
+  c.alvo = { A: pos(g('ec-aA'), c.alvo.A), B: pos(g('ec-aB'), c.alvo.B), C: pos(g('ec-aC'), c.alvo.C) };
+  c.faixas = { crit: pos(g('ec-fc'), c.faixas.crit), aten: pos(g('ec-fa'), c.faixas.aten), saud: pos(g('ec-fs'), c.faixas.saud) };
+  c.fullAlvo = pos(g('ec-fa2'), c.fullAlvo); c.fullMax = pos(g('ec-fm'), c.fullMax);
+  c.blingIncluiFull = document.getElementById('ec-bif').checked; c.impostoPct = pos(g('ec-imp'), 0);
+  c.abc = { A: ecClamp(pos(g('ec-abcA'), 70) / 100, 0.3, 0.95), B: ecClamp(pos(g('ec-abcB'), 90) / 100, 0.5, 0.99) };
+  if (c.abc.B <= c.abc.A) c.abc.B = Math.min(0.99, c.abc.A + 0.1);
+  ecSaveCfg(); ecCloseCfg(); if (EC.bling) { ecCompute(); ecRender(); }
+}
+function ecResetCfg() { const lt = ecCfg().ltSku; EC.cfg = { ...JSON.parse(JSON.stringify(EC_DEFAULT_CFG)), ltSku: lt }; ecSaveCfg(); ecOpenCfg(); }
+
+// ───────── Notificações (sem repetição diária) ─────────
+// Guarda o último nível notificado por SKU/tipo. Notifica de novo só se piorar, mudar de faixa ou voltar após resolvido.
+function ecNotify() {
+  let st = {}; try { st = JSON.parse(localStorage.getItem(EC_NOTIF_KEY) || '{}'); } catch (e) {}
+  const prev = st.cur || {}; const cur = {}; const novas = [];
+  const lv = r => ({ [EC_RISK.CRIT]: 3, [EC_RISK.ALTO]: 2 }[r.risco] || 0);
+  EC.rows.forEach(r => {
+    const put = (tipo, nivel, txt, tone) => {
+      const k = r.sku + '|' + tipo; cur[k] = nivel;
+      if (!(k in prev) || nivel > prev[k]) novas.push({ k, tipo, sku: r.sku, nome: r.nome, txt, tone, at: Date.now() });
+    };
+    if (r.rate > 0.001 && r.total <= 0) put('zerado', 3, 'estoque zerado', 'crit');
+    else if (lv(r) >= 2) put(r.curva === 'A' ? 'riscoA' : 'risco', lv(r), (r.curva === 'A' ? 'curva A ' : '') + 'em risco de ruptura (' + r.risco.toLowerCase() + ')', lv(r) === 3 ? 'crit' : 'aten');
+    if (r.rate > 0.001 && r.total > 0 && r.cob < r.lt) put('cobLT', 2, `cobertura ${ecDays(r.cob)} menor que o lead time (${r.lt}d)`, 'aten');
+    if (r.total > 0 && r.diasSemVenda > 90) put('semgiro', r.diasSemVenda > 180 ? 2 : 1, `${r.diasSemVenda > 180 ? '180+' : r.diasSemVenda} dias sem venda`, 'mon');
+    if (r.fullStatus === 'CRÍTICO') put('full', 3, `Full em nível crítico (${ecDays(r.cobFull)})`, 'crit');
+  });
+  const lista = [...novas, ...(st.lista || [])].slice(0, 80);
+  const primeira = !st.cur;
+  try { localStorage.setItem(EC_NOTIF_KEY, JSON.stringify({ cur, lista, lidas: primeira ? Date.now() : (st.lidas || 0) })); } catch (e) {}
+  EC.notif = { lista, lidas: primeira ? Date.now() : (st.lidas || 0) };
+  if (!primeira && novas.length && 'Notification' in window && Notification.permission === 'granted') {
+    const crit = novas.filter(n => n.tone === 'crit');
+    try { new Notification('Estoque & Compras', { body: `${novas.length} novo(s) alerta(s)${crit.length ? ` · ${crit.length} crítico(s): ${crit.slice(0, 2).map(n => n.sku).join(', ')}` : ''}` }); } catch (e) {}
+  }
+}
+function ecRenderNotifBell() {
+  const b = document.getElementById('ec-bell'); if (!b || !EC.notif) return;
+  const n = EC.notif.lista.filter(x => x.at > EC.notif.lidas).length;
+  b.innerHTML = `🔔${n ? `<span class="tab-count red">${n}</span>` : ''}`;
+}
+function ecToggleNotif() {
+  const p = document.getElementById('ec-notif'); if (!EC.notif) return;
+  if (p.style.display === 'block') { p.style.display = 'none'; return; }
+  const perm = 'Notification' in window ? Notification.permission : 'unsupported';
+  p.innerHTML = `<div class="ec-notif-head"><b>Notificações</b>${perm === 'default' ? '<button class="btn-sm" onclick="ecAskPerm()">Ativar no navegador</button>' : ''}</div>
+    ${EC.notif.lista.length ? EC.notif.lista.slice(0, 40).map(n => `<div class="ec-notif-i ${n.at > EC.notif.lidas ? 'new' : ''}" onclick="EC.view.q='${ecEsc(n.sku)}';ecOpenFilter('todos_bling');EC.view.q='${ecEsc(n.sku)}';ecRenderItens()">
+      <span class="ec-dot" style="background:${EC_STATUS[n.tone]}"></span><div><div><b class="mono">${ecEsc(n.sku)}</b> ${ecEsc(n.txt)}</div><div class="ec-sub">${ecEsc((n.nome || '').slice(0, 60))} · ${new Date(n.at).toLocaleDateString('pt-BR')}</div></div></div>`).join('')
+      : '<div class="ec-muted" style="padding:12px">Sem notificações. Na primeira carga, os problemas atuais viram a base; a partir daí você é avisado só do que é novo ou piorou.</div>'}`;
+  p.style.display = 'block';
+  EC.notif.lidas = Date.now();
+  try { const st = JSON.parse(localStorage.getItem(EC_NOTIF_KEY) || '{}'); st.lidas = EC.notif.lidas; localStorage.setItem(EC_NOTIF_KEY, JSON.stringify(st)); } catch (e) {}
+  ecRenderNotifBell();
+}
+function ecAskPerm() { try { Notification.requestPermission().then(() => { document.getElementById('ec-notif').style.display = 'none'; ecToggleNotif(); }); } catch (e) {} }
+
+// ───────── tooltip único ─────────
+(function ecTipInit() {
+  if (window.__ecTip) return; window.__ecTip = true;
+  document.addEventListener('mouseover', e => {
+    const t = e.target.closest && e.target.closest('[data-tip]'); const tip = document.getElementById('ec-tip');
+    if (!tip) return; if (!t || !t.closest('#page-compras')) { tip.style.display = 'none'; return; }
+    tip.textContent = t.getAttribute('data-tip'); tip.style.display = 'block';
+  });
+  document.addEventListener('mousemove', e => {
+    const tip = document.getElementById('ec-tip'); if (!tip || tip.style.display !== 'block') return;
+    const x = Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 8); tip.style.left = x + 'px'; tip.style.top = (e.clientY + 16) + 'px';
+  });
+})();
 
 function orderStock(id, qty){
   const msg = qty>0
