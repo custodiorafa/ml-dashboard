@@ -673,6 +673,10 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 #ec-tip { display:none; position:fixed; z-index:2000; background:var(--surface3); border:1px solid var(--border2); color:var(--text); padding:7px 10px; border-radius:8px; font-size:12px; pointer-events:none; max-width:320px; box-shadow:0 8px 24px rgba(0,0,0,.5); }
 @media (max-width:1100px) { .ec-buy-row { grid-template-columns:repeat(2,1fr); } .ec-strip { grid-template-columns:repeat(3,1fr); } .ec-buy-grid { grid-template-columns:1fr; } .ec-cfg-grid { grid-template-columns:1fr; } }
 @media (max-width:700px) { #page-compras .g2 { grid-template-columns:1fr; } .ec-hero-val { font-size:30px; } .ec-hbar { grid-template-columns:110px 1fr 70px; } .ec-notif { width:calc(100vw - 32px); } }
+
+.ec-click { cursor:pointer; } .ec-click:hover .ec-stat-v { color:var(--accent); }
+.ec-dep-total td { border-top:1px solid var(--border2); }
+.ec-dep-out td { color:var(--text2); }
 </style>
 </head>
 <body>
@@ -3357,7 +3361,7 @@ function ecCompute() {
       custo, preco, tarifaUn, margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
       v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, canc90, full90, tendPct, tend90Pct, tend, vol,
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
-      mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
+      deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
       compra: cp,
     });
   }
@@ -3484,6 +3488,21 @@ function ecAggregate(rows) {
   a.unMatriz = inv.reduce((s, r) => s + r.matriz, 0);
   a.unFull = inv.reduce((s, r) => s + r.full, 0);
   a.semCusto = inv.filter(r => r.total > 0 && !(r.custo > 0)).length;
+  a.skusKitsVirtuais = rows.filter(r => r.isKit && r.ativo).length;
+  a.skusComEstoque = inv.filter(r => r.total > 0).length;
+  a.skusAtivosComEstoque = inv.filter(r => r.ativo && r.total > 0).length;
+  a.skusAtivosSemEstoque = inv.filter(r => r.ativo && r.total <= 0).length;
+  a.skusMatriz = inv.filter(r => r.matriz > 0).length;
+  a.skusFull = inv.filter(r => r.full > 0).length;
+  a.valorVendaMatriz = inv.reduce((s, r) => s + r.matriz * r.preco, 0);
+  a.valorVendaFull = inv.reduce((s, r) => s + r.full * r.preco, 0);
+  // posição por depósito do Bling (saldo disponível) + Full do ML
+  a.depTable = (EC.bling?.depositos || []).map(d => {
+    let sk = 0, un = 0, vc = 0, vv = 0;
+    inv.forEach(r => { const x = r.deps[d.id]; const q = x ? Math.max(0, x[1]) : 0; if (q > 0) { sk++; un += q; vc += q * r.custo; vv += q * r.preco; } });
+    const isMatriz = !!(EC.depMatriz && d.id === EC.depMatriz.id);
+    return { nome: d.nome, sk, un, vc, vv, fonte: 'Bling', entra: isMatriz, obs: isMatriz ? 'Matriz — entra no total' : (d.desconsiderar ? 'Bling: "desconsiderar saldo"' : 'fora do total') };
+  });
 
   const dem = rows.filter(r => r.rate > 0.001);
   a.nDemanda = dem.length;
@@ -3597,6 +3616,8 @@ const EC_FILTERS = {
   fullexc: { label: 'Full excessivo', fn: r => r.fullStatus === 'EXCESSIVO' },
   enviofull: { label: 'Enviar ao Full', fn: r => r.envioFull > 0, hidden: true },
   ativos: { label: 'Ativos', fn: r => r.ativo && r.relevante },
+  comestoque: { label: 'Com estoque', fn: r => !r.isKit && r.total > 0 },
+  semestoque: { label: 'Ativos sem estoque', fn: r => r.ativo && !r.isKit && r.total <= 0, hidden: true },
   inativos: { label: 'Inativos c/ estoque', fn: r => !r.ativo && r.total > 0 },
   aumentar: { label: 'Aumentar próxima compra', fn: r => r.ajustePct != null && r.ajustePct >= 0.2, hidden: true },
   reduzir: { label: 'Reduzir próxima compra', fn: r => r.rec === EC_REC.REDUZIR || (r.ajustePct != null && r.ajustePct <= -0.2), hidden: true },
@@ -3711,6 +3732,26 @@ function ecRenderDash() {
     </div>
   </div>
 
+  <!-- POSIÇÃO DO ESTOQUE -->
+  <div class="card ec-sec">
+    <div class="card-head"><span class="card-title">📦 Posição do estoque</span><span class="ec-muted">saldo disponível · custo do Bling · preço de venda ML</span></div>
+    <div class="ec-strip">
+      ${ecStat('SKUs ativos', ecInt(a.skusAtivos), a.skusKitsVirtuais ? ecInt(a.skusKitsVirtuais) + ' são kits virtuais' : '')}
+      <div class="ec-stat ec-click" onclick="ecOpenFilter('comestoque')"><div class="ec-stat-l">SKUs com estoque</div><div class="ec-stat-v">${ecInt(a.skusComEstoque)}</div><div class="ec-stat-s">${ecInt(a.skusAtivosComEstoque)} ativos</div></div>
+      <div class="ec-stat ec-click" onclick="ecOpenFilter('semestoque')"><div class="ec-stat-l">Ativos sem estoque</div><div class="ec-stat-v">${ecInt(a.skusAtivosSemEstoque)}</div><div class="ec-stat-s">sem kits virtuais</div></div>
+      ${ecStat('Unidades', ecInt(a.unidades), 'Matriz + Full')}
+      ${ecStat('Estoque a custo', ecMoneyK(a.valorCusto), 'Matriz + Full')}
+      ${ecStat('Potencial de venda', ecMoneyK(a.valorVenda), 'Matriz + Full')}
+    </div>
+    <div style="padding:0 18px 16px"><table class="t ec-t"><thead><tr><th>Local</th><th>Fonte</th><th class="r">SKUs com saldo</th><th class="r">Unidades</th><th class="r">Valor a custo</th><th class="r">Valor de venda</th><th>No total?</th></tr></thead><tbody>
+      ${a.depTable.filter(d => d.entra).map(d => ecDepRow(d, 'matriz')).join('')}
+      ${ecDepRow({ nome: 'Full Mercado Livre', fonte: 'Mercado Livre', sk: a.skusFull, un: a.unFull, vc: a.valorFull, vv: a.valorVendaFull, entra: true, obs: 'Full — entra no total' }, 'fullbaixo')}
+      <tr class="ec-dep-total"><td><b>Total considerado</b></td><td></td><td class="r mono"><b>${ecInt(a.skusComEstoque)}</b></td><td class="r mono"><b>${ecInt(a.unidades)}</b></td><td class="r mono"><b>${ecMoney(a.valorCusto)}</b></td><td class="r mono"><b>${ecMoney(a.valorVenda)}</b></td><td></td></tr>
+      ${a.depTable.filter(d => !d.entra).map(d => ecDepRow(d)).join('')}
+    </tbody></table>
+    <div class="ec-muted" style="margin-top:6px">Depósitos marcados como "desconsiderar saldo" no Bling aparecem para conferência e não entram no total nem nas decisões de compra. Kits virtuais não entram no valor (o capital está nos componentes).</div></div>
+  </div>
+
   <!-- 2. AÇÃO DE COMPRA -->
   <div class="card ec-sec">
     <div class="card-head"><span class="card-title">🛒 Ação de compra</span><span class="ec-muted">lead time ${cfg.leadTime}d · cobertura alvo A ${cfg.alvo.A}d · B ${cfg.alvo.B}d · C ${cfg.alvo.C}d</span></div>
@@ -3740,16 +3781,8 @@ function ecRenderDash() {
 
   <!-- 3. SAÚDE DO ESTOQUE -->
   <div class="card ec-sec">
-    <div class="card-head"><span class="card-title">Saúde do estoque</span><span class="ec-muted">disponível · Matriz e Full separados</span></div>
-    <div class="ec-strip">
-      ${ecStat('Estoque a custo', ecMoneyK(a.valorCusto))}
-      ${ecStat('Potencial de venda', ecMoneyK(a.valorVenda))}
-      ${ecStat('SKUs ativos', ecInt(a.skusAtivos))}
-      ${ecStat('Unidades', ecInt(a.unidades))}
-      ${ecStat('Matriz', ecInt(a.unMatriz) + ' un', ecMoneyK(a.valorMatriz))}
-      ${ecStat('Full ML', ecInt(a.unFull) + ' un', ecMoneyK(a.valorFull))}
-    </div>
-    <div class="g2" style="margin:0;padding:0 18px 18px">
+    <div class="card-head"><span class="card-title">Saúde do estoque</span><span class="ec-muted">composição do capital e dos SKUs com demanda</span></div>
+    <div class="g2" style="margin:0;padding:16px 18px 18px">
       <div>
         <div class="ec-subhead">Composição (objetiva)</div>
         ${ecMeter('Capital em estoque saudável', a.saude.saudavel, 'ok', 'saudavel', ecMoneyK(a.valorClasse.saudavel))}
@@ -3819,6 +3852,9 @@ function ecRenderDash() {
 
 function ecCounter(label, n, tone, f, sub) {
   return `<button class="ec-counter" onclick="ecOpenFilter('${f}')"><div class="ec-c-label"><span class="ec-dot" style="background:${EC_STATUS[tone]}"></span>${ecEsc(label)}</div><div class="ec-c-val">${ecInt(n)}</div><div class="ec-c-sub">${sub ? ecEsc(sub) : 'SKUs'}</div></button>`;
+}
+function ecDepRow(d, f) {
+  return `<tr ${f ? `style="cursor:pointer" onclick="ecOpenFilter('${f}')"` : 'class="ec-dep-out"'}><td>${d.entra ? '<b>' + ecEsc(d.nome) + '</b>' : ecEsc(d.nome)}</td><td class="ec-muted">${ecEsc(d.fonte)}</td><td class="r mono">${ecInt(d.sk)}</td><td class="r mono">${ecInt(d.un)}</td><td class="r mono">${ecMoney(d.vc)}</td><td class="r mono">${ecMoney(d.vv)}</td><td>${d.entra ? ecPill('Sim', 'ok') : '<span class="ec-muted">' + ecEsc(d.obs) + '</span>'}</td></tr>`;
 }
 const ecStat = (l, v, s) => `<div class="ec-stat"><div class="ec-stat-l">${ecEsc(l)}</div><div class="ec-stat-v">${v}</div>${s ? `<div class="ec-stat-s">${s}</div>` : ''}</div>`;
 function ecMeter(label, pct, tone, f, detail) {
@@ -4010,6 +4046,7 @@ function ecExportCSV() {
     ['Lead time', r => r.lt], ['Estoque segurança', r => r.ss], ['Estoque projetado', r => Math.round(r.projetado)], ['Última venda', r => r.ultimaVenda || ''], ['Dias sem venda', r => r.diasSemVenda],
     ['Risco ruptura', r => r.risco], ['Excesso un', r => r.excessoUn], ['Excesso R$', r => r.excessoR.toFixed(2)], ['Compra sugerida', r => r.sugCompra], ['Comprar até', r => r.comprarAte || ''], ['Envio Full', r => r.envioFull], ['Recomendação', r => r.rec],
     ['Última compra', r => r.compra?.ultData || ''], ['Qtd última compra', r => r.compra?.ultQtd || ''], ['Último custo', r => r.compra?.ultCusto || ''], ['Fornecedor', r => r.compra?.fornNome || r.compra?.forn || '']];
+  (EC.bling?.depositos || []).forEach(d => cols.splice(7, 0, ['Dep. ' + d.nome, r => r.deps[d.id] ? r.deps[d.id][1] : 0]));
   const esc = v => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const csv = '﻿' + cols.map(c => c[0]).join(';') + '\n' + rs.map(r => cols.map(c => esc(typeof c[1](r) === 'number' ? String(c[1](r)).replace('.', ',') : c[1](r))).join(';')).join('\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
