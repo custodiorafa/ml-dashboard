@@ -682,6 +682,42 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .ec-bling-conn .ec-f { margin:0; }
 .ec-bling-conn input[type=text], .ec-bling-conn input[type=password] { flex:1; min-width:0; background:var(--bg2); border:1px solid var(--border2); color:var(--text); padding:6px 8px; border-radius:6px; font:12px var(--mono); }
 @media (max-width:900px) { .ec-bling-conn { grid-template-columns:1fr; } }
+
+/* ═══ PROMOÇÕES & OFERTAS ═══ */
+.pr-guide { background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:12px; padding:12px 16px; font-size:13px; color:var(--text2); margin-bottom:16px; }
+.pr-guide b { color:var(--text); }
+.pr-guide details { margin-top:6px; } .pr-guide summary { cursor:pointer; color:var(--accent); font-size:12px; }
+.pr-gloss { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:6px 18px; margin-top:8px; font-size:12px; }
+.pr-live { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px; padding:14px 18px; }
+.pr-live-next .pr-lc { opacity:.9; }
+.pr-lc { display:block; text-decoration:none; color:var(--text); background:var(--surface2); border:1px solid var(--border); border-radius:12px; padding:12px; transition:border-color .2s; }
+.pr-lc:hover { border-color:var(--border2); }
+.pr-lc-live { border-color:rgba(255,230,0,.35); box-shadow:inset 0 0 0 1px rgba(255,230,0,.08); }
+.pr-lc-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+.pr-lc-badge { font:700 10px var(--mono); color:var(--ml-yellow); letter-spacing:.5px; }
+.pr-lc-next .pr-lc-badge { color:var(--text2); }
+.pr-lc-off { font:700 12px var(--mono); background:var(--green); color:#000; border-radius:6px; padding:1px 6px; }
+.pr-lc-t { font-size:12px; font-weight:600; line-height:1.3; height:32px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.pr-lc-p { margin:6px 0 4px; font-size:16px; }
+.pr-lc-old { font-size:11px; color:var(--text2); text-decoration:line-through; }
+.pr-lc-meta { display:flex; justify-content:space-between; gap:6px; font-size:11px; color:var(--text2); }
+.pr-lc-meta b { color:var(--text); }
+.pr-kpis { display:grid; grid-template-columns:repeat(7,1fr); gap:10px; margin-bottom:18px; }
+.pr-kpi { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:12px 14px; text-align:left; cursor:pointer; color:var(--text); font-family:var(--sans); }
+.pr-kpi:hover { border-color:var(--border2); }
+.pr-ops { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; padding:14px 18px 18px; }
+.pr-op { background:var(--surface2); border:1px solid var(--border); border-radius:12px; padding:12px 14px; text-align:left; cursor:pointer; color:var(--text); font-family:var(--sans); }
+.pr-op:hover { border-color:var(--border2); }
+.pr-op-zero { opacity:.5; }
+.pr-op-top { display:flex; align-items:center; }
+.pr-op-n { font-size:24px; font-weight:700; }
+.pr-op-t { font-size:13px; font-weight:600; margin:2px 0 4px; }
+.pr-op-d { font-size:11px; color:var(--text2); line-height:1.4; }
+.pr-chip { display:inline-block; font:600 10px var(--mono); padding:2px 7px; border-radius:99px; background:var(--surface3); border:1px solid var(--border2); color:var(--text2); margin:1px 3px 1px 0; white-space:nowrap; }
+.pr-on { color:var(--text); border-color:rgba(0,212,161,.45); }
+.pr-cand { border-style:dashed; }
+@media (max-width:1200px) { .pr-kpis { grid-template-columns:repeat(4,1fr); } .pr-ops { grid-template-columns:repeat(2,1fr); } }
+@media (max-width:700px) { .pr-kpis { grid-template-columns:repeat(2,1fr); } .pr-ops { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
@@ -831,6 +867,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
     <div class="tab" onclick="goTab(this,'pricing')">💰 Precificação</div>
     <div class="tab" onclick="goTab(this,'demand')">📈 Demanda & Trends</div>
     <div class="tab" onclick="goTab(this,'compras');ecOpen()">🧭 Estoque &amp; Compras</div>
+    <div class="tab" onclick="goTab(this,'promo');prOpen()">🏷 Promoções &amp; Ofertas</div>
     <div class="tab" onclick="goTab(this,'competitors')">👁 Concorrentes</div>
     <div class="tab" onclick="goTab(this,'abc')">🔺 Curva ABC</div>
     <div class="tab" onclick="goTab(this,'alerts')">🔔 Alertas <span class="tab-count red" id="alert-badge">0</span></div>
@@ -1289,6 +1326,22 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
       <div id="ec-conc" style="display:none"></div>
       <div class="ec-modal" id="ec-cfg" onclick="if(event.target===this)ecCloseCfg()"></div>
       <div id="ec-tip"></div>
+    </div>
+
+    <!-- ═══ PROMOÇÕES & OFERTAS ═══ -->
+    <div class="page" id="page-promo">
+      <div class="page-header" style="flex-wrap:wrap;gap:12px">
+        <div>
+          <div class="page-title">Promoções <span>&amp; Ofertas</span></div>
+          <div class="page-meta" id="pr-meta">Central de campanhas do Mercado Livre</div>
+        </div>
+        <div class="ec-head-actions">
+          <button class="btn-sm" onclick="prExport()">⬇ Excel</button>
+          <button class="btn-sm btn-primary" onclick="prLoad(true)">↻ Atualizar</button>
+        </div>
+      </div>
+      <div class="ec-progress" id="pr-progress"><span class="ec-prog-msg">Carregando…</span><div class="ec-prog-trk"><div class="ec-prog-fill"></div></div></div>
+      <div id="pr-body"><div class="card"><div class="card-body" style="text-align:center;padding:40px;color:var(--text2)">Abra esta aba para carregar as promoções.</div></div></div>
     </div>
 
     <div class="page" id="page-competitors">
@@ -2028,12 +2081,15 @@ async function startApp(){
       let total = 9999;
 
       // Passo 1: buscar todos os IDs com paginação
-      while(offset < total && offset < 600){
-        setStep(`Buscando anúncios... ${offset} de ${Math.min(total,600)}`);
-        const page = await Promise.race([
-          mlGet(`/users/${state.sellerId}/items/search?status=active&limit=${pageSize}&offset=${offset}`),
-          sleep(15000).then(()=>null)
-        ]);
+      while(offset < total && offset < 2000){
+        setStep(`Buscando anúncios... ${offset} de ${Math.min(total,2000)}`);
+        let page = null;
+        for(let tent=0; tent<3 && !(page && page.results); tent++){
+          page = await Promise.race([
+            mlGet(`/users/${state.sellerId}/items/search?status=active&limit=${pageSize}&offset=${offset}`),
+            sleep(20000).then(()=>null)
+          ]);
+        }
         if(!page || !page.results) break;
         total = page.paging?.total || page.results.length;
         state.itemIds.push(...page.results);
@@ -2046,10 +2102,13 @@ async function startApp(){
       for(let i=0; i<allIds.length; i+=20){
         const batch = allIds.slice(i,i+20);
         setStep(`Carregando detalhes: ${i+batch.length} de ${allIds.length} anúncios...`);
-        const itemsData = await Promise.race([
-          mlGetPublic(`/items?ids=${batch.join(',')}`),
-          sleep(15000).then(()=>null)
-        ]);
+        let itemsData = null;
+        for(let tent=0; tent<3 && !itemsData; tent++){
+          itemsData = await Promise.race([
+            mlGetPublic(`/items?ids=${batch.join(',')}`),
+            sleep(20000).then(()=>null)
+          ]);
+        }
         if(itemsData){
           const valid = itemsData.map(r=>r.body).filter(Boolean);
           state.items.push(...valid);
@@ -4243,6 +4302,399 @@ function ecExportConc() {
   const esc = x => { const s = String(x ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const csv = '﻿' + cols.map(c => c[0]).join(';') + '\n' + rs.map(r => cols.map(c => { const v = c[1](r); return esc(typeof v === 'number' ? String(v).replace('.', ',') : v); }).join(';')).join('\n');
   const l = document.createElement('a'); l.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); l.download = `inventario_full_bling_x_ml_${ecDay()}.csv`; l.click();
+}
+
+// ════════════════════════════════════════════════════════════════
+// CENTRAL DE PROMOÇÕES & OFERTAS — Mercado Livre (seller-promotions v2)
+// ════════════════════════════════════════════════════════════════
+const PR = { loading: false, data: null, rows: [], agg: null, view: { filter: 'todos', q: '', page: 0, sort: { k: 'prio', d: 1 } }, timer: null };
+const PR_CACHE_KEY = 'pr_cache_v1';
+
+// Glossário didático dos tipos de promoção
+const PR_TYPES = {
+  LIGHTNING: { n: 'Oferta relâmpago', s: '⚡ Relâmpago', d: 'Até 12h, estoque limitado e destaque na página de ofertas. Ótima para girar estoque e ganhar vendas rápidas.' },
+  DOD: { n: 'Oferta do dia', s: '☀ Oferta do dia', d: '24h em destaque na página de ofertas do dia. Alta exposição; exige desconto competitivo.' },
+  DEAL: { n: 'Campanha do Mercado Livre', s: '🎪 Campanha ML', d: 'Campanhas temáticas do ML (ex.: datas comemorativas). Dá selo e vitrine própria.' },
+  MARKETPLACE_CAMPAIGN: { n: 'Campanha co-participada', s: '🤝 Co-participada', d: 'O ML banca parte do desconto. Desconto maior para o cliente com custo menor para você.' },
+  SELLER_CAMPAIGN: { n: 'Campanha do vendedor', s: '🏷 Sua campanha', d: 'Campanha criada por você com regras próprias de desconto.' },
+  PRICE_DISCOUNT: { n: 'Desconto no preço', s: '% Desconto', d: 'Desconto individual no anúncio (preço riscado). Simples e imediato.' },
+  SMART: { n: 'Campanha automatizada', s: '🤖 Automatizada', d: 'O ML ajusta o desconto automaticamente e co-financia parte dele.' },
+  PRICE_MATCHING: { n: 'Equiparação de preço', s: '⚖ Equiparação', d: 'O ML iguala o preço a concorrentes e co-financia a diferença.' },
+  PRICE_MATCHING_MELI_ALL: { n: 'Equiparação (100% ML)', s: '⚖ Equiparação ML', d: 'Equiparação financiada integralmente pelo ML.' },
+  UNHEALTHY_STOCK: { n: 'Liquidação de estoque Full', s: '📦 Liquidação Full', d: 'Desconto para estoque parado no Full, evitando custos de armazenagem longa.' },
+  SELLER_COUPON_CAMPAIGN: { n: 'Cupom do vendedor', s: '🎟 Cupom', d: 'Cupom de desconto aplicado no carrinho. Não mexe no preço do anúncio.' },
+  VOLUME: { n: 'Desconto por quantidade', s: '📦 Leve mais', d: 'Desconto progressivo ao comprar mais unidades. Aumenta o ticket.' },
+  PRE_NEGOTIATED: { n: 'Desconto pré-negociado', s: '📝 Pré-negociado', d: 'Desconto negociado previamente com o ML.' },
+};
+const prType = t => PR_TYPES[t] || { n: t, s: t, d: '' };
+const PR_ST = { started: 'Ativa', pending: 'Programada', candidate: 'Elegível', finished: 'Encerrada', paused: 'Pausada' };
+const PR_PRICE_TYPES = new Set(['LIGHTNING', 'DOD', 'DEAL', 'MARKETPLACE_CAMPAIGN', 'SELLER_CAMPAIGN', 'PRICE_DISCOUNT', 'SMART', 'PRICE_MATCHING', 'PRICE_MATCHING_MELI_ALL', 'UNHEALTHY_STOCK', 'PRE_NEGOTIATED']);
+
+// datas do ML vêm sem fuso (horário de Brasília)
+const prDate = s => { if (!s) return null; const t = /[zZ]|[+-]\d\d:\d\d$/.test(s) ? s : s + '-03:00'; const d = new Date(t); return isNaN(d) ? null : d; };
+function prLeft(d) {
+  if (!d) return '—'; const ms = d - Date.now(); if (ms <= 0) return 'encerrada';
+  const h = Math.floor(ms / 3600e3), m = Math.floor((ms % 3600e3) / 60e3), dd = Math.floor(h / 24);
+  return dd >= 2 ? `${dd} dias` : h >= 1 ? `${h}h ${String(m).padStart(2, '0')}min` : `${m} min`;
+}
+const prFmtDT = d => d ? d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+function prProgress(msg, pct) {
+  const el = document.getElementById('pr-progress'); if (!el) return;
+  if (msg == null) { el.style.display = 'none'; return; }
+  el.style.display = 'flex'; el.querySelector('.ec-prog-msg').textContent = msg;
+  const f = el.querySelector('.ec-prog-fill'); f.style.width = (pct == null ? 100 : Math.max(3, Math.min(100, pct))) + '%'; f.classList.toggle('ec-indet', pct == null);
+}
+
+// ───────── carga ─────────
+function prOpen() {
+  if (!PR.data && !PR.loading) prLoad(false); else prRender(); prTick();
+  // cruza com estoque, curva ABC e custo: carrega o módulo Estoque & Compras em segundo plano se ainda não foi aberto
+  try {
+    const bc = blingCfg();
+    if (typeof EC !== 'undefined' && !EC.rows.length && !EC.loading && bc.url && bc.key) ecLoad(false).then(() => { if (PR.data) { prCompute(); prRender(); } });
+  } catch (e) {}
+}
+async function prLoad(force) {
+  if (PR.loading) return;
+  if (state.isDemo) { document.getElementById('pr-body').innerHTML = '<div class="card"><div class="card-body ec-muted">Conecte sua conta do Mercado Livre para usar a central.</div></div>'; return; }
+  PR.loading = true;
+  try {
+    let cache = null;
+    try { cache = JSON.parse(localStorage.getItem(PR_CACHE_KEY) || 'null'); } catch (e) {}
+    if (!force && cache && cache.seller === state.sellerId && Date.now() - cache.at < 2 * 3600e3) { PR.data = cache; }
+    else PR.data = await prFetchAll();
+    prCompute(); prRender();
+  } catch (e) {
+    document.getElementById('pr-body').innerHTML = `<div class="card"><div class="card-body" style="color:var(--orange)">Erro ao carregar promoções: ${ecEsc(e.message)}</div></div>`;
+  } finally { PR.loading = false; prProgress(null); }
+}
+async function prFetchAll() {
+  const seller = state.sellerId;
+  prProgress('Lendo campanhas da conta…', null);
+  const promos = [];
+  for (let off = 0; off < 500; off += 50) {
+    const r = await prGet(`/seller-promotions/users/${seller}?app_version=v2&limit=50&offset=${off}`);
+    if (!r || !r.results) break; promos.push(...r.results);
+    if (r.results.length < 50 || promos.length >= (r.paging?.total || 0)) break;
+  }
+  // detalhes (nome, datas, prazo de adesão)
+  const P = {};
+  await prPool(promos, 5, async p => {
+    const d = p.type === 'LIGHTNING' ? null : await prGet(`/seller-promotions/promotions/${p.id}?promotion_type=${p.type}&app_version=v2`);
+    P[p.id] = { id: p.id, type: p.type, status: p.status, name: d?.name || p.name || prType(p.type).n, start: d?.start_date || null, finish: d?.finish_date || null, deadline: d?.deadline_date || null };
+  });
+  // itens de cada campanha (ativos, programados e elegíveis) — 1 lista por campanha, bem mais rápido que consultar anúncio a anúncio
+  const LGT = {}, I = {};
+  let done = 0;
+  await prPool(promos, 4, async p => {
+    let after = '', guard = 0;
+    do {
+      const r = await prGet(`/seller-promotions/promotions/${p.id}/items?promotion_type=${p.type}&app_version=v2&limit=50${after ? '&search_after=' + encodeURIComponent(after) : ''}`);
+      if (!r || !r.results) break;
+      r.results.forEach(x => {
+        if (!x.id || x.status === 'finished') return;
+        (I[x.id] = I[x.id] || []).push([p.type, x.status, p.id, x.price ?? null, x.original_price ?? null, x.start_date || null, x.finish_date || null, '']);
+        if (p.type === 'LIGHTNING' && (x.status === 'started' || x.status === 'pending')) (LGT[x.id] = LGT[x.id] || []).push({ st: x.status, pr: x.price, op: x.original_price, s: x.start_date, f: x.finish_date, rem: x.stock?.remaining_stock ?? null, min: x.stock?.min ?? null, max: x.stock?.max ?? null });
+      });
+      after = r.paging?.searchAfter || r.paging?.search_after || '';
+      if (r.results.length < 50) break;
+    } while (after && guard++ < 40);
+    done++; prProgress(`Lendo anúncios das campanhas: ${done}/${promos.length}`, (done / promos.length) * 100);
+  });
+  // desconto próprio (preço riscado) vem do próprio anúncio: original_price > price
+  (state.items || []).forEach(it => {
+    if (it.status !== 'active' || !(it.original_price > it.price)) return;
+    const l = I[it.id] = I[it.id] || [];
+    const priced = l.some(x => x[1] === 'started' && PR_PRICE_TYPES.has(x[0]) && x[0] !== 'PRICE_DISCOUNT');
+    if (!priced) l.push(['PRICE_DISCOUNT', 'started', '', it.price, it.original_price, null, null, 'item']);
+  });
+  const items = (state.items || []).filter(it => it.status === 'active');
+  items.forEach(it => { if (!I[it.id]) I[it.id] = []; });
+  const data = { at: Date.now(), seller, promos: P, items: I, lightning: LGT };
+  try { localStorage.setItem(PR_CACHE_KEY, JSON.stringify(data)); } catch (e) { console.warn('pr cache', e); }
+  return data;
+}
+// chamada direta ao proxy (evita a tentativa sem proxy que falha por CORS)
+async function prGet(path, retried) {
+  try {
+    const r = await fetchWithTimeout(`${WORKER}/?path=${encodeURIComponent(path)}`, { headers: { Authorization: 'Bearer ' + state.token } }, 20000);
+    if (r.status === 401 && !retried && state.refreshToken) { if (await doRefreshToken()) return prGet(path, true); }
+    if (r.ok) return r.json();
+    if (r.status === 404) return null;
+  } catch (e) {}
+  return mlGet(path);
+}
+async function prPool(list, n, fn) {
+  let i = 0; const run = async () => { while (i < list.length) { const k = i++; try { await fn(list[k]); } catch (e) {} } };
+  await Promise.all(Array.from({ length: n }, run));
+}
+
+// ───────── cálculo ─────────
+function prSales30Map() {
+  const h = (typeof EC !== 'undefined' && EC.hist) ? EC.hist : (typeof ecLoadHist === 'function' ? ecLoadHist() : null);
+  const out = {}; if (!h || !h.days) return out;
+  for (let i = 0; i < 30; i++) { const d = h.days[ecDay(i)]; if (!d) continue; for (const [k, v] of Object.entries(d)) out[k] = (out[k] || 0) + v[0]; }
+  return out;
+}
+function prCompute() {
+  const D = PR.data; const sales = prSales30Map();
+  const ecBySku = {}; (typeof EC !== 'undefined' ? EC.rows : []).forEach(r => { ecBySku[r.sku] = r; });
+  PR.hasEC = Object.keys(ecBySku).length > 0;
+  const now = Date.now(), d7 = now + 7 * 864e5, d3 = now + 3 * 864e5;
+  const rows = [];
+  (state.items || []).filter(it => it.status === 'active').forEach(it => {
+    const raw = D.items[it.id]; const loaded = !!raw;
+    const ps = (raw || []).map(a => ({ type: a[0], st: a[1], id: a[2], price: a[3], orig: a[4], start: prDate(a[5]), finish: prDate(a[6]), sub: a[7], name: (D.promos[a[2]] || {}).name || prType(a[0]).n, deadline: prDate((D.promos[a[2]] || {}).deadline) }));
+    const act = ps.filter(p => p.st === 'started'), pend = ps.filter(p => p.st === 'pending'), cand = ps.filter(p => p.st === 'candidate');
+    const actTypes = new Set(act.map(p => p.type)), candTypes = new Set(cand.map(p => p.type)), pendTypes = new Set(pend.map(p => p.type));
+    const lg = (D.lightning[it.id] || []);
+    const lgLive = lg.find(x => x.st === 'started'), lgNext = lg.filter(x => x.st === 'pending').sort((a, b) => String(a.s).localeCompare(String(b.s)))[0];
+    if (lgLive) actTypes.add('LIGHTNING');
+    const priceActs = act.filter(p => PR_PRICE_TYPES.has(p.type) && p.price > 0);
+    const orig = Math.max(it.original_price || 0, ...priceActs.map(p => p.orig || 0), it.price || 0);
+    const best = priceActs.length ? Math.min(...priceActs.map(p => p.price)) : (lgLive ? lgLive.pr : it.price);
+    const desc = orig > 0 && best < orig ? 1 - best / orig : 0;
+    const ends = act.map(p => p.finish).filter(Boolean).sort((a, b) => a - b)[0] || (lgLive ? prDate(lgLive.f) : null);
+    const skus = mlItemSkus(it); const sku = skus[0] || '';
+    const s30 = skus.reduce((a, k) => a + (sales[k] || 0), 0);
+    const ec = ecBySku[sku] || null;
+    const feePct = ec && ec.preco > 0 ? ec.tarifaUn / ec.preco : 0.16;
+    const custo = ec ? ec.custo : 0;
+    const margemPromo = custo > 0 && best > 0 ? best - best * feePct - custo : null;
+    const margemPromoPct = margemPromo != null ? margemPromo / best : null;
+    const r = {
+      id: it.id, title: it.title || '', sku, link: it.permalink, full: it.shipping?.logistic_type === 'fulfillment', estoqueML: it.available_quantity || 0,
+      price: it.price, orig, best, desc, loaded, ps, act, pend, cand, actTypes, candTypes, pendTypes, lgLive, lgNext,
+      nAct: actTypes.size, nCand: candTypes.size, nPend: pendTypes.size + (lgNext ? 1 : 0), ends, endsSoon: ends && ends.getTime() < d7, ends3: ends && ends.getTime() < d3,
+      temCupom: actTypes.has('SELLER_COUPON_CAMPAIGN'), temDesconto: [...actTypes].some(t => PR_PRICE_TYPES.has(t)),
+      s30, curva: ec ? ec.curva : null, risco: ec ? ec.risco : null, excesso: ec ? ec.excessoUn > 0 || (ec.total > 0 && ec.diasSemVenda > 90) : false,
+      custo, margemPromo, margemPromoPct, receita30: s30 * best,
+    };
+    // recomendação do estrategista
+    const tags = [];
+    if (r.nAct && ec && (ec.risco === 'CRÍTICO' || ec.risco === 'ALTO')) tags.push(['crit', '⏸ Estoque curto: limitar/pausar promoção', 'estoquecurto']);
+    if (r.nAct && r.temDesconto && margemPromo != null && margemPromo < 0) tags.push(['crit', '⚠ Promoção abaixo do custo', 'abaixocusto']);
+    if (lgLive) tags.push(['ok', '⚡ Em relâmpago agora: acompanhar estoque', 'relampago']);
+    if (!r.nAct && r.curva === 'A') tags.push(['aten', '🎯 Curva A sem promoção: aderir a campanha', 'asempromo']);
+    if (r.excesso && (candTypes.has('LIGHTNING') || candTypes.has('DOD') || candTypes.has('UNHEALTHY_STOCK')) && !lgLive) tags.push(['aten', '🔥 Excesso de estoque: usar relâmpago/liquidação', 'girar']);
+    if (!r.nAct && r.nCand) tags.push(['mon', '➕ Aderir a: ' + [...candTypes].map(t => prType(t).s).slice(0, 3).join(', '), 'elegivel']);
+    if (!r.temCupom && candTypes.has('SELLER_COUPON_CAMPAIGN') && r.nAct) tags.push(['mon', '🎟 Incluir em cupom', 'semcupom']);
+    if (r.ends3 && !r.pend.length) tags.push(['aten', '⏰ Termina em ' + prLeft(r.ends) + ': renovar', 'vencendo']);
+    if (!r.nAct && !r.nCand && loaded) tags.push(['neutral', 'Sem campanhas elegíveis: criar desconto próprio', 'semelegivel']);
+    r.tags = tags;
+    r.prio = (tags[0] ? { crit: 0, aten: 1, mon: 2, ok: 3, neutral: 4 }[tags[0][0]] : 5) * 1e7 - (r.s30 * (r.best || 0));
+    rows.push(r);
+  });
+  PR.rows = rows;
+  // agregados
+  const a = {};
+  a.total = rows.length; a.loaded = rows.filter(r => r.loaded).length;
+  a.comPromo = rows.filter(r => r.nAct).length; a.semPromo = rows.filter(r => !r.nAct && r.loaded).length;
+  a.soElegivel = rows.filter(r => !r.nAct && r.nCand).length; a.semElegivel = rows.filter(r => !r.nAct && !r.nCand && r.loaded).length;
+  a.cupom = rows.filter(r => r.temCupom).length; a.desconto = rows.filter(r => r.temDesconto).length;
+  a.vencendo = rows.filter(r => r.endsSoon).length;
+  a.lgLive = rows.filter(r => r.lgLive).length; a.lgNext = rows.filter(r => r.lgNext).length;
+  a.dodLive = rows.filter(r => r.actTypes.has('DOD')).length;
+  const semVendaPromo = rows.filter(r => !r.nAct);
+  a.receitaSemPromo = semVendaPromo.reduce((s, r) => s + r.s30 * (r.price || 0), 0);
+  a.receitaComPromo = rows.filter(r => r.nAct).reduce((s, r) => s + r.s30 * (r.best || 0), 0);
+  a.descMedio = (() => { const l = rows.filter(r => r.desc > 0); return l.length ? l.reduce((s, r) => s + r.desc, 0) / l.length : 0; })();
+  // cobertura por tipo
+  const types = new Set(); rows.forEach(r => r.ps.forEach(p => types.add(p.type))); Object.values(PR.data.promos).forEach(p => types.add(p.type));
+  a.porTipo = [...types].map(t => ({ t, act: rows.filter(r => r.actTypes.has(t)).length, pend: rows.filter(r => r.pendTypes.has(t) || (t === 'LIGHTNING' && r.lgNext)).length, cand: rows.filter(r => r.candTypes.has(t) && !r.actTypes.has(t)).length })).sort((x, y) => (y.act + y.pend) - (x.act + x.pend) || y.cand - x.cand);
+  // campanhas
+  a.campanhas = Object.values(PR.data.promos).map(p => ({ ...p, startD: prDate(p.start), finishD: prDate(p.finish), deadlineD: prDate(p.deadline),
+    act: rows.filter(r => r.act.some(x => x.id === p.id) || (p.type === 'LIGHTNING' && r.lgLive)).length,
+    pend: rows.filter(r => r.pend.some(x => x.id === p.id) || (p.type === 'LIGHTNING' && r.lgNext)).length,
+    cand: rows.filter(r => r.cand.some(x => x.id === p.id)).length })).sort((x, y) => (x.status === 'started' ? 0 : 1) - (y.status === 'started' ? 0 : 1) || ((x.finishD || 0) - (y.finishD || 0)));
+  // oportunidades
+  const count = k => rows.filter(r => r.tags.some(t => t[2] === k)).length;
+  a.op = { estoquecurto: count('estoquecurto'), abaixocusto: count('abaixocusto'), asempromo: count('asempromo'), girar: count('girar'), elegivel: count('elegivel'), semcupom: count('semcupom'), vencendo: count('vencendo'), semelegivel: count('semelegivel') };
+  PR.agg = a;
+}
+
+// ───────── filtros ─────────
+const PR_F = {
+  todos: ['Todos', r => true],
+  compromo: ['Com promoção ativa', r => r.nAct > 0],
+  sempromo: ['Sem promoção ativa', r => !r.nAct && r.loaded],
+  soelegivel: ['Elegível e não aderiu', r => !r.nAct && r.nCand > 0],
+  relampago: ['⚡ Relâmpago ao vivo', r => !!r.lgLive],
+  relprog: ['⚡ Relâmpago programada', r => !!r.lgNext],
+  relcand: ['⚡ Elegível a relâmpago', r => r.candTypes.has('LIGHTNING') && !r.lgLive && !r.lgNext],
+  dod: ['☀ Oferta do dia', r => r.actTypes.has('DOD')],
+  cupom: ['🎟 Com cupom', r => r.temCupom],
+  semcupom: ['Sem cupom', r => !r.temCupom && r.loaded],
+  desconto: ['% Com desconto', r => r.temDesconto],
+  semdesconto: ['Sem desconto', r => !r.temDesconto && r.loaded],
+  vencendo: ['⏰ Vence em 7 dias', r => r.endsSoon],
+  asempromo: ['🎯 Curva A sem promoção', r => r.curva === 'A' && !r.nAct],
+  abaixocusto: ['⚠ Abaixo do custo', r => r.tags.some(t => t[2] === 'abaixocusto')],
+  estoquecurto: ['⏸ Estoque curto em promoção', r => r.tags.some(t => t[2] === 'estoquecurto')],
+  girar: ['🔥 Excesso: girar estoque', r => r.tags.some(t => t[2] === 'girar')],
+  semelegivel: ['Sem campanha elegível', r => !r.nAct && !r.nCand && r.loaded],
+  full: ['Full', r => r.full],
+};
+function prSetFilter(k) { PR.view.filter = k; PR.view.page = 0; prRenderTable(); document.getElementById('pr-table-anchor')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+function prTypeFilter(t, st) {
+  const key = 'tipo_' + t + '_' + st;
+  PR_F[key] = [`${prType(t).s} · ${st === 'act' ? 'ativa' : st === 'pend' ? 'programada' : 'elegível'}`, st === 'act' ? r => r.actTypes.has(t) : st === 'pend' ? r => r.pendTypes.has(t) || (t === 'LIGHTNING' && !!r.lgNext) : r => r.candTypes.has(t) && !r.actTypes.has(t), true];
+  prSetFilter(key);
+}
+function prCampFilter(id) {
+  const p = PR.data.promos[id]; const key = 'camp_' + id;
+  PR_F[key] = [`Campanha: ${p.name}`, r => r.ps.some(x => x.id === id) || (p.type === 'LIGHTNING' && (r.lgLive || r.lgNext)), true];
+  prSetFilter(key);
+}
+
+// ───────── render ─────────
+function prRender() {
+  if (!PR.agg) return;
+  const a = PR.agg, el = document.getElementById('pr-body');
+  document.getElementById('pr-meta').textContent = `Atualizado ${new Date(PR.data.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · ${a.loaded}/${a.total} anúncios ativos lidos · ${Object.keys(PR.data.promos).length} campanhas`;
+  const live = PR.rows.filter(r => r.lgLive).sort((x, y) => String(x.lgLive.f).localeCompare(String(y.lgLive.f)));
+  const next = PR.rows.filter(r => r.lgNext && !r.lgLive).sort((x, y) => String(x.lgNext.s).localeCompare(String(y.lgNext.s)));
+  const dod = PR.rows.filter(r => r.actTypes.has('DOD'));
+  const opCards = [
+    ['crit', 'estoquecurto', 'Estoque curto em promoção', 'Promoção ativa em produto que pode romper. Limite a quantidade ou pause para não vender o que não vai repor.'],
+    ['crit', 'abaixocusto', 'Promoção abaixo do custo', 'Preço promocional − tarifa ML − custo < 0. Revise o desconto ou saia da campanha.'],
+    ['aten', 'asempromo', 'Curva A sem promoção', 'Seus campeões de venda sem nenhum incentivo. Maior retorno por esforço: aderir primeiro aqui.'],
+    ['aten', 'girar', 'Excesso de estoque elegível a relâmpago', 'Produto parado ou em excesso que pode entrar em relâmpago/liquidação para girar capital.'],
+    ['aten', 'vencendo', 'Promoções terminando em até 3 dias', 'Sem renovação programada. Renove para não perder o ritmo de vendas.'],
+    ['mon', 'elegivel', 'Elegíveis e não aderidos', 'O ML já liberou campanhas para esses anúncios. Basta aderir.'],
+    ['mon', 'semcupom', 'Com promoção, mas fora do cupom', 'Cupom soma ao desconto e aparece no carrinho. Inclua os anúncios com margem.'],
+    ['neutral', 'semelegivel', 'Sem nenhuma campanha elegível', 'Crie um desconto próprio ou revise preço/reputação do anúncio.'],
+  ];
+  el.innerHTML = `
+  <div class="pr-guide"><b>Como usar:</b> comece por <b>⚡ Agora no ar</b> (o que está vendendo em oferta neste momento), depois veja as <b>Oportunidades</b> — cada card abre a lista de anúncios com a ação sugerida. <details><summary>Glossário dos tipos de promoção</summary><div class="pr-gloss">${Object.entries(PR_TYPES).map(([k, v]) => `<div><b>${v.s}</b> — ${ecEsc(v.d)}</div>`).join('')}<div><b>Status:</b> <i>Ativa</i> = valendo agora · <i>Programada</i> = vai começar · <i>Elegível</i> = o ML liberou, mas você ainda não aderiu.</div></div></details></div>
+
+  <!-- AGORA NO AR -->
+  <div class="card ec-sec">
+    <div class="card-head"><span class="card-title">⚡ Agora no ar — ofertas relâmpago</span><span class="ec-muted">${a.lgLive} ao vivo · ${a.lgNext} programadas · ${a.dodLive} em oferta do dia</span></div>
+    ${live.length ? `<div class="pr-live">${live.map(r => prLiveCard(r, r.lgLive, true)).join('')}</div>` : '<div class="ec-muted" style="padding:14px 18px">Nenhuma oferta relâmpago ao vivo neste momento.</div>'}
+    ${next.length ? `<div class="ec-subhead" style="padding:0 18px">Próximas relâmpago programadas</div><div class="pr-live pr-live-next">${next.slice(0, 12).map(r => prLiveCard(r, r.lgNext, false)).join('')}</div>${next.length > 12 ? `<button class="ec-link" style="padding:0 18px 12px" onclick="prSetFilter('relprog')">ver todas as ${next.length} →</button>` : ''}` : ''}
+    ${dod.length ? `<div class="ec-subhead" style="padding:0 18px">☀ Oferta do dia ativa</div><div class="pr-live">${dod.map(r => { const p = r.act.find(x => x.type === 'DOD'); return prLiveCard(r, { pr: p.price, op: p.orig, f: p.finish ? p.finish.toISOString() : null, rem: null }, true); }).join('')}</div>` : ''}
+  </div>
+
+  <!-- KPIs -->
+  <div class="pr-kpis">
+    ${prKpi('Anúncios ativos', a.total, 'todos', 'neutral', `${a.loaded} analisados`)}
+    ${prKpi('Com promoção ativa', a.comPromo, 'compromo', 'ok', ecPct(a.total ? a.comPromo / a.total : 0) + ' dos anúncios')}
+    ${prKpi('Sem nenhuma promoção', a.semPromo, 'sempromo', 'crit', ecMoneyK(a.receitaSemPromo) + '/mês vendem sem incentivo')}
+    ${prKpi('Elegível e não aderiu', a.soElegivel, 'soelegivel', 'aten', 'oportunidade pronta')}
+    ${prKpi('Com cupom', a.cupom, 'cupom', 'ok', `${a.total - a.cupom} sem cupom`)}
+    ${prKpi('Com desconto no preço', a.desconto, 'desconto', 'ok', 'desconto médio ' + ecPct(a.descMedio))}
+    ${prKpi('Vencendo em 7 dias', a.vencendo, 'vencendo', 'mon', 'renovar a tempo')}
+  </div>
+
+  <!-- OPORTUNIDADES -->
+  <div class="card ec-sec">
+    <div class="card-head"><span class="card-title">🧠 Oportunidades do estrategista</span><span class="ec-muted">${PR.hasEC ? 'cruzado com estoque, curva ABC e custo do Bling' : (typeof EC !== 'undefined' && EC.loading ? '⏳ carregando estoque, curva ABC e custo do Bling para cruzar…' : 'sem dados do Bling: curva, estoque e margem não entram')}</span></div>
+    <div class="pr-ops">${opCards.map(([tone, k, t, d]) => `<button class="pr-op ${a.op[k] ? '' : 'pr-op-zero'}" onclick="prSetFilter('${k}')"><div class="pr-op-top"><span class="ec-dot" style="background:${EC_STATUS[tone]}"></span><span class="pr-op-n">${a.op[k]}</span></div><div class="pr-op-t">${t}</div><div class="pr-op-d">${d}</div></button>`).join('')}</div>
+  </div>
+
+  <div class="g2">
+    <!-- CAMPANHAS -->
+    <div class="card"><div class="card-head"><span class="card-title">📅 Campanhas da conta</span><span class="ec-muted">clique para ver os anúncios</span></div>
+      <div class="card-body" style="padding:0"><table class="t ec-t"><thead><tr><th>Campanha</th><th>Status</th><th>Período</th><th class="r">Ativos</th><th class="r">Prog.</th><th class="r">Elegíveis</th></tr></thead><tbody>
+      ${a.campanhas.map(c => `<tr style="cursor:pointer" onclick="prCampFilter('${ecEsc(c.id)}')" title="${ecEsc(prType(c.type).d)}"><td><div class="fw6">${ecEsc(c.name)}</div><div class="ec-sub">${ecEsc(prType(c.type).s)}${c.deadlineD ? ' · aderir até ' + prFmtDT(c.deadlineD) : ''}</div></td><td>${ecPill(PR_ST[c.status] || c.status, c.status === 'started' ? 'ok' : 'mon')}</td><td class="mono" style="font-size:11px">${c.startD ? prFmtDT(c.startD) : '—'}<div class="ec-sub">até ${c.finishD ? prFmtDT(c.finishD) : '—'}${c.finishD && c.status === 'started' ? ' · ' + prLeft(c.finishD) : ''}</div></td><td class="r mono">${c.act}</td><td class="r mono">${c.pend}</td><td class="r mono">${c.cand}</td></tr>`).join('')}
+      </tbody></table></div></div>
+    <!-- COBERTURA POR TIPO -->
+    <div class="card"><div class="card-head"><span class="card-title">🧩 Cobertura por tipo de promoção</span><span class="ec-muted">anúncios em cada situação</span></div>
+      <div class="card-body" style="padding:0"><table class="t ec-t"><thead><tr><th>Tipo</th><th class="r">Ativa</th><th class="r">Programada</th><th class="r">Elegível (não aderiu)</th><th style="width:30%">Uso do potencial</th></tr></thead><tbody>
+      ${a.porTipo.map(x => { const tot = x.act + x.pend + x.cand; const pu = tot ? (x.act + x.pend) / tot : 0; return `<tr title="${ecEsc(prType(x.t).d)}"><td><b>${ecEsc(prType(x.t).s)}</b><div class="ec-sub">${ecEsc(prType(x.t).n)}</div></td><td class="r mono"><button class="ec-link" onclick="prTypeFilter('${x.t}','act')">${x.act}</button></td><td class="r mono"><button class="ec-link" onclick="prTypeFilter('${x.t}','pend')">${x.pend}</button></td><td class="r mono"><button class="ec-link" onclick="prTypeFilter('${x.t}','cand')">${x.cand}</button></td><td><div class="ec-meter-trk" title="${ecPct(pu)} dos anúncios elegíveis já participam"><div class="ec-meter-fill" style="width:${pu * 100}%;background:var(--accent)"></div></div><div class="ec-sub">${ecPct(pu)} aproveitado</div></td></tr>`; }).join('')}
+      </tbody></table></div></div>
+  </div>
+
+  <!-- TABELA -->
+  <div id="pr-table-anchor"></div>
+  <div class="card" id="pr-table"></div>`;
+  prRenderTable();
+}
+function prKpi(label, n, f, tone, sub) {
+  return `<button class="pr-kpi" onclick="prSetFilter('${f}')"><div class="ec-c-label"><span class="ec-dot" style="background:${EC_STATUS[tone]}"></span>${ecEsc(label)}</div><div class="ec-c-val">${ecInt(n)}</div><div class="ec-c-sub">${sub}</div></button>`;
+}
+function prLiveCard(r, o, live) {
+  const f = prDate(o.f), s = prDate(o.s);
+  const desc = o.op > 0 && o.pr < o.op ? 1 - o.pr / o.op : 0;
+  const pctLeft = f && s ? Math.max(0, Math.min(1, (f - Date.now()) / (f - s))) : null;
+  return `<a class="pr-lc ${live ? 'pr-lc-live' : ''}" href="${ecEsc(r.link || '#')}" target="_blank" rel="noopener">
+    <div class="pr-lc-top"><span class="pr-lc-badge">${live ? '● AO VIVO' : '⏱ ' + prFmtDT(s)}</span>${desc ? `<span class="pr-lc-off">−${Math.round(desc * 100)}%</span>` : ''}</div>
+    <div class="pr-lc-t" title="${ecEsc(r.title)}">${ecEsc(r.title)}</div>
+    <div class="pr-lc-p"><span class="pr-lc-old">${o.op ? ecMoney2(o.op) : ''}</span> <b>${ecMoney2(o.pr)}</b></div>
+    <div class="pr-lc-meta"><span>${live ? '⏳ <b class="pr-cd" data-f="' + (f ? f.getTime() : '') + '">' + prLeft(f) + '</b>' : 'termina ' + prFmtDT(f)}</span><span>${o.rem != null ? '📦 ' + o.rem + ' un restantes' : (o.min ? `📦 ${o.min}–${o.max} un` : '')}</span></div>
+    ${live && pctLeft != null ? `<div class="ec-meter-trk" style="height:4px;margin-top:6px"><div class="ec-meter-fill" style="width:${pctLeft * 100}%;background:var(--ml-yellow)"></div></div>` : ''}
+    <div class="ec-sub">${ecEsc(r.id)}${r.sku ? ' · ' + ecEsc(r.sku) : ''} · vendas 30d: ${ecInt(r.s30)}</div></a>`;
+}
+function prTick() {
+  clearInterval(PR.timer);
+  PR.timer = setInterval(() => {
+    if (!document.getElementById('page-promo')?.classList.contains('active')) return;
+    document.querySelectorAll('.pr-cd').forEach(e => { const f = +e.dataset.f; if (f) e.textContent = prLeft(new Date(f)); });
+  }, 30000);
+}
+const PR_COLS = [
+  ['title', 'Anúncio', r => `<a href="${ecEsc(r.link || '#')}" target="_blank" rel="noopener" class="ec-desc" style="max-width:300px;color:var(--text)" title="${ecEsc(r.title)}">${ecEsc(r.title)}</a><div class="ec-sub">${ecEsc(r.id)}${r.sku ? ' · ' + ecEsc(r.sku) : ''}${r.full ? ' · Full' : ''}</div>`, 's'],
+  ['prio', 'Ação sugerida', r => r.tags.length ? r.tags.slice(0, 2).map(t => ecPill(t[1], t[0])).join('<br>') : ecPill('✓ Ok', 'ok'), 's'],
+  ['curva', 'Curva', r => r.curva ? ecCurva(r.curva) : '—', 's'],
+  ['s30', 'Vendas 30d', r => ecInt(r.s30)],
+  ['estoqueML', 'Estoque', r => ecInt(r.estoqueML)],
+  ['orig', 'Preço cheio', r => ecMoney2(r.orig)],
+  ['best', 'Preço atual', r => `<b>${ecMoney2(r.best)}</b>`],
+  ['desc', 'Desconto', r => r.desc ? `−${ecPct(r.desc, 0)}` : '—'],
+  ['margemPromoPct', 'Margem na promo', r => r.margemPromoPct != null ? `<span class="${r.margemPromo < 0 ? 'c-red' : ''}">${ecPct(r.margemPromoPct, 1)}</span><div class="ec-sub">${ecMoney2(r.margemPromo)}/un</div>` : '—'],
+  ['nAct', 'Promoções ativas', r => r.nAct ? [...r.actTypes].map(t => `<span class="pr-chip pr-on" title="${ecEsc(prType(t).n)}${(() => { const p = r.act.find(x => x.type === t); return p && p.finish ? ' · até ' + prFmtDT(p.finish) : ''; })()}">${ecEsc(prType(t).s)}</span>`).join('') : '<span class="c-orange">nenhuma</span>', 's'],
+  ['ends', 'Termina em', r => r.ends ? `<span class="${r.ends3 ? 'c-orange' : ''}">${prLeft(r.ends)}</span><div class="ec-sub">${prFmtDT(r.ends)}</div>` : '—', 's'],
+  ['nPend', 'Programadas', r => r.pendTypes.size || r.lgNext ? [...new Set([...r.pendTypes, ...(r.lgNext ? ['LIGHTNING'] : [])])].map(t => `<span class="pr-chip">${ecEsc(prType(t).s)}</span>`).join('') : '—', 's'],
+  ['nCand', 'Elegíveis (não aderiu)', r => { const l = [...r.candTypes].filter(t => !r.actTypes.has(t)); return l.length ? l.map(t => `<span class="pr-chip pr-cand" title="${ecEsc(prType(t).d)}">${ecEsc(prType(t).s)}${t === 'SELLER_COUPON_CAMPAIGN' ? ' ×' + r.cand.filter(x => x.type === t).length : ''}</span>`).join('') : '—'; }, 's'],
+];
+function prRows() {
+  const [, fn] = PR_F[PR.view.filter] || PR_F.todos; const q = PR.view.q.trim().toUpperCase();
+  let rs = PR.rows.filter(fn);
+  if (q) rs = rs.filter(r => r.title.toUpperCase().includes(q) || r.id.includes(q) || (r.sku || '').includes(q));
+  const { k, d } = PR.view.sort;
+  rs.sort((x, y) => { let a = x[k], b = y[k]; if (a instanceof Date || b instanceof Date) { a = a ? a.getTime() : Infinity; b = b ? b.getTime() : Infinity; } if (typeof a === 'string' || typeof b === 'string') return String(a || '').localeCompare(String(b || '')) * d; a = a ?? -Infinity; b = b ?? -Infinity; return (a === b ? 0 : a > b ? 1 : -1) * d; });
+  return rs;
+}
+function prRenderTable() {
+  const el = document.getElementById('pr-table'); if (!el) return;
+  const rs = prRows(); const ps = 50; const pages = Math.max(1, Math.ceil(rs.length / ps)); if (PR.view.page >= pages) PR.view.page = 0;
+  const sl = rs.slice(PR.view.page * ps, PR.view.page * ps + ps); const { k: sk, d: sd } = PR.view.sort;
+  el.innerHTML = `
+    <div class="card-head"><span class="card-title">📋 Anúncios × promoções</span><span class="ec-muted">clique nos títulos das colunas para ordenar</span></div>
+    <div class="ec-toolbar">
+      <div class="ec-chips">${Object.entries(PR_F).filter(([key, v]) => !v[2] || key === PR.view.filter).map(([key, v]) => `<button class="ec-chip ${key === PR.view.filter ? 'active' : ''}" onclick="prSetFilter('${key}')">${ecEsc(v[0])} <span>${PR.rows.filter(v[1]).length}</span></button>`).join('')}</div>
+      <div class="ec-tools"><input id="pr-q" type="text" placeholder="Buscar anúncio, ID ou SKU…" value="${ecEsc(PR.view.q)}"><button class="btn-sm" onclick="prExport()">⬇ Excel</button></div>
+    </div>
+    <div class="ec-table-wrap"><table class="t ec-table" style="min-width:1700px"><thead><tr>${PR_COLS.map(([key, l, , t]) => `<th class="${t === 's' ? '' : 'r'} ${sk === key ? 'sorted' : ''}" onclick="prSort('${key}')">${l}${sk === key ? (sd > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead>
+    <tbody>${sl.map(r => `<tr>${PR_COLS.map(([, , fn, t]) => `<td class="${t === 's' ? '' : 'r mono'}" style="${t === 's' ? 'white-space:normal' : ''}">${fn(r)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${PR_COLS.length}" style="padding:24px;text-align:center;color:var(--text2)">Nenhum anúncio neste filtro.</td></tr>`}</tbody></table></div>
+    <div class="ec-pager"><span class="ec-muted">${ecInt(rs.length)} anúncios · página ${PR.view.page + 1} de ${pages}</span><span><button class="btn-sm" ${PR.view.page <= 0 ? 'disabled' : ''} onclick="PR.view.page--;prRenderTable()">←</button> <button class="btn-sm" ${PR.view.page >= pages - 1 ? 'disabled' : ''} onclick="PR.view.page++;prRenderTable()">→</button></span></div>`;
+  const qi = document.getElementById('pr-q');
+  qi.addEventListener('input', () => { PR.view.q = qi.value; PR.view.page = 0; clearTimeout(PR._qt); PR._qt = setTimeout(() => { prRenderTable(); const n = document.getElementById('pr-q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250); });
+}
+function prSort(k) { const s = PR.view.sort; PR.view.sort = { k, d: s.k === k ? -s.d : (['title', 'curva', 'ends', 'prio'].includes(k) ? 1 : -1) }; prRenderTable(); }
+
+// ───────── exportação Excel ─────────
+async function prExport() {
+  if (!window.XLSX) {
+    await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload = res; s.onerror = () => rej(new Error('falha ao carregar biblioteca Excel')); document.head.appendChild(s); }).catch(e => { showToast(e.message, 'err'); });
+    if (!window.XLSX) return;
+  }
+  const rs = prRows();
+  const linhas = rs.map(r => ({
+    'Anúncio': r.id, 'Título': r.title, 'SKU': r.sku, 'Full': r.full ? 'Sim' : 'Não', 'Curva': r.curva || '', 'Vendas 30d': r.s30, 'Estoque ML': r.estoqueML,
+    'Preço cheio': r.orig, 'Preço atual': r.best, 'Desconto %': +(r.desc * 100).toFixed(1), 'Margem na promo %': r.margemPromoPct != null ? +(r.margemPromoPct * 100).toFixed(1) : '',
+    'Promoções ativas': [...r.actTypes].map(t => prType(t).n).join(', '), 'Termina em': r.ends ? prFmtDT(r.ends) : '',
+    'Programadas': [...new Set([...r.pendTypes, ...(r.lgNext ? ['LIGHTNING'] : [])])].map(t => prType(t).n).join(', '),
+    'Elegíveis (não aderiu)': [...r.candTypes].filter(t => !r.actTypes.has(t)).map(t => prType(t).n).join(', '),
+    'Ação sugerida': r.tags.map(t => t[1].replace(/^[^\wÀ-ú]+/, '')).join(' | '), 'Link': r.link || '',
+  }));
+  const camp = PR.agg.campanhas.map(c => ({ 'Campanha': c.name, 'Tipo': prType(c.type).n, 'Status': PR_ST[c.status] || c.status, 'Início': c.startD ? prFmtDT(c.startD) : '', 'Fim': c.finishD ? prFmtDT(c.finishD) : '', 'Aderir até': c.deadlineD ? prFmtDT(c.deadlineD) : '', 'Ativos': c.act, 'Programados': c.pend, 'Elegíveis': c.cand }));
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(linhas); ws['!cols'] = Object.keys(linhas[0] || { a: 1 }).map(k => ({ wch: k === 'Título' ? 50 : k === 'Ação sugerida' || k.startsWith('Elegíveis') || k.startsWith('Promoções') ? 40 : 14 }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Anúncios');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(camp), 'Campanhas');
+  XLSX.writeFile(wb, `promocoes_${(PR_F[PR.view.filter] || ['todos'])[0].replace(/[^\wÀ-ú]+/g, '_')}_${ecDay()}.xlsx`);
 }
 
 function orderStock(id, qty){
