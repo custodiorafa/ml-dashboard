@@ -3006,7 +3006,7 @@ async function ecBlingLoop(path, force, label) {
     const d = await blingApi(path + (force && first ? '?refresh=1' : ''));
     first = false;
     if (!d.partial) return d;
-    ecProgress(`${label}: ${d.stage === 'S' ? 'saldos ' + d.progress + '%' : d.stage === 'K' ? 'composição dos kits ' + d.progress + '%' : d.stage === 'P' ? 'pedidos ' + d.progress + '%' : d.stage === 'F' ? 'fornecedores' : 'lendo cadastro (' + (d.produtos || d.pedidos || 0) + ')'}`, d.progress || null);
+    ecProgress(`${label}: ${d.stage === 'S' ? 'saldos ' + d.progress + '%' : d.stage === 'K' ? 'composição dos kits ' + d.progress + '%' : d.stage === 'PF' ? 'fornecedores do cadastro' : d.stage === 'FN' ? 'nomes dos fornecedores' : d.stage === 'P' ? 'pedidos ' + d.progress + '%' : d.stage === 'F' ? 'fornecedores' : 'lendo cadastro (' + (d.produtos || d.pedidos || 0) + ')'}`, d.progress || null);
   }
   throw new Error(label + ': tempo esgotado');
 }
@@ -3316,7 +3316,10 @@ function ecCompute() {
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
       deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds) || full > 0, anuncioFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
       compra: cp,
-      fornecedor: cp?.fornNome || '', refForn: cp?.ref || '',
+      // fornecedor: cadastro do produto (padrão) é a fonte; último pedido só como reserva
+      fornecedor: (p.forn && p.forn.nome) || cp?.fornNome || '', refForn: (p.forn && p.forn.ref) || (!p.forn ? cp?.ref || '' : ''),
+      fornFonte: p.forn ? 'cadastro' : (cp && cp.fornNome ? 'pedido' : ''), fornQtd: p.forn ? p.forn.n : 0,
+      fornUltPedido: cp?.fornNome || '', fornDiverge: !!(p.forn && p.forn.id && cp && cp.forn && cp.forn !== p.forn.id),
       fullML, fullBling, mlInvs: m ? m.invs : [], mlOwn: m ? m.own : null, mlOwnIds: m ? m.ownIds : [],
     });
   }
@@ -3603,6 +3606,7 @@ const EC_FILTERS = {
   fullexc: { label: 'Full excessivo', fn: r => r.fullStatus === 'EXCESSIVO' },
   enviofull: { label: 'Enviar ao Full', fn: r => r.envioFull > 0, hidden: true },
   ativos: { label: 'Ativos', fn: r => r.ativo && r.relevante },
+  forndiv: { label: 'Fornecedor ≠ último pedido', fn: r => r.fornDiverge && r.relevante, hidden: true },
   fulldiv: { label: 'Divergência Full Bling × ML', fn: r => !r.isKit && r.concFull && r.concFull.st !== 'OK', hidden: true },
   comestoque: { label: 'Com estoque', fn: r => !r.isKit && r.total > 0 },
   semestoque: { label: 'Ativos sem estoque', fn: r => r.ativo && !r.isKit && r.total <= 0, hidden: true },
@@ -3959,7 +3963,7 @@ function ecMatrix(a) {
 const EC_COLS = [
   ['sku', 'SKU', r => `<span class="mono">${ecEsc(r.sku)}</span>`, 's'],
   ['nome', 'Descrição', r => `<span class="ec-desc" title="${ecEsc(r.nome)}">${ecEsc(r.nome)}</span>${r.isKit ? ' <span class="ec-tag">kit</span>' : r.kitFisico ? ' <span class="ec-tag">kit físico</span>' : ''}`, 's'],
-  ['fornecedor', 'Fornecedor / Ref.', r => r.fornecedor || r.refForn ? `<span class="ec-desc" style="max-width:200px" title="${ecEsc(r.fornecedor)}">${ecEsc(r.fornecedor || '—')}</span>${r.refForn ? `<div class="ec-sub" title="Referência do fornecedor">ref. ${ecEsc(r.refForn)}</div>` : ''}` : '<span class="ec-muted">—</span>', 's'],
+  ['fornecedor', 'Fornecedor / Ref.', r => r.fornecedor || r.refForn ? `<span class="ec-desc" style="max-width:200px" title="${ecEsc(r.fornecedor)}${r.fornQtd > 1 ? ' (padrão de ' + r.fornQtd + ' fornecedores)' : ''}">${ecEsc(r.fornecedor || '—')}</span>${r.fornDiverge ? ` <span class="c-orange" title="Último pedido foi de ${ecEsc(r.fornUltPedido)} — diferente do fornecedor padrão do cadastro">⚠</span>` : ''}<div class="ec-sub">${r.refForn ? 'ref. ' + ecEsc(r.refForn) : ''}${r.fornFonte === 'pedido' ? (r.refForn ? ' · ' : '') + 'últ. pedido' : ''}</div>` : '<span class="ec-muted">—</span>', 's'],
   ['ativo', 'Status', r => r.ativo ? 'Ativo' : '<span class="c-orange">Inativo</span>', 's'],
   ['curva', 'Curva', r => ecCurva(r.curva), 's'],
   ['matriz', 'Matriz', r => ecInt(r.matriz)], ['full', 'Full', r => r.temFull || r.full ? ecInt(r.full) : '—'], ['total', 'Total', r => `<b>${ecInt(r.total)}</b>`],
@@ -4036,7 +4040,7 @@ function ecExportCSV() {
     ['Cobertura dias', r => isFinite(r.cob) ? Math.round(r.cob) : ''], ['Cobertura Matriz', r => isFinite(r.cobMatriz) ? Math.round(r.cobMatriz) : ''], ['Cobertura Full', r => isFinite(r.cobFull) ? Math.round(r.cobFull) : ''],
     ['Lead time', r => r.lt], ['Estoque segurança', r => r.ss], ['Estoque projetado', r => Math.round(r.projetado)], ['Última venda', r => r.ultimaVenda || ''], ['Dias sem venda', r => r.diasSemVenda],
     ['Risco ruptura', r => r.risco], ['Excesso un', r => r.excessoUn], ['Excesso R$', r => r.excessoR.toFixed(2)], ['Compra sugerida', r => r.sugCompra], ['Comprar até', r => r.comprarAte || ''], ['Envio Full', r => r.envioFull], ['Recomendação', r => r.rec],
-    ['Última compra', r => r.compra?.ultData || ''], ['Qtd última compra', r => r.compra?.ultQtd || ''], ['Último custo', r => r.compra?.ultCusto || ''], ['Fornecedor', r => r.compra?.fornNome || r.compra?.forn || ''], ['Referência fornecedor', r => r.refForn]];
+    ['Última compra', r => r.compra?.ultData || ''], ['Qtd última compra', r => r.compra?.ultQtd || ''], ['Último custo', r => r.compra?.ultCusto || ''], ['Fornecedor (cadastro)', r => r.fornecedor], ['Referência fornecedor', r => r.refForn], ['Origem fornecedor', r => r.fornFonte], ['Fornecedor do último pedido', r => r.fornUltPedido]];
   (EC.bling?.depositos || []).forEach(d => cols.splice(7, 0, ['Dep. ' + d.nome, r => r.deps[d.id] ? r.deps[d.id][1] : 0]));
   const esc = v => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const csv = '﻿' + cols.map(c => c[0]).join(';') + '\n' + rs.map(r => cols.map(c => esc(typeof c[1](r) === 'number' ? String(c[1](r)).replace('.', ',') : c[1](r))).join(';')).join('\n');
