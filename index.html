@@ -3317,8 +3317,8 @@ function ecCompute() {
       deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds) || full > 0, anuncioFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
       compra: cp,
       // fornecedor: cadastro do produto (padrão) é a fonte; último pedido só como reserva
-      fornecedor: (p.forn && p.forn.nome) || cp?.fornNome || '', refForn: (p.forn && p.forn.ref) || (!p.forn ? cp?.ref || '' : ''),
-      fornFonte: p.forn ? 'cadastro' : (cp && cp.fornNome ? 'pedido' : ''), fornQtd: p.forn ? p.forn.n : 0,
+      fornecedor: (p.forn && p.forn.nome) || cp?.fornNome || '', refForn: (p.forn && p.forn.ref) || cp?.ref || '',
+      fornFonte: (p.forn && p.forn.nome) ? 'cadastro' : (cp && cp.fornNome ? 'pedido' : ''), fornQtd: p.forn ? p.forn.n : 0,
       fornUltPedido: cp?.fornNome || '', fornDiverge: !!(p.forn && p.forn.id && cp && cp.forn && cp.forn !== p.forn.id),
       fullML, fullBling, mlInvs: m ? m.invs : [], mlOwn: m ? m.own : null, mlOwnIds: m ? m.ownIds : [],
     });
