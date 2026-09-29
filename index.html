@@ -3319,7 +3319,10 @@ function ecCompute() {
       // fornecedor: cadastro do produto (padrão) é a fonte; último pedido só como reserva
       fornecedor: (p.forn && p.forn.nome) || cp?.fornNome || '', refForn: (p.forn && p.forn.ref) || cp?.ref || '',
       fornFonte: (p.forn && p.forn.nome) ? 'cadastro' : (cp && cp.fornNome ? 'pedido' : ''), fornQtd: p.forn ? p.forn.n : 0,
-      fornUltPedido: cp?.fornNome || '', fornDiverge: !!(p.forn && p.forn.id && cp && cp.forn && cp.forn !== p.forn.id),
+      fornUltPedido: cp?.fornNome || '',
+      // preço de compra = preço do fornecedor sem impostos/frete (cadastro do fornecedor padrão; reserva: último pedido)
+      precoCompra: (p.forn && p.forn.pc > 0) ? p.forn.pc : (cp && cp.ultCusto > 0 ? cp.ultCusto : 0),
+      precoCompraFonte: (p.forn && p.forn.pc > 0) ? 'cadastro' : (cp && cp.ultCusto > 0 ? 'pedido' : ''), fornDiverge: !!(p.forn && p.forn.id && cp && cp.forn && cp.forn !== p.forn.id),
       fullML, fullBling, mlInvs: m ? m.invs : [], mlOwn: m ? m.own : null, mlOwnIds: m ? m.ownIds : [],
     });
   }
@@ -3516,6 +3519,7 @@ function ecAggregate(rows) {
   a.nNaoPrecisa = rows.filter(r => r.relevante && (r.rec === EC_REC.ADEQUADO || r.rec === EC_REC.REDUZIR)).length;
   a.nBloqueado = rows.filter(r => r.bloqueado).length;
   a.valorSugerido = inv.filter(r => r.rec === EC_REC.COMPRAR || r.rec === EC_REC.PROGRAMAR).reduce((s, r) => s + r.sugCompra * r.custo, 0);
+  a.valorSugeridoCompra = inv.filter(r => r.rec === EC_REC.COMPRAR || r.rec === EC_REC.PROGRAMAR).reduce((s, r) => s + r.sugCompra * r.precoCompra, 0);
   a.valorComprarAgora = inv.filter(r => r.rec === EC_REC.COMPRAR).reduce((s, r) => s + r.sugCompra * r.custo, 0);
   a.nCompra15 = rows.filter(r => r.sugCompra > 0 && r.comprarAte && ecDaysBetween(ecDay(), r.comprarAte) <= 15 && !r.bloqueado).length;
 
@@ -3754,7 +3758,7 @@ function ecRenderDash() {
       ${ecCounter('Programar compra', a.nProgramar, 'aten', 'programar')}
       ${ecCounter('Não precisa comprar', a.nNaoPrecisa, 'ok', 'naoprecisa')}
       ${ecCounter('Compra bloqueada', a.nBloqueado, 'mon', 'bloqueado', 'sem giro / descontinuar')}
-      <div class="ec-counter ec-counter-total"><div class="ec-c-label">Valor sugerido — próximas compras</div><div class="ec-c-val">${ecMoneyK(a.valorSugerido)}</div><div class="ec-c-sub">a custo · comprar agora + programar</div></div>
+      <div class="ec-counter ec-counter-total"><div class="ec-c-label">Valor sugerido — próximas compras</div><div class="ec-c-val">${ecMoneyK(a.valorSugerido)}</div><div class="ec-c-sub">a custo · ${ecMoneyK(a.valorSugeridoCompra)} a preço de compra (fornecedor)</div></div>
     </div>
     <div class="ec-buy-grid">
       <div>
@@ -3968,7 +3972,8 @@ const EC_COLS = [
   ['curva', 'Curva', r => ecCurva(r.curva), 's'],
   ['matriz', 'Matriz', r => ecInt(r.matriz)], ['full', 'Full', r => r.temFull || r.full ? ecInt(r.full) : '—'], ['total', 'Total', r => `<b>${ecInt(r.total)}</b>`],
   ['transito', 'Trânsito', r => r.transito ? ecInt(r.transito) + (r.compra?.prevChegada ? `<div class="ec-sub">${ecFmtDate(r.compra.prevChegada)}</div>` : '') : '—'],
-  ['custo', 'Custo un.', r => r.custo ? ecMoney2(r.custo) : '—'], ['valorCusto', 'Estoque a custo', r => r.isKit ? '—' : ecMoney(r.valorCusto)],
+  ['custo', 'Custo un.', r => r.custo ? ecMoney2(r.custo) : '—'],
+  ['precoCompra', 'Preço compra', r => r.precoCompra ? `${ecMoney2(r.precoCompra)}<div class="ec-sub">${r.custo ? 'custo ' + (r.custo / r.precoCompra).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '×' : ''}${r.precoCompraFonte === 'pedido' ? (r.custo ? ' · ' : '') + 'últ. pedido' : ''}</div>` : '—'], ['valorCusto', 'Estoque a custo', r => r.isKit ? '—' : ecMoney(r.valorCusto)],
   ['preco', 'Preço venda', r => r.preco ? ecMoney2(r.preco) : '—'], ['valorVenda', 'Potencial venda', r => r.isKit ? '—' : ecMoney(r.valorVenda)],
   ['margemUn', 'Margem R$', r => r.margemUn != null ? ecMoney2(r.margemUn) : '—'], ['margemPct', 'Margem %', r => r.margemPct != null ? ecPct(r.margemPct, 1) : '—'],
   ['v7', 'Venda 7D', r => ecInt(r.v7)], ['v30', 'Venda 30D', r => ecInt(r.v30) + (r.vKit30 ? `<div class="ec-sub">${ecInt(r.vKit30)} via kits</div>` : '')], ['v60', 'Venda 60D', r => ecInt(r.v60)], ['v90', 'Venda 90D', r => ecInt(r.v90)],
@@ -4034,12 +4039,12 @@ function ecEditLT(sku) {
 function ecExportCSV() {
   const rs = ecFilteredRows();
   const cols = [['SKU', r => r.sku], ['Descrição', r => r.nome], ['Status', r => r.ativo ? 'Ativo' : 'Inativo'], ['Curva', r => r.curva], ['Estoque Matriz', r => r.matriz], ['Estoque Full', r => r.full], ['Estoque Total', r => r.total], ['Em trânsito', r => r.transito],
-    ['Custo unitário', r => r.custo], ['Estoque a custo', r => r.valorCusto], ['Preço venda', r => r.preco.toFixed(2)], ['Potencial venda', r => r.valorVenda.toFixed(2)], ['Margem R$', r => r.margemUn != null ? r.margemUn.toFixed(2) : ''], ['Margem %', r => r.margemPct != null ? (r.margemPct * 100).toFixed(1) : ''],
+    ['Custo unitário', r => r.custo], ['Preço de compra (fornecedor)', r => r.precoCompra], ['Origem preço compra', r => r.precoCompraFonte], ['Fator custo/compra', r => r.custo && r.precoCompra ? (r.custo / r.precoCompra).toFixed(2) : ''], ['Estoque a custo', r => r.valorCusto], ['Preço venda', r => r.preco.toFixed(2)], ['Potencial venda', r => r.valorVenda.toFixed(2)], ['Margem R$', r => r.margemUn != null ? r.margemUn.toFixed(2) : ''], ['Margem %', r => r.margemPct != null ? (r.margemPct * 100).toFixed(1) : ''],
     ['Venda 7D', r => r.v7], ['Venda 15D', r => r.v15], ['Venda 30D', r => r.v30], ['Venda 60D', r => r.v60], ['Venda 90D', r => r.v90], ['Consumo via kits 90D', r => r.vKit90], ['Média mensal', r => (r.v90 / 3).toFixed(1)], ['Tendência %', r => (r.tendPct * 100).toFixed(0)], ['Tendência', r => r.tend],
     ['Previsão 30d', r => r.prev.d30.toFixed(1)], ['Previsão 60d', r => r.prev.d60.toFixed(1)], ['Previsão 90d', r => r.prev.d90.toFixed(1)],
     ['Cobertura dias', r => isFinite(r.cob) ? Math.round(r.cob) : ''], ['Cobertura Matriz', r => isFinite(r.cobMatriz) ? Math.round(r.cobMatriz) : ''], ['Cobertura Full', r => isFinite(r.cobFull) ? Math.round(r.cobFull) : ''],
     ['Lead time', r => r.lt], ['Estoque segurança', r => r.ss], ['Estoque projetado', r => Math.round(r.projetado)], ['Última venda', r => r.ultimaVenda || ''], ['Dias sem venda', r => r.diasSemVenda],
-    ['Risco ruptura', r => r.risco], ['Excesso un', r => r.excessoUn], ['Excesso R$', r => r.excessoR.toFixed(2)], ['Compra sugerida', r => r.sugCompra], ['Comprar até', r => r.comprarAte || ''], ['Envio Full', r => r.envioFull], ['Recomendação', r => r.rec],
+    ['Risco ruptura', r => r.risco], ['Excesso un', r => r.excessoUn], ['Excesso R$', r => r.excessoR.toFixed(2)], ['Compra sugerida', r => r.sugCompra], ['Valor sugerido a preço de compra', r => (r.sugCompra * r.precoCompra).toFixed(2)], ['Valor sugerido a custo', r => (r.sugCompra * r.custo).toFixed(2)], ['Comprar até', r => r.comprarAte || ''], ['Envio Full', r => r.envioFull], ['Recomendação', r => r.rec],
     ['Última compra', r => r.compra?.ultData || ''], ['Qtd última compra', r => r.compra?.ultQtd || ''], ['Último custo', r => r.compra?.ultCusto || ''], ['Fornecedor (cadastro)', r => r.fornecedor], ['Referência fornecedor', r => r.refForn], ['Origem fornecedor', r => r.fornFonte], ['Fornecedor do último pedido', r => r.fornUltPedido]];
   (EC.bling?.depositos || []).forEach(d => cols.splice(7, 0, ['Dep. ' + d.nome, r => r.deps[d.id] ? r.deps[d.id][1] : 0]));
   const esc = v => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
