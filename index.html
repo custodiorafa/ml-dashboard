@@ -683,6 +683,12 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .ec-bling-conn input[type=text], .ec-bling-conn input[type=password] { flex:1; min-width:0; background:var(--bg2); border:1px solid var(--border2); color:var(--text); padding:6px 8px; border-radius:6px; font:12px var(--mono); }
 @media (max-width:900px) { .ec-bling-conn { grid-template-columns:1fr; } }
 
+.px-table th { position:sticky; top:0; background:var(--surface); z-index:2; cursor:pointer; white-space:nowrap; user-select:none; }
+.px-table th.sorted { color:var(--accent); }
+.px-table td { padding:8px 10px!important; font-size:12px!important; white-space:nowrap; vertical-align:top; }
+.px-table { min-width:1300px; }
+.px-table .ec-tag { white-space:nowrap; display:inline-block; margin:1px 0; }
+
 /* ═══ PROMOÇÕES & OFERTAS ═══ */
 .pr-guide { background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:12px; padding:12px 16px; font-size:13px; color:var(--text2); margin-bottom:16px; }
 .pr-guide b { color:var(--text); }
@@ -864,7 +870,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
   <!-- TABS -->
   <div class="tabs">
     <div class="tab active" onclick="goTab(this,'overview')">📊 Visão Geral</div>
-    <div class="tab" onclick="goTab(this,'pricing')">💰 Precificação</div>
+    <div class="tab" onclick="goTab(this,'pricing');pxOpen()">💰 Precificação</div>
     <div class="tab" onclick="goTab(this,'demand')">📈 Demanda & Trends</div>
     <div class="tab" onclick="goTab(this,'compras');ecOpen()">🧭 Estoque &amp; Compras</div>
     <div class="tab" onclick="goTab(this,'promo');prOpen()">🏷 Promoções &amp; Ofertas</div>
@@ -1061,96 +1067,19 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 
     <!-- ═══ PRICING ═══ -->
     <div class="page" id="page-pricing">
-      <div class="page-header">
+      <div class="page-header" style="flex-wrap:wrap;gap:12px">
         <div>
           <div class="page-title">Precificação <span>Dinâmica</span></div>
-          <div class="page-meta">Análise de posicionamento de preços vs mercado</div>
+          <div class="page-meta" id="px-meta">Seu preço × concorrentes do mesmo produto, com ação rápida em promoção</div>
         </div>
-        <button class="btn-sm btn-primary" onclick="loadPricingData()">↻ Atualizar Preços</button>
-      </div>
-
-      <div class="kpi-row">
-        <div class="kpi" style="--kpi-color:var(--accent)">
-          <div class="kpi-label">Preço Médio Seus Anúncios</div>
-          <div class="kpi-val" id="avg-price-mine">—</div>
-        </div>
-        <div class="kpi" style="--kpi-color:var(--green)">
-          <div class="kpi-label">Concorrentes Mais Baratos</div>
-          <div class="kpi-val" id="cheaper-count">—</div>
-          <div class="kpi-delta" id="cheaper-pct">anúncios monitorados</div>
-        </div>
-        <div class="kpi" style="--kpi-color:var(--orange)">
-          <div class="kpi-label">Oport. de Alta de Preço</div>
-          <div class="kpi-val" id="price-opp-count">—</div>
-          <div class="kpi-delta up">potencial de receita extra</div>
-        </div>
-        <div class="kpi" style="--kpi-color:var(--red)">
-          <div class="kpi-label">Alertas de Preço</div>
-          <div class="kpi-val" id="price-alerts">—</div>
-          <div class="kpi-delta down">requerem atenção</div>
+        <div class="ec-head-actions">
+          <button class="btn-sm" onclick="pxOpenCfg()">⚙ Regras</button>
+          <button class="btn-sm" onclick="pxExport()">⬇ Excel</button>
+          <button class="btn-sm btn-primary" onclick="pxLoad(true)">↻ Atualizar</button>
         </div>
       </div>
-
-      <div class="g32">
-        <div class="card">
-          <div class="card-head">
-            <span class="card-title">Análise de Preço por Produto</span>
-            <span class="badge b-blue">API: /items/{id}/prices</span>
-          </div>
-          <div class="card-body" style="padding:0">
-            <div class="scroll">
-              <table class="t">
-                <thead>
-                  <tr>
-                    <th>Produto</th>
-                    <th>Seu Preço</th>
-                    <th>Min Mercado</th>
-                    <th>Max Mercado</th>
-                    <th>Posição</th>
-                    <th>Ação Sugerida</th>
-                  </tr>
-                </thead>
-                <tbody id="pricing-tbody"></tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-head"><span class="card-title">Promoções Ativas</span><span class="badge b-yellow">API: /seller-promotions</span></div>
-          <div class="card-body" id="promos-body">
-            <div class="c-muted" style="text-align:center;padding:20px;font-size:13px">Carregando promoções...</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-head">
-          <span class="card-title">Histórico de Preços — Simulação de Demanda</span>
-        </div>
-        <div class="card-body" id="price-history-chart">
-          <svg width="100%" height="100" viewBox="0 0 800 100" preserveAspectRatio="none">
-            <defs>
-              <linearGradient id="gBlue" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stop-color="#3483fa" stop-opacity="0.25"/>
-                <stop offset="100%" stop-color="#3483fa" stop-opacity="0"/>
-              </linearGradient>
-              <linearGradient id="gGreen" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stop-color="#00d4a1" stop-opacity="0.2"/>
-                <stop offset="100%" stop-color="#00d4a1" stop-opacity="0"/>
-              </linearGradient>
-            </defs>
-            <path d="M0,60 C100,55 160,70 250,58 C340,46 400,75 480,60 C560,45 640,70 800,55 L800,100 L0,100Z" fill="url(#gGreen)"/>
-            <path d="M0,60 C100,55 160,70 250,58 C340,46 400,75 480,60 C560,45 640,70 800,55" fill="none" stroke="#00d4a1" stroke-width="2" stroke-dasharray="5,3" opacity="0.6"/>
-            <path d="M0,70 C100,65 160,78 250,68 C340,58 400,80 480,68 C560,56 640,75 800,62 L800,100 L0,100Z" fill="url(#gBlue)"/>
-            <path d="M0,70 C100,65 160,78 250,68 C340,58 400,80 480,68 C560,56 640,75 800,62" fill="none" stroke="#3483fa" stroke-width="2"/>
-            <text x="10" y="18" fill="#00d4a1" font-size="10" font-family="IBM Plex Mono">— Mercado Médio</text>
-            <text x="130" y="18" fill="#3483fa" font-size="10" font-family="IBM Plex Mono">— Seus Preços</text>
-          </svg>
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);font-family:var(--mono);margin-top:4px">
-            <span>Jan</span><span>Fev</span><span>Mar</span><span>Abr</span><span>Mai</span><span>Jun</span>
-          </div>
-        </div>
-      </div>
+      <div class="ec-progress" id="px-progress"><span class="ec-prog-msg">Carregando…</span><div class="ec-prog-trk"><div class="ec-prog-fill"></div></div></div>
+      <div id="px-body"><div class="card"><div class="card-body" style="text-align:center;padding:40px;color:var(--text2)">Abra esta aba para comparar seus preços com os concorrentes.</div></div></div>
     </div>
 
     <!-- ═══ DEMAND & TRENDS ═══ -->
@@ -1958,7 +1887,6 @@ async function startApp(){
 async function renderAll(){
   renderTopBar();
   await renderOverview();
-  loadPricingData();
   loadTrends();
   loadCompetitorsData();
   renderAlerts();
@@ -2228,90 +2156,6 @@ function renderPriceDist(items){
 // ════════════════════════════════════════════
 // PRICING — tempo real via busca pública ML
 // ════════════════════════════════════════════
-async function loadPricingData(){
-  const items = state.isDemo ? demoItems() : state.items;
-  if(!items.length){ document.getElementById('pricing-tbody').innerHTML='<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--muted)">Nenhum anúncio para analisar</td></tr>'; return; }
-
-  // Atualiza label para deixar claro que é tempo real
-  document.getElementById('pricing-tbody').innerHTML='<tr><td colspan="6" style="padding:16px;text-align:center;color:var(--muted)">🔍 Buscando preços em tempo real no ML...</td></tr>';
-
-  const results = [];
-  // Analisa até 15 itens — busca pública tempo real
-  for(const it of items.slice(0,15)){
-    let mktMin = null;
-        let mktMax = null;
-        let mktCount = 0;
-        if(state.isDemo){
-                mktMin = it.price * 0.75 + Math.random()*20;
-                mktMax = it.price * 1.35 + Math.random()*50;
-        } else {
-      // Busca pelo título + categoria para mais precisão
-      const q = it.title.split(' ').slice(0,4).join(' ');
-      const search = await mlGetPublic(`/sites/${state.site}/search?q=${encodeURIComponent(q)}&category=${it.category_id||''}&limit=20`);
-      if(search && search.results && search.results.length > 0){
-        // Filtra só anúncios ativos e em condição similar
-        const prices = search.results
-          .filter(r=>r.condition===it.condition && r.seller?.id != state.sellerId)
-          .map(r=>r.price).filter(p=>p>0).sort((a,b)=>a-b);
-        if(prices.length>0){
-          mktMin=prices[0];
-          mktMax=prices[prices.length-1];
-          mktCount=prices.length;
-        }
-      }
-          await new Promise(res=>setTimeout(res, 350));
-    }
-    results.push({ ...it, mktMin, mktMax, mktCount, hasMarket: mktMin !== null });
-  }
-
-  // KPIs
-  const avgMine = results.reduce((s,r)=>s+r.price,0)/results.length;
-  document.getElementById('avg-price-mine').textContent = 'R$'+Math.round(avgMine);
-const withMarket = results.filter(r=>r.hasMarket);
-  const cheaper = withMarket.filter(r=>r.mktMin<r.price).length;
-  document.getElementById('cheaper-count').textContent = cheaper;
-  document.getElementById('cheaper-pct').textContent = `de ${withMarket.length} com dados de mercado`;
-  const opps = withMarket.filter(r=>r.price < r.mktMin*0.95).length;
-  document.getElementById('price-opp-count').textContent = opps;
-  document.getElementById('price-alerts').textContent = cheaper+opps;
-
-  // Table
-  document.getElementById('pricing-tbody').innerHTML = results.map(r=>{
-    const pos = !r.hasMarket ? 'Sem dados' : r.price<=r.mktMin*1.05 ? 'Mais barato' : r.price<=r.mktMax*0.85 ? 'Competitivo' : 'Caro';
-    const posClass = pos==='Sem dados'?'b-muted':pos==='Mais barato'?'b-green':pos==='Competitivo'?'b-blue':'b-red';
-    const action = pos==='Caro'
-      ? `<span class="c-red" style="font-size:11px">↓ Reduzir</span>`
-      : pos==='Mais barato'
-      ? `<span class="c-orange" style="font-size:11px">↑ Testar alta</span>`
-      : `<span class="c-green" style="font-size:11px">✓ Manter</span>`;
-    return `<tr>
-      <td class="fw6" style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r.title}">${r.title}</td>
-      <td class="mono c-blue">R$${fmt(r.price)}</td>
-      <td class="mono c-green">${r.hasMarket ? 'R$'+fmt(r.mktMin) : '<span class="c-muted" style="font-size:11px">indisponível</span>'}</td>
-      <td class="mono c-muted">${r.hasMarket ? 'R$'+fmt(r.mktMax) : '<span class="c-muted" style="font-size:11px">indisponível</span>'}</td>
-      <td><span class="badge ${posClass}">${pos}</span></td>
-      <td>${action}</td>
-    </tr>`;
-  }).join('');
-
-  // Promos
-  let promosHtml = '';
-  if(!state.isDemo){
-    const promos = await mlGet(`/seller-promotions/users/${state.sellerId}?limit=5`);
-    if(promos && promos.results && promos.results.length>0){
-      promosHtml = promos.results.map(p=>`
-        <div style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-          <div><div style="font-size:13px;font-weight:600">${p.name||'Promoção'}</div><div style="font-size:11px;color:var(--muted);font-family:var(--mono)">${p.type||''} · ${p.status||''}</div></div>
-          <span class="badge b-yellow">${p.discount_percentage?p.discount_percentage+'%':'—'} off</span>
-        </div>`).join('');
-    }
-  }
-  if(!promosHtml){
-    promosHtml='<div style="font-size:13px;color:var(--muted);text-align:center;padding:16px">Sem promoções ativas no momento</div>';
-  }
-  document.getElementById('promos-body').innerHTML = promosHtml;
-}
-
 // ════════════════════════════════════════════
 // TRENDS — por categoria real + filtros interativos
 // ════════════════════════════════════════════
@@ -4118,6 +3962,508 @@ function ecExportConc() {
   const esc = x => { const s = String(x ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const csv = '﻿' + cols.map(c => c[0]).join(';') + '\n' + rs.map(r => cols.map(c => { const v = c[1](r); return esc(typeof v === 'number' ? String(v).replace('.', ',') : v); }).join(';')).join('\n');
   const l = document.createElement('a'); l.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); l.download = `inventario_full_bling_x_ml_${ecDay()}.csv`; l.click();
+}
+
+// ════════════════════════════════════════════════════════════════
+// PRECIFICAÇÃO DINÂMICA — paralelo com concorrentes + ação rápida em promoção
+// Camada 1: catálogo (price_to_win + ofertas do mesmo produto de catálogo)
+// Camada 2: referência vinculada (produto de catálogo escolhido ou preço observado manual)
+// Camada 3: promoções elegíveis + margem com custo do Bling → aderir direto pela API
+// ════════════════════════════════════════════════════════════════
+const PX = { loading: false, data: null, rows: [], agg: null, view: { filter: 'reagir', q: '', page: 0, sort: { k: 'prio', d: 1 } }, cur: null };
+const PX_CACHE_KEY = 'px_cache_v1', PX_LINKS_KEY = 'px_links_v1', PX_HIST_KEY = 'px_hist_v1', PX_CFG_KEY = 'px_cfg_v1';
+const PX_DEFAULT_CFG = { pisoPct: 10, abaixoR: 0, tolPct: 1, ttlMin: 60 };
+const PX_ST = {
+  perdendo: ['Perdendo', 'crit'], empatado: ['Empatado', 'mon'], ganhando: ['Ganhando', 'ok'], semref: ['Sem referência', 'neutral'],
+};
+
+function pxCfg() { try { return { ...PX_DEFAULT_CFG, ...JSON.parse(localStorage.getItem(PX_CFG_KEY) || '{}') }; } catch (e) { return { ...PX_DEFAULT_CFG }; } }
+function pxLinks() { try { return JSON.parse(localStorage.getItem(PX_LINKS_KEY) || '{}'); } catch (e) { return {}; } }
+function pxSaveLinks(l) { try { localStorage.setItem(PX_LINKS_KEY, JSON.stringify(l)); } catch (e) { showToast('Não foi possível salvar o vínculo neste navegador', 'err'); } }
+function pxHist() { try { return JSON.parse(localStorage.getItem(PX_HIST_KEY) || '{}'); } catch (e) { return {}; } }
+function pxProgress(msg, pct) {
+  const el = document.getElementById('px-progress'); if (!el) return;
+  if (msg == null) { el.style.display = 'none'; return; }
+  el.style.display = 'flex'; el.querySelector('.ec-prog-msg').textContent = msg;
+  const f = el.querySelector('.ec-prog-fill'); f.style.width = (pct == null ? 100 : Math.max(3, Math.min(100, pct))) + '%'; f.classList.toggle('ec-indet', pct == null);
+}
+const pxM2 = v => (v == null || !isFinite(v)) ? '—' : 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pxPctS = v => (v == null || !isFinite(v)) ? '—' : (v > 0 ? '+' : '') + (v * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%';
+const pxAge = ts => { if (!ts) return ''; const d = Math.floor((Date.now() - ts) / 864e5); return d <= 0 ? 'hoje' : d === 1 ? 'ontem' : `há ${d} dias`; };
+
+// ───────── carga ─────────
+function pxOpen() {
+  if (state.isDemo) { document.getElementById('px-body').innerHTML = '<div class="card"><div class="card-body ec-muted">Conecte sua conta do Mercado Livre para usar a precificação.</div></div>'; return; }
+  if (!PX.data && !PX.loading) pxLoad(false); else if (PX.data) { pxCompute(); pxRender(); }
+  // custo, tarifa e curva vêm do módulo Estoque & Compras (Bling)
+  try {
+    const bc = blingCfg();
+    if (typeof EC !== 'undefined' && !EC.rows.length && !EC.loading && bc.url && bc.key) ecLoad(false).then(() => { if (PX.data) { pxCompute(); pxRender(); } });
+  } catch (e) {}
+}
+function pxScope() {
+  const links = pxLinks();
+  return (state.items || []).filter(it => it.status === 'active' && (it.catalog_product_id || it.catalog_listing || links[it.id]));
+}
+async function pxLoad(force, onlyIds) {
+  if (PX.loading) return;
+  PX.loading = true;
+  try {
+    let cache = null;
+    try { cache = JSON.parse(localStorage.getItem(PX_CACHE_KEY) || 'null'); } catch (e) {}
+    const fresh = cache && cache.seller === state.sellerId && Date.now() - cache.at < pxCfg().ttlMin * 60e3;
+    if (!force && !onlyIds && fresh) PX.data = cache;
+    else {
+      const base = PX.data && PX.data.seller === state.sellerId ? PX.data : (cache && cache.seller === state.sellerId) ? cache : { seller: state.sellerId, items: {}, products: {} };
+      PX.data = await pxFetch(base, onlyIds);
+    }
+    pxSnapshot(); pxCompute(); pxRender();
+  } catch (e) {
+    document.getElementById('px-body').innerHTML = `<div class="card"><div class="card-body" style="color:var(--orange)">Erro ao carregar preços: ${ecEsc(e.message)}</div></div>`;
+  } finally { PX.loading = false; pxProgress(null); }
+}
+async function pxFetch(base, onlyIds) {
+  const links = pxLinks();
+  let scope = pxScope();
+  if (onlyIds) scope = scope.filter(it => onlyIds.includes(it.id));
+  const D = { at: onlyIds ? base.at || Date.now() : Date.now(), seller: state.sellerId, items: { ...(base.items || {}) }, products: { ...(base.products || {}) } };
+  if (!onlyIds) D.items = {};
+  const pidsNeeded = new Set();
+  scope.forEach(it => { const p = (links[it.id] && links[it.id].pid) || it.catalog_product_id; if (p) pidsNeeded.add(p); });
+  if (!onlyIds) Object.keys(D.products).forEach(k => { if (!pidsNeeded.has(k)) delete D.products[k]; });
+  const pids = [...pidsNeeded];
+  let done = 0; const total = scope.length + pids.length;
+  const tick = () => { done++; pxProgress(`Lendo preços e concorrentes: ${done}/${total}`, (done / total) * 100); };
+  pxProgress(`Lendo preços e concorrentes: 0/${total}`, 0);
+  // ofertas de cada produto de catálogo (todos os vendedores do mesmo produto)
+  await prPool(pids, 8, async pid => {
+    const r = await prGet(`/products/${pid}/items?limit=50`);
+    const offers = (r && r.results || []).map(o => ({ i: o.item_id, s: o.seller_id, p: o.price, op: o.original_price || null, f: o.shipping?.logistic_type === 'fulfillment' ? 1 : 0, fs: o.shipping?.free_shipping ? 1 : 0, lt: o.listing_type_id || '', c: o.condition || '' }));
+    D.products[pid] = { at: Date.now(), ok: !!r, offers, total: r?.paging?.total ?? offers.length };
+    tick();
+  });
+  // por anúncio: preço de venda real, price_to_win (catálogo) e promoções elegíveis
+  await prPool(scope, 8, async it => {
+    const [sale, ptw, promos] = await Promise.all([
+      prGet(`/items/${it.id}/sale_price?context=channel_marketplace`),
+      it.catalog_listing ? prGet(`/items/${it.id}/price_to_win?siteId=MLB&version=v2`) : Promise.resolve(null),
+      prGet(`/seller-promotions/items/${it.id}?app_version=v2`),
+    ]);
+    D.items[it.id] = {
+      at: Date.now(),
+      sale: sale && sale.amount ? [sale.amount, sale.regular_amount || null] : null,
+      ptw: ptw ? { st: ptw.status, ptw: ptw.price_to_win, cur: ptw.current_price, win: ptw.winner ? [ptw.winner.item_id, ptw.winner.price] : null, share: ptw.competitors_sharing_first_place || 0, vs: ptw.visit_share || '', why: (ptw.reason || []).slice(0, 4), opp: (ptw.boosts || []).filter(b => b.status === 'opportunity').map(b => b.description || b.id) } : null,
+      promos: Array.isArray(promos) ? promos.filter(p => p.status !== 'finished').map(p => ({ id: p.id || '', t: p.type, st: p.status, n: p.name || '', p: p.price || 0, op: p.original_price || null, mn: p.min_discounted_price ?? null, mx: p.max_discounted_price ?? null, sg: p.suggested_discounted_price ?? null, of: p.offer_id || p.ref_id || null, pct: p.fixed_percentage ?? null, s: p.start_date || null, e: p.finish_date || null })) : null,
+    };
+    tick();
+  });
+  try { localStorage.setItem(PX_CACHE_KEY, JSON.stringify(D)); } catch (e) { console.warn('px cache', e); }
+  return D;
+}
+
+// histórico diário local do menor preço concorrente (para detectar quem baixou)
+function pxSnapshot() {
+  if (!PX.data) return;
+  const h = pxHist(), day = ecDay(), links = pxLinks();
+  (state.items || []).forEach(it => {
+    const ref = pxRef(it, links); if (!ref || ref.min == null) return;
+    const e = h[it.id] = h[it.id] || {}; e[day] = +ref.min.toFixed(2);
+    const ks = Object.keys(e).sort(); while (ks.length > 60) delete e[ks.shift()];
+  });
+  try { localStorage.setItem(PX_HIST_KEY, JSON.stringify(h)); } catch (e) {}
+}
+
+// referência de concorrência de um anúncio
+function pxRef(it, links) {
+  const D = PX.data; const x = D.items[it.id];
+  const link = links[it.id] || null;
+  const pid = (link && link.pid) || it.catalog_product_id || null;
+  const prod = pid ? D.products[pid] : null;
+  const myId = String(state.sellerId);
+  const offers = prod ? prod.offers.filter(o => String(o.s) !== myId && o.p > 0).sort((a, b) => a.p - b.p) : [];
+  const mine = prod ? prod.offers.filter(o => String(o.s) === myId) : [];
+  let min = offers.length ? offers[0].p : null, fonte = offers.length ? (link && link.pid ? 'vinculado' : 'catálogo') : null, minOffer = offers[0] || null;
+  const ptw = x && x.ptw;
+  if (ptw && ptw.win && ptw.win[0] !== it.id && ptw.win[1] > 0 && (min == null || ptw.win[1] < min)) { min = ptw.win[1]; fonte = 'catálogo'; minOffer = { i: ptw.win[0], p: ptw.win[1] }; }
+  if (min == null && link && link.manual && link.manual.p > 0) { min = link.manual.p; fonte = 'manual'; }
+  return { pid, link, offers, mine, min, fonte, minOffer, nOffers: offers.length, prodOk: prod ? prod.ok : null };
+}
+
+// ───────── cálculo ─────────
+function pxCompute() {
+  const D = PX.data; if (!D) return;
+  const cfg = pxCfg(), links = pxLinks(), hist = pxHist();
+  const ecCfgV = typeof ecCfg === 'function' ? ecCfg() : { impostoPct: 0 };
+  const impPct = (ecCfgV.impostoPct || 0) / 100;
+  const ecBySku = {}; (typeof EC !== 'undefined' ? EC.rows : []).forEach(r => { ecBySku[r.sku] = r; });
+  PX.hasEC = Object.keys(ecBySku).length > 0;
+  const today = ecDay(), d1 = ecDay(1), d7 = ecDay(7);
+  const rows = [];
+  (state.items || []).filter(it => it.status === 'active').forEach(it => {
+    const x = D.items[it.id];
+    const inScope = !!x;
+    const skus = mlItemSkus(it); const sku = skus[0] || '';
+    const ec = ecBySku[sku] || null;
+    const my = x && x.sale ? x.sale[0] : it.price;
+    const regular = x && x.sale && x.sale[1] ? x.sale[1] : (it.original_price || it.price);
+    const ref = inScope ? pxRef(it, links) : { min: null, offers: [], nOffers: 0, fonte: null, link: links[it.id] || null, pid: it.catalog_product_id || null };
+    const ptw = x && x.ptw;
+    // situação
+    let st = 'semref';
+    if (ptw && (ptw.st === 'winning')) st = 'ganhando';
+    else if (ptw && ptw.st === 'sharing_first_place') st = 'empatado';
+    else if (ref.min != null) {
+      const g = my / ref.min - 1;
+      st = g > cfg.tolPct / 100 ? 'perdendo' : g >= -cfg.tolPct / 100 ? 'empatado' : 'ganhando';
+    } else if (ptw && ptw.st === 'competing') st = 'perdendo';
+    const gap = ref.min != null && ref.min > 0 ? my / ref.min - 1 : null;
+    // preço-alvo: price_to_win do catálogo; senão, igualar o menor concorrente (menos o ajuste configurado)
+    let alvo = null;
+    if (st === 'perdendo' || st === 'empatado') {
+      if (ptw && ptw.ptw > 0 && ptw.st !== 'winning') alvo = ptw.ptw;
+      else if (ref.min != null) alvo = Math.max(0.01, +(ref.min - (cfg.abaixoR || 0)).toFixed(2));
+    }
+    // margem (custo e tarifa do Bling/Estoque & Compras)
+    const custo = ec && ec.custo > 0 ? ec.custo : 0;
+    const feePct = ec && ec.preco > 0 && ec.tarifaUn > 0 ? ec.tarifaUn / ec.preco : 0.16;
+    const marg = p => custo > 0 && p > 0 ? (p * (1 - feePct - impPct) - custo) / p : null;
+    const denom = 1 - feePct - impPct - cfg.pisoPct / 100;
+    const piso = custo > 0 && denom > 0 ? +(custo / denom).toFixed(2) : null;
+    const margAtual = marg(my), margAlvo = alvo != null ? marg(alvo) : null;
+    const podeReagir = alvo != null && (piso == null ? null : alvo >= piso);
+    // promoções
+    const ps = x && x.promos ? x.promos : [];
+    const ativas = ps.filter(p => p.st === 'started'), cands = ps.filter(p => p.st === 'candidate');
+    const candPreco = cands.filter(p => p.t !== 'SELLER_COUPON_CAMPAIGN');
+    // melhor caminho de promoção para chegar no alvo
+    let caminho = null;
+    if (alvo != null && alvo < my) {
+      const fit = candPreco.map(p => {
+        const lo = p.mn != null ? p.mn : 0, hi = p.mx != null ? p.mx : (p.p > 0 ? p.p : my);
+        const fixo = ['SMART', 'PRICE_MATCHING', 'PRICE_MATCHING_MELI_ALL', 'UNHEALTHY_STOCK', 'MARKETPLACE_CAMPAIGN'].includes(p.t);
+        const preco = fixo ? (p.p || null) : Math.min(hi, Math.max(lo, alvo));
+        return { p, preco, fixo, atinge: preco != null && preco <= alvo + 0.005 };
+      }).filter(f => f.preco != null && f.preco < my).sort((a, b) => (b.atinge - a.atinge) || (b.preco - a.preco));
+      caminho = fit[0] || null;
+    }
+    // variação do concorrente
+    const h = hist[it.id] || {};
+    const hPrev = h[d1] != null ? h[d1] : null;
+    const h7 = h[d7] != null ? h[d7] : Object.entries(h).filter(([k]) => k < today).sort().map(e => e[1])[0] ?? null;
+    const var1 = ref.min != null && hPrev ? ref.min / hPrev - 1 : null;
+    const var7 = ref.min != null && h7 ? ref.min / h7 - 1 : null;
+    const baixou = var1 != null && var1 <= -0.02;
+    // ação sugerida
+    let acao = '', tone = 'neutral', rk = 9;
+    if (!inScope) { acao = 'Vincular referência de concorrente'; rk = 8; }
+    else if (st === 'semref') { acao = ref.prodOk === false ? 'Catálogo sem ofertas: vincular outra referência' : 'Sem concorrente no mesmo produto: vincular referência'; rk = 7; }
+    else if (st === 'perdendo' && podeReagir === false) { acao = `Não baixar: alvo ${pxM2(alvo)} fica abaixo do piso ${pxM2(piso)}`; tone = 'aten'; rk = 3; }
+    else if (st === 'perdendo' && caminho && caminho.atinge) { acao = `Aderir a ${prType(caminho.p.t).s} a ${pxM2(caminho.preco)}`; tone = 'crit'; rk = 0; }
+    else if (st === 'perdendo' && caminho) { acao = `${prType(caminho.p.t).s} leva a ${pxM2(caminho.preco)} (alvo ${pxM2(alvo)})`; tone = 'crit'; rk = 1; }
+    else if (st === 'perdendo') { acao = `Criar desconto próprio a ${pxM2(alvo)}`; tone = 'crit'; rk = 2; }
+    else if (st === 'empatado') { acao = ptw && ptw.opp && ptw.opp.length ? 'Desempatar sem baixar preço: ' + ptw.opp.slice(0, 2).join(', ') : 'Empatado: acompanhar'; tone = 'mon'; rk = 4; }
+    else if (st === 'ganhando' && gap != null && gap < -0.08) { acao = `Espaço para subir: concorrente a ${pxM2(ref.min)}`; tone = 'ok'; rk = 5; }
+    else if (st === 'ganhando') { acao = 'Manter'; tone = 'ok'; rk = 6; }
+    if (piso == null && (st === 'perdendo' || st === 'empatado') && inScope) acao += ' · sem custo no Bling';
+    rows.push({
+      id: it.id, it, title: it.title || '', sku, link: it.permalink, catalogo: !!it.catalog_listing, full: it.shipping?.logistic_type === 'fulfillment', inScope,
+      my, regular, ref, ptw, st, gap, alvo, custo, feePct, piso, margAtual, margAlvo, podeReagir, ativas, cands, candPreco, caminho,
+      var1, var7, baixou, acao, tone, curva: ec ? ec.curva : null,
+      prio: rk * 1e6 - (ec && ec.curva === 'A' ? 3e5 : ec && ec.curva === 'B' ? 1e5 : 0) - Math.min(9e4, Math.abs(gap || 0) * 1e5),
+    });
+  });
+  PX.rows = rows;
+  const n = f => rows.filter(f).length;
+  PX.agg = {
+    total: rows.length, scope: n(r => r.inScope), comRef: n(r => r.ref.min != null),
+    perdendo: n(r => r.st === 'perdendo'), empatado: n(r => r.st === 'empatado'), ganhando: n(r => r.st === 'ganhando'), semref: n(r => r.st === 'semref'),
+    reagir: n(PX_F.reagir[1]), naoDa: n(PX_F.naoda[1]), baixou: n(r => r.baixou), subir: n(PX_F.subir[1]), catalogo: n(r => r.catalogo),
+  };
+}
+const PX_F = {
+  reagir: ['🎯 Reagir já', r => r.st === 'perdendo' && r.podeReagir !== false && r.alvo != null],
+  perdendo: ['Perdendo', r => r.st === 'perdendo'],
+  naoda: ['Abaixo do piso', r => r.st === 'perdendo' && r.podeReagir === false],
+  empatado: ['Empatado', r => r.st === 'empatado'],
+  ganhando: ['Ganhando', r => r.st === 'ganhando'],
+  subir: ['Espaço para subir', r => r.st === 'ganhando' && r.gap != null && r.gap < -0.08],
+  baixou: ['Concorrente baixou (24h)', r => r.baixou],
+  elegivel: ['Com promoção elegível', r => r.candPreco.length > 0 && r.inScope],
+  catalogo: ['Anúncios de catálogo', r => r.catalogo],
+  vinculados: ['Referência vinculada', r => !!r.ref.link],
+  semref: ['Sem referência', r => r.st === 'semref'],
+  todos: ['Todos', r => true],
+};
+
+// ───────── render ─────────
+function pxRender() {
+  if (!PX.agg) return;
+  const a = PX.agg, cfg = pxCfg();
+  document.getElementById('px-meta').textContent = `Atualizado ${new Date(PX.data.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · ${a.scope} de ${a.total} anúncios com referência de concorrente · piso de margem ${cfg.pisoPct}%`;
+  const kpi = (label, v, f, tone, sub) => `<button class="pr-kpi" onclick="pxSetFilter('${f}')"><div class="ec-c-label"><span class="ec-dot" style="background:${EC_STATUS[tone]}"></span>${ecEsc(label)}</div><div class="ec-c-val">${ecInt(v)}</div><div class="ec-c-sub">${sub}</div></button>`;
+  document.getElementById('px-body').innerHTML = `
+  <div class="pr-guide"><b>Como usar:</b> comece por <b>🎯 Reagir já</b>: anúncios mais caros que o concorrente em que o preço-alvo ainda respeita o piso de margem. Clique em <b>Agir</b> para ver os concorrentes e aderir à promoção sugerida.
+    <details><summary>De onde vêm os preços</summary><div class="pr-gloss">
+      <div><b>Catálogo</b> — anúncios no catálogo usam o <i>preço para ganhar</i> do ML e o preço do anúncio que está ganhando.</div>
+      <div><b>Mesmo produto</b> — anúncios associados a um produto de catálogo comparam com todas as ofertas desse produto.</div>
+      <div><b>Vinculado</b> — você escolhe o produto de catálogo equivalente (botão Agir → Referência).</div>
+      <div><b>Manual</b> — preço observado que você digita quando o concorrente não está em catálogo. O ML não libera a leitura de anúncios de outros vendedores.</div>
+      <div><b>Piso</b> — menor preço que mantém a margem mínima: custo ÷ (1 − tarifa − impostos − margem mínima). Custo e tarifa vêm do Estoque &amp; Compras (Bling).</div>
+    </div></details></div>
+  <div class="pr-kpis">
+    ${kpi('Reagir já', a.reagir, 'reagir', 'crit', 'mais caro e cabe na margem')}
+    ${kpi('Perdendo', a.perdendo, 'perdendo', 'aten', `${a.naoDa} abaixo do piso`)}
+    ${kpi('Empatado', a.empatado, 'empatado', 'mon', 'dividindo o 1º lugar')}
+    ${kpi('Ganhando', a.ganhando, 'ganhando', 'ok', `${a.subir} com espaço p/ subir`)}
+    ${kpi('Concorrente baixou', a.baixou, 'baixou', 'crit', 'queda ≥ 2% desde ontem')}
+    ${kpi('Catálogo', a.catalogo, 'catalogo', 'neutral', 'com preço para ganhar')}
+    ${kpi('Sem referência', a.total - a.comRef, 'semref', 'neutral', 'vincular concorrente')}
+  </div>
+  ${PX.hasEC ? '' : `<div class="pr-guide" style="border-left-color:var(--orange)">${typeof EC !== 'undefined' && EC.loading ? '⏳ Carregando custo e tarifa do Bling para calcular margem e piso…' : 'Sem dados do Bling: margem e piso não entram no cálculo. Conecte o Bling em Estoque &amp; Compras.'}</div>`}
+  <div class="card"><div id="px-table"></div></div>
+  <div class="ec-modal" id="px-modal" onclick="if(event.target===this)pxClose()"></div>
+  <div class="ec-modal" id="px-cfg" onclick="if(event.target===this)this.style.display='none'"></div>`;
+  pxRenderTable();
+}
+function pxRows() {
+  const v = PX.view, f = (PX_F[v.filter] || PX_F.todos)[1], q = v.q.trim().toLowerCase();
+  let rs = PX.rows.filter(f);
+  if (q) rs = rs.filter(r => (r.title + ' ' + r.sku + ' ' + r.id).toLowerCase().includes(q));
+  const k = v.sort.k, d = v.sort.d;
+  const val = r => k === 'prio' ? r.prio : k === 'gap' ? (r.gap ?? -9) : k === 'my' ? r.my : k === 'ref' ? (r.ref.min ?? 0) : k === 'marg' ? (r.margAlvo ?? r.margAtual ?? -9) : k === 'var' ? (r.var1 ?? 0) : r.title;
+  return rs.sort((x, y) => { const A = val(x), B = val(y); return (A < B ? -1 : A > B ? 1 : 0) * d; });
+}
+function pxRenderTable() {
+  const el = document.getElementById('px-table'); if (!el) return;
+  const v = PX.view, rs = pxRows(), per = 50, pages = Math.max(1, Math.ceil(rs.length / per));
+  if (v.page >= pages) v.page = 0;
+  const pg = rs.slice(v.page * per, v.page * per + per);
+  const th = (k, l, cls = '') => `<th class="${cls} ${v.sort.k === k ? 'sorted' : ''}" onclick="pxSort('${k}')">${l}${v.sort.k === k ? (v.sort.d > 0 ? ' ▲' : ' ▼') : ''}</th>`;
+  el.innerHTML = `
+  <div class="ec-toolbar">
+    <div class="ec-chips">${Object.entries(PX_F).map(([k, f]) => `<button class="ec-chip ${k === v.filter ? 'active' : ''}" onclick="pxSetFilter('${k}')">${ecEsc(f[0])} <span>${PX.rows.filter(f[1]).length}</span></button>`).join('')}</div>
+    <div class="ec-tools"><input id="px-q" placeholder="Buscar por título, SKU ou MLB…" value="${ecEsc(v.q)}" oninput="PX.view.q=this.value;PX.view.page=0;pxRenderTable();document.getElementById('px-q').focus();document.getElementById('px-q').setSelectionRange(this.value.length,this.value.length)"></div>
+  </div>
+  <div class="ec-table-wrap"><table class="t ec-t px-table"><thead><tr>
+    ${th('title', 'Anúncio')}${th('my', 'Seu preço', 'r')}${th('ref', 'Menor concorrente', 'r')}${th('gap', 'Diferença', 'r')}<th>Situação</th><th class="r">Preço-alvo</th>${th('marg', 'Margem no alvo', 'r')}<th class="r">Piso</th>${th('var', 'Conc. 24h / 7d', 'r')}<th>Promoções elegíveis</th>${th('prio', 'Ação sugerida')}<th></th>
+  </tr></thead><tbody>
+  ${pg.length ? pg.map(r => `<tr>
+    <td><div class="ec-prod" title="${ecEsc(r.title)}"><div class="ec-prod-n">${ecEsc(r.title)}</div><div class="ec-prod-s mono">${ecEsc(r.sku || r.id)}${r.catalogo ? ' · <span class="ec-tag">catálogo</span>' : ''}${r.full ? ' · <span class="ec-tag">Full</span>' : ''}${r.curva ? ' · ' + ecCurva(r.curva) : ''}</div></div></td>
+    <td class="r mono"><b>${pxM2(r.my)}</b>${r.regular > r.my + 0.005 ? `<div class="ec-sub"><s>${pxM2(r.regular)}</s></div>` : ''}</td>
+    <td class="r mono">${r.ref.min != null ? `${pxM2(r.ref.min)}<div class="ec-sub">${r.ref.fonte}${r.ref.nOffers ? ' · ' + r.ref.nOffers + ' oferta' + (r.ref.nOffers > 1 ? 's' : '') : ''}${r.ref.fonte === 'manual' ? ' · ' + pxAge(r.ref.link.manual.at) : ''}</div>` : '<span class="ec-muted">—</span>'}</td>
+    <td class="r mono ${r.gap > 0.01 ? 'c-red' : r.gap < -0.01 ? 'c-green' : ''}">${pxPctS(r.gap)}</td>
+    <td>${ecPill(PX_ST[r.st][0], PX_ST[r.st][1])}${r.ptw && r.ptw.vs ? `<div class="ec-sub">visitas: ${ecEsc({ maximum: 'máx.', medium: 'média', minimum: 'mín.', none: 'nenhuma' }[r.ptw.vs] || r.ptw.vs)}</div>` : ''}</td>
+    <td class="r mono">${r.alvo != null ? `<b>${pxM2(r.alvo)}</b><div class="ec-sub">${pxPctS(r.alvo / r.my - 1)}</div>` : '—'}</td>
+    <td class="r mono ${r.margAlvo != null && r.margAlvo < pxCfg().pisoPct / 100 ? 'c-red' : ''}">${r.margAlvo != null ? ecPct(r.margAlvo, 1) : '—'}<div class="ec-sub">atual ${r.margAtual != null ? ecPct(r.margAtual, 1) : '—'}</div></td>
+    <td class="r mono">${pxM2(r.piso)}</td>
+    <td class="r mono ${r.var1 < -0.005 ? 'c-red' : r.var1 > 0.005 ? 'c-green' : ''}">${r.var1 != null ? pxPctS(r.var1) : '—'}<div class="ec-sub">7d ${r.var7 != null ? pxPctS(r.var7) : '—'}</div></td>
+    <td style="white-space:normal;min-width:170px;font-size:11px">${r.candPreco.length ? r.candPreco.slice(0, 3).map(p => `<span class="ec-tag" title="${ecEsc(p.n || prType(p.t).n)}">${ecEsc(prType(p.t).s)}</span>`).join(' ') + (r.candPreco.length > 3 ? ` +${r.candPreco.length - 3}` : '') : '<span class="ec-muted">—</span>'}${r.ativas.length ? `<div class="ec-sub">ativa: ${r.ativas.slice(0, 2).map(p => ecEsc(prType(p.t).s)).join(', ')}</div>` : ''}</td>
+    <td style="white-space:normal;min-width:220px"><span class="ec-dot" style="background:${EC_STATUS[r.tone]}"></span>${ecEsc(r.acao)}</td>
+    <td><button class="btn-sm ${r.tone === 'crit' ? 'btn-primary' : ''}" onclick="pxDetail('${r.id}')">Agir</button></td>
+  </tr>`).join('') : '<tr><td colspan="12" style="text-align:center;padding:24px;color:var(--text2)">Nenhum anúncio neste filtro.</td></tr>'}
+  </tbody></table></div>
+  <div class="ec-pager"><span class="ec-muted">${rs.length} anúncios</span><div style="display:flex;gap:6px;align-items:center">
+    <button class="btn-sm" ${v.page ? '' : 'disabled'} onclick="PX.view.page--;pxRenderTable()">‹</button><span class="ec-muted">${v.page + 1}/${pages}</span><button class="btn-sm" ${v.page < pages - 1 ? '' : 'disabled'} onclick="PX.view.page++;pxRenderTable()">›</button></div></div>`;
+}
+function pxSetFilter(f) { PX.view.filter = f; PX.view.page = 0; pxRenderTable(); document.getElementById('px-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+function pxSort(k) { const s = PX.view.sort; if (s.k === k) s.d = -s.d; else { s.k = k; s.d = k === 'title' || k === 'prio' ? 1 : -1; } pxRenderTable(); }
+
+// ───────── detalhe / ação ─────────
+function pxDetail(id) {
+  const r = PX.rows.find(x => x.id === id); if (!r) return;
+  PX.cur = id;
+  const m = document.getElementById('px-modal');
+  const cfg = pxCfg();
+  const offers = r.ref.offers || [];
+  const promoRow = p => {
+    const fixo = ['SMART', 'PRICE_MATCHING', 'PRICE_MATCHING_MELI_ALL', 'UNHEALTHY_STOCK', 'MARKETPLACE_CAMPAIGN', 'SELLER_COUPON_CAMPAIGN'].includes(p.t);
+    const lo = p.mn, hi = p.mx;
+    const sug = r.alvo != null ? Math.min(hi ?? r.my, Math.max(lo ?? 0, r.alvo)) : (p.sg || hi || r.my);
+    const k = 'px-p-' + (p.id || p.t).replace(/[^a-zA-Z0-9]/g, '');
+    const mg = r.custo > 0 ? ((fixo ? p.p : sug) * (1 - r.feePct - ((typeof ecCfg === 'function' ? ecCfg().impostoPct : 0) || 0) / 100) - r.custo) / (fixo ? p.p : sug) : null;
+    return `<tr><td><div class="fw6">${ecEsc(prType(p.t).s)}</div><div class="ec-sub">${ecEsc(p.n || prType(p.t).n)}${p.e ? ' · até ' + ecEsc(String(p.e).slice(0, 10).split('-').reverse().join('/')) : ''}</div></td>
+      <td class="mono" style="font-size:11px">${p.t === 'SELLER_COUPON_CAMPAIGN' ? (p.pct ? p.pct + '% no carrinho' : 'cupom') : fixo ? (p.p ? 'preço do ML: ' + pxM2(p.p) : 'definido pelo ML') : `faixa ${pxM2(lo)} – ${pxM2(hi)}${p.sg ? '<div class="ec-sub">sugerido ML ' + pxM2(p.sg) + '</div>' : ''}`}</td>
+      <td>${fixo ? '' : `<input id="${k}" type="number" step="0.01" value="${sug != null ? sug.toFixed(2) : ''}" style="width:90px;background:var(--bg2);border:1px solid var(--border2);color:var(--text);padding:5px 8px;border-radius:6px;font:12px var(--mono);text-align:right" oninput="pxMargHint(this,'${k}-m')">`}
+        <div class="ec-sub" id="${k}-m">${mg != null ? 'margem ' + ecPct(mg, 1) : ''}</div></td>
+      <td><button class="btn-sm btn-primary" onclick="pxJoin('${r.id}','${ecEsc(p.id)}','${p.t}','${k}')">Aderir</button></td></tr>`;
+  };
+  const cands = r.cands;
+  const buscaQ = (r.title || '').split(/\s+/).slice(0, 6).join(' ');
+  m.innerHTML = `<div class="ec-modal-box" style="width:min(1060px,100%)">
+    <div class="card-head"><span class="card-title">${ecEsc(r.title)}</span><button class="btn-sm" onclick="pxClose()">✕</button></div>
+    <div style="padding:14px 18px">
+      <div class="ec-strip ec-strip-sm" style="grid-template-columns:repeat(5,1fr);margin-bottom:14px">
+        ${ecStat('Seu preço', pxM2(r.my), r.regular > r.my + 0.005 ? 'cheio ' + pxM2(r.regular) : 'sem desconto')}
+        ${ecStat('Menor concorrente', pxM2(r.ref.min), r.ref.fonte || 'sem referência')}
+        ${ecStat('Preço-alvo', pxM2(r.alvo), r.ptw && r.ptw.ptw ? 'preço para ganhar (ML)' : r.alvo != null ? 'igualar concorrente' + (cfg.abaixoR ? ' − ' + pxM2(cfg.abaixoR) : '') : '—')}
+        ${ecStat('Piso de margem', pxM2(r.piso), r.custo ? `custo ${pxM2(r.custo)} · tarifa ${ecPct(r.feePct, 1)}` : 'sem custo no Bling')}
+        ${ecStat('Margem', r.margAtual != null ? ecPct(r.margAtual, 1) : '—', r.margAlvo != null ? 'no alvo: ' + ecPct(r.margAlvo, 1) : '')}
+      </div>
+      ${r.ptw ? `<div class="pr-guide" style="margin-bottom:14px"><b>Catálogo:</b> ${ecEsc({ winning: 'você está ganhando', competing: 'você está competindo (não ganha)', sharing_first_place: 'dividindo o 1º lugar', listed: 'listado sem competir' }[r.ptw.st] || r.ptw.st)}${r.ptw.win ? ` · ganhador ${r.ptw.win[0] === r.id ? '<b>é você</b>' : `<span class="mono">${ecEsc(r.ptw.win[0])}</span> a <b>${pxM2(r.ptw.win[1])}</b>`}` : ''}${r.ptw.share ? ` · ${r.ptw.share} dividindo` : ''}${r.ptw.opp.length ? `<br>Ganhar sem baixar preço: <b>${r.ptw.opp.map(ecEsc).join(', ')}</b>` : ''}</div>` : ''}
+      <div class="g2">
+        <div>
+          <div class="ec-subhead">Concorrentes no mesmo produto ${r.ref.pid ? `<span class="ec-muted mono">${ecEsc(r.ref.pid)}</span>` : ''}</div>
+          ${offers.length ? `<table class="t ec-t"><thead><tr><th>Anúncio</th><th class="r">Preço</th><th>Envio</th><th class="r">vs você</th></tr></thead><tbody>
+            ${offers.slice(0, 12).map(o => `<tr><td class="mono"><a href="https://produto.mercadolivre.com.br/${o.i.replace(/^MLB/, 'MLB-')}" target="_blank" rel="noopener" style="color:var(--accent)">${ecEsc(o.i)}</a><div class="ec-sub">${o.lt === 'gold_pro' ? 'Premium' : o.lt === 'gold_special' ? 'Clássico' : ecEsc(o.lt)}</div></td><td class="r mono"><b>${pxM2(o.p)}</b>${o.op > o.p ? `<div class="ec-sub"><s>${pxM2(o.op)}</s></div>` : ''}</td><td>${o.f ? '<span class="ec-tag">Full</span>' : ''}${o.fs ? ' <span class="ec-tag">grátis</span>' : ''}</td><td class="r mono ${r.my > o.p ? 'c-red' : 'c-green'}">${pxPctS(r.my / o.p - 1)}</td></tr>`).join('')}
+          </tbody></table>` : `<div class="ec-muted" style="padding:6px 0 12px">${r.ref.fonte === 'manual' ? `Preço manual: <b>${pxM2(r.ref.link.manual.p)}</b> (${ecEsc(r.ref.link.manual.n || 'concorrente')}, ${pxAge(r.ref.link.manual.at)})` : 'Nenhuma oferta de outro vendedor encontrada para este produto.'}</div>`}
+          <div class="ec-subhead" style="margin-top:14px">Referência de concorrência</div>
+          <div class="ec-muted" style="margin-bottom:6px">${r.ref.link && r.ref.link.pid ? `Vinculado ao produto <b class="mono">${ecEsc(r.ref.link.pid)}</b> ${ecEsc(r.ref.link.name || '')} · <button class="ec-link" style="padding:0" onclick="pxUnlink('${r.id}','pid')">remover</button>` : r.it.catalog_product_id ? `Usando o produto de catálogo do próprio anúncio <b class="mono">${ecEsc(r.it.catalog_product_id)}</b>.` : 'Anúncio sem produto de catálogo. Busque o produto equivalente:'}</div>
+          <div class="ec-tools" style="margin-bottom:6px"><input id="px-search-q" value="${ecEsc(buscaQ)}" placeholder="Buscar produto de catálogo"><button class="btn-sm" onclick="pxSearchCat('${r.id}')">Buscar</button></div>
+          <div id="px-search-res"></div>
+          <div class="ec-subhead" style="margin-top:12px">Preço observado manualmente</div>
+          <div class="ec-tools"><input id="px-man-n" placeholder="Concorrente / link" value="${ecEsc(r.ref.link?.manual?.n || '')}"><input id="px-man-p" type="number" step="0.01" placeholder="Preço" style="max-width:100px" value="${r.ref.link?.manual?.p || ''}"><button class="btn-sm" onclick="pxSaveManual('${r.id}')">Salvar</button>${r.ref.link?.manual ? `<button class="btn-sm" onclick="pxUnlink('${r.id}','manual')">Remover</button>` : ''}</div>
+        </div>
+        <div>
+          <div class="ec-subhead">Promoções elegíveis: ação rápida</div>
+          ${cands.length ? `<table class="t ec-t"><thead><tr><th>Promoção</th><th>Regra</th><th>Seu preço</th><th></th></tr></thead><tbody>${cands.map(promoRow).join('')}</tbody></table>` : '<div class="ec-muted" style="padding:6px 0 12px">Nenhuma promoção elegível no momento.</div>'}
+          ${cands.some(p => p.t === 'PRICE_DISCOUNT') ? '' : `<div class="ec-subhead" style="margin-top:12px">Desconto próprio</div>
+            <div class="ec-tools"><input id="px-own" type="number" step="0.01" value="${r.alvo != null ? r.alvo.toFixed(2) : ''}" style="max-width:110px" oninput="pxMargHint(this,'px-own-m')"><input id="px-own-d" type="number" min="1" max="30" value="7" style="max-width:70px" title="dias"><span class="ec-muted" style="align-self:center">dias</span><button class="btn-sm btn-primary" onclick="pxJoin('${r.id}','','PRICE_DISCOUNT','px-own')">Criar desconto</button></div><div class="ec-sub" id="px-own-m"></div>`}
+          ${r.ativas.length ? `<div class="ec-subhead" style="margin-top:12px">Já ativas</div><div class="ec-muted">${r.ativas.map(p => `${ecEsc(prType(p.t).s)} ${p.p ? pxM2(p.p) : ''} ${p.n ? '· ' + ecEsc(p.n) : ''}`).join('<br>')}</div>` : ''}
+          <div class="ec-muted" style="margin-top:12px">Cada adesão pede confirmação e é enviada direto ao Mercado Livre. <a href="${ecEsc(r.link || '#')}" target="_blank" rel="noopener" style="color:var(--accent)">Abrir anúncio ↗</a></div>
+        </div>
+      </div>
+    </div>
+    <div class="ec-modal-foot"><button class="btn-sm" onclick="pxRefreshOne('${r.id}')">↻ Atualizar este anúncio</button><button class="btn-sm" onclick="pxClose()">Fechar</button></div>
+  </div>`;
+  m.style.display = 'flex';
+}
+function pxClose() { const m = document.getElementById('px-modal'); if (m) m.style.display = 'none'; PX.cur = null; }
+function pxMargHint(inp, outId) {
+  const r = PX.rows.find(x => x.id === PX.cur); const o = document.getElementById(outId); if (!r || !o) return;
+  const p = parseFloat(inp.value); if (!(p > 0) || !(r.custo > 0)) { o.textContent = ''; return; }
+  const imp = ((typeof ecCfg === 'function' ? ecCfg().impostoPct : 0) || 0) / 100;
+  const mg = (p * (1 - r.feePct - imp) - r.custo) / p;
+  o.innerHTML = `margem ${ecPct(mg, 1)}${r.piso && p < r.piso ? ' · <span class="c-red">abaixo do piso</span>' : ''}`;
+}
+async function pxRefreshOne(id) { pxClose(); await pxLoad(true, [id]); pxDetail(id); }
+
+// adesão à promoção (POST /seller-promotions/items/{id})
+async function pxPost(path, body, retried) {
+  const r = await fetchWithTimeout(`${WORKER}/?path=${encodeURIComponent(path)}`, { method: 'POST', headers: { Authorization: 'Bearer ' + state.token, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 25000);
+  if (r.status === 401 && !retried && state.refreshToken && await doRefreshToken()) return pxPost(path, body, true);
+  const txt = await r.text(); let j = null; try { j = JSON.parse(txt); } catch (e) {}
+  if (!r.ok) throw new Error((j && (j.message || j.error)) || `HTTP ${r.status}`);
+  return j;
+}
+async function pxJoin(itemId, promoId, type, inputId) {
+  const r = PX.rows.find(x => x.id === itemId); if (!r) return;
+  const p = r.cands.find(c => (c.id || '') === promoId && c.t === type) || { t: type, id: promoId };
+  const inp = inputId ? document.getElementById(inputId) : null;
+  const price = inp ? parseFloat(inp.value) : null;
+  const body = { promotion_type: type };
+  if (promoId) body.promotion_id = promoId;
+  if (['DEAL', 'SELLER_CAMPAIGN', 'DOD', 'LIGHTNING', 'PRICE_DISCOUNT', 'PRE_NEGOTIATED'].includes(type)) {
+    if (!(price > 0)) { showToast('Informe o preço promocional', 'warn'); return; }
+    if (p.mn != null && price < p.mn - 0.001 || p.mx != null && price > p.mx + 0.001) { showToast(`Preço fora da faixa permitida (${pxM2(p.mn)} – ${pxM2(p.mx)})`, 'warn'); return; }
+    body.deal_price = +price.toFixed(2);
+  }
+  if (['SMART', 'PRICE_MATCHING', 'PRICE_MATCHING_MELI_ALL', 'UNHEALTHY_STOCK'].includes(type) && p.of) body.offer_id = p.of;
+  if (type === 'LIGHTNING') {
+    const q = parseInt(prompt('Quantas unidades para a oferta relâmpago?', String(Math.max(1, Math.min(10, r.it.available_quantity || 1)))) || '0', 10);
+    if (!(q > 0)) return; body.stock = q;
+  }
+  if (type === 'PRICE_DISCOUNT') {
+    const dias = Math.max(1, Math.min(30, parseInt(document.getElementById('px-own-d')?.value || '7', 10) || 7));
+    const s = new Date(Date.now() + 5 * 60e3), e = new Date(s.getTime() + dias * 864e5);
+    const f = d => new Date(d.getTime() - 3 * 3600e3).toISOString().slice(0, 19);
+    body.start_date = f(s); body.finish_date = f(e);
+  }
+  const effPrice = body.deal_price || p.p || null;
+  const warn = r.piso && effPrice && effPrice < r.piso ? `\n\n⚠ ATENÇÃO: ${pxM2(effPrice)} está abaixo do piso de margem (${pxM2(r.piso)}).` : '';
+  if (!confirm(`Aderir "${r.title.slice(0, 60)}" a ${prType(type).n}${p.n ? ' (' + p.n + ')' : ''}${effPrice ? ' por ' + pxM2(effPrice) : ''}?\n\nIsso altera o anúncio no Mercado Livre.${warn}`)) return;
+  try {
+    showToast('Enviando ao Mercado Livre…', 'warn');
+    await pxPost(`/seller-promotions/items/${itemId}?app_version=v2`, body);
+    showToast('✓ Adesão enviada. Atualizando o anúncio…');
+    try { localStorage.removeItem(PR_CACHE_KEY); if (typeof PR !== 'undefined') PR.data = null; } catch (e) {}
+    await pxRefreshOne(itemId);
+  } catch (e) {
+    showToast('Não foi possível aderir: ' + e.message, 'err');
+  }
+}
+
+// vínculo com produto de catálogo equivalente
+async function pxSearchCat(itemId) {
+  const q = (document.getElementById('px-search-q')?.value || '').trim(); const out = document.getElementById('px-search-res');
+  if (!q || !out) return;
+  out.innerHTML = '<div class="ec-muted">Buscando no catálogo…</div>';
+  const r = await prGet(`/products/search?status=active&site_id=MLB&q=${encodeURIComponent(q)}&limit=10`);
+  const res = r && r.results || [];
+  out.innerHTML = res.length ? `<table class="t ec-t"><tbody>${res.map(p => {
+    const brand = (p.attributes || []).find(a => a.id === 'BRAND')?.value_name || '';
+    const pn = (p.attributes || []).find(a => a.id === 'PART_NUMBER' || a.id === 'MPN')?.value_name || '';
+    return `<tr><td>${p.pictures && p.pictures[0] ? `<img src="${ecEsc(p.pictures[0].url)}" style="width:34px;height:34px;object-fit:contain;background:#fff;border-radius:4px">` : ''}</td><td><div class="fw6" style="white-space:normal">${ecEsc(p.name)}</div><div class="ec-sub">${ecEsc(p.id)}${brand ? ' · ' + ecEsc(brand) : ''}${pn ? ' · ' + ecEsc(pn) : ''}</div></td><td><button class="btn-sm" onclick="pxLink('${itemId}','${ecEsc(p.id)}',this.dataset.n)" data-n="${ecEsc(p.name)}">Vincular</button></td></tr>`;
+  }).join('')}</tbody></table>` : '<div class="ec-muted">Nada encontrado. Tente outras palavras (marca, código da peça).</div>';
+}
+async function pxLink(itemId, pid, name) {
+  const l = pxLinks(); l[itemId] = { ...(l[itemId] || {}), pid, name: name || '', at: Date.now() }; pxSaveLinks(l);
+  showToast('Referência vinculada. Lendo concorrentes…'); await pxRefreshOne(itemId);
+}
+function pxSaveManual(itemId) {
+  const p = parseFloat(document.getElementById('px-man-p')?.value || ''); const n = document.getElementById('px-man-n')?.value || '';
+  if (!(p > 0)) { showToast('Informe o preço do concorrente', 'warn'); return; }
+  const l = pxLinks(); l[itemId] = { ...(l[itemId] || {}), manual: { p, n, at: Date.now() } }; pxSaveLinks(l);
+  if (!PX.data.items[itemId]) { pxRefreshOne(itemId); return; }
+  pxSnapshot(); pxCompute(); pxRenderTable(); pxDetail(itemId); showToast('Preço manual salvo');
+}
+function pxUnlink(itemId, what) {
+  const l = pxLinks(); if (!l[itemId]) return;
+  if (what === 'pid') { delete l[itemId].pid; delete l[itemId].name; } else delete l[itemId].manual;
+  if (!l[itemId].pid && !l[itemId].manual) delete l[itemId];
+  pxSaveLinks(l); pxCompute(); pxRenderTable(); pxDetail(itemId);
+}
+
+// configuração
+function pxOpenCfg() {
+  const c = pxCfg(), m = document.getElementById('px-cfg'); if (!m) return;
+  const inp = (id, v, l, u, step = 1) => `<label class="ec-f">${l}<span><input id="${id}" type="number" step="${step}" value="${v}"> ${u}</span></label>`;
+  m.innerHTML = `<div class="ec-modal-box" style="width:min(520px,100%)"><div class="card-head"><span class="card-title">⚙ Regras de precificação</span><button class="btn-sm" onclick="document.getElementById('px-cfg').style.display='none'">✕</button></div>
+    <div style="padding:16px 18px">
+      ${inp('px-c-piso', c.pisoPct, 'Margem mínima (piso)', '%')}
+      ${inp('px-c-abx', c.abaixoR, 'Ficar abaixo do concorrente em', 'R$', 0.01)}
+      ${inp('px-c-tol', c.tolPct, 'Tolerância para considerar empate', '%', 0.5)}
+      ${inp('px-c-ttl', c.ttlMin, 'Reaproveitar leitura por até', 'min')}
+      <div class="ec-muted" style="margin-top:8px">Margem = preço − tarifa ML − impostos − custo (Bling). Impostos seguem a configuração do Estoque &amp; Compras.</div>
+      <div class="ec-subhead" style="margin-top:14px">Vínculos salvos neste navegador</div>
+      <div class="ec-tools"><button class="btn-sm" onclick="pxExportLinks()">⬇ Exportar vínculos</button><label class="btn-sm" style="cursor:pointer">⬆ Importar<input type="file" accept=".json" style="display:none" onchange="pxImportLinks(this)"></label></div>
+    </div>
+    <div class="ec-modal-foot"><button class="btn-sm btn-primary" onclick="pxApplyCfg()">Salvar e recalcular</button></div></div>`;
+  m.style.display = 'flex';
+}
+function pxApplyCfg() {
+  const g = id => parseFloat(document.getElementById(id).value);
+  const c = { pisoPct: Math.max(0, g('px-c-piso') || 0), abaixoR: Math.max(0, g('px-c-abx') || 0), tolPct: Math.max(0, g('px-c-tol') || 0), ttlMin: Math.max(5, g('px-c-ttl') || 60) };
+  try { localStorage.setItem(PX_CFG_KEY, JSON.stringify(c)); } catch (e) {}
+  document.getElementById('px-cfg').style.display = 'none'; pxCompute(); pxRender();
+}
+function pxExportLinks() {
+  const blob = new Blob([JSON.stringify(pxLinks(), null, 1)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'vinculos_precificacao.json'; a.click(); URL.revokeObjectURL(a.href);
+}
+function pxImportLinks(inp) {
+  const f = inp.files && inp.files[0]; if (!f) return;
+  f.text().then(t => { const j = JSON.parse(t); pxSaveLinks({ ...pxLinks(), ...j }); showToast(`${Object.keys(j).length} vínculos importados. Clique em Atualizar.`); }).catch(() => showToast('Arquivo inválido', 'err'));
+}
+
+// Excel
+async function pxExport() {
+  if (!PX.rows.length) { showToast('Carregue a precificação primeiro', 'warn'); return; }
+  if (!window.XLSX) {
+    await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload = res; s.onerror = () => rej(new Error('falha ao carregar biblioteca Excel')); document.head.appendChild(s); }).catch(e => showToast(e.message, 'err'));
+    if (!window.XLSX) return;
+  }
+  const n2 = v => v == null || !isFinite(v) ? '' : +v.toFixed(2), p1 = v => v == null || !isFinite(v) ? '' : +(v * 100).toFixed(1);
+  const linhas = pxRows().map(r => ({
+    'Anúncio': r.id, 'Título': r.title, 'SKU': r.sku, 'Catálogo': r.catalogo ? 'Sim' : 'Não', 'Full': r.full ? 'Sim' : 'Não', 'Curva': r.curva || '',
+    'Seu preço': n2(r.my), 'Preço cheio': n2(r.regular), 'Menor concorrente': n2(r.ref.min), 'Fonte': r.ref.fonte || '', 'Ofertas concorrentes': r.ref.nOffers || 0,
+    'Diferença %': p1(r.gap), 'Situação': PX_ST[r.st][0], 'Preço-alvo': n2(r.alvo), 'Margem atual %': p1(r.margAtual), 'Margem no alvo %': p1(r.margAlvo), 'Piso': n2(r.piso), 'Custo': n2(r.custo),
+    'Concorrente 24h %': p1(r.var1), 'Concorrente 7d %': p1(r.var7), 'Promoções elegíveis': r.candPreco.map(p => prType(p.t).n).join(', '), 'Promoções ativas': r.ativas.map(p => prType(p.t).n).join(', '),
+    'Ação sugerida': r.acao, 'Link': r.link || '',
+  }));
+  const wb = XLSX.utils.book_new(); const ws = XLSX.utils.json_to_sheet(linhas);
+  ws['!cols'] = Object.keys(linhas[0] || {}).map(k => ({ wch: k === 'Título' ? 50 : k === 'Ação sugerida' ? 45 : Math.max(10, k.length + 2) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Precificação');
+  XLSX.writeFile(wb, `precificacao_${ecDay()}.xlsx`);
 }
 
 // ════════════════════════════════════════════════════════════════
