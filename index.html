@@ -2750,52 +2750,103 @@ function ecItemIndex() {
   });
   return idx;
 }
-async function ecFetchDay(day, itemIdx) {
+// % Tributos do cadastro do produto no Bling (tributação); sem cadastro → % padrão das configurações
+function ecTaxPctMap() {
+  const m = {};
+  (EC.bling?.produtos || []).forEach(p => {
+    const t = p.trib ?? p.percentualTributos ?? p.tributacao?.percentualTributos;
+    if (p.codigo && t != null && +t > 0) m[normSku(p.codigo)] = +t;
+  });
+  return m;
+}
+function ecTaxPct(sku, map) { const t = (map || ecTaxPctMap())[sku]; return t != null ? t : (ecCfg().impostoPct || 0); }
+// custo de frete do vendedor por envio (/shipments/{id}/costs) — cache local, o valor de um envio não muda
+const EC_SHIP_KEY = 'ec_ship_v1';
+function ecShipCache() { if (EC.shipCache) return EC.shipCache; try { EC.shipCache = JSON.parse(localStorage.getItem(EC_SHIP_KEY) || '{}'); } catch (e) { EC.shipCache = {}; } return EC.shipCache; }
+function ecSaveShipCache() {
+  const c = ecShipCache(); const min = Date.now() - 20 * 864e5;
+  Object.keys(c).forEach(k => { if (c[k][1] < min) delete c[k]; });
+  try { localStorage.setItem(EC_SHIP_KEY, JSON.stringify(c)); } catch (e) {}
+}
+async function ecShipCost(id) {
+  const c = ecShipCache(); if (c[id]) return c[id][0];
+  const r = await prGet(`/shipments/${id}/costs`);
+  if (!r || !Array.isArray(r.senders)) return null;
+  const me = r.senders.find(x => String(x.user_id) === String(state.sellerId)) || r.senders[0];
+  const v = me ? Math.max(0, +me.cost || 0) : 0;
+  c[id] = [v, Date.now()]; return v;
+}
+// registro diário por SKU: [qtd, receita, tarifa, cancelados, qtd Full, imposto R$, frete R$ (null = sem leitura)]
+// imposto e frete ficam CONGELADOS no dia da venda: mudar o % no cadastro depois não altera o passado
+async function ecFetchDay(day, itemIdx, prev, withShip, taxMap) {
   const from = encodeURIComponent(day + 'T00:00:00.000-03:00'), to = encodeURIComponent(day + 'T23:59:59.999-03:00');
   const agg = {}; let offset = 0, total = 1, guard = 0;
+  const ships = {}; // shipping id -> [[key, receita]]
   while (offset < total && guard++ < 40) {
     const page = await mlGet(`/orders/search?seller=${state.sellerId}&order.date_created.from=${from}&order.date_created.to=${to}&limit=50&offset=${offset}`);
     if (!page || !page.results) return null; // falhou: não grava no cache
     total = page.paging?.total ?? page.results.length;
     for (const o of page.results) {
       const canc = o.status === 'cancelled';
+      const sid = o.shipping && o.shipping.id;
       for (const oi of (o.order_items || [])) {
         const iid = oi.item?.id; const info = itemIdx[iid];
         let key = oi.item?.seller_sku ? normSku(oi.item.seller_sku) : null;
         if (!key && info && info.skus.length === 1) key = info.skus[0];
         if (!key) key = '#' + iid;
         const q = oi.quantity || 0;
-        const r = agg[key] || (agg[key] = [0, 0, 0, 0, 0]);
+        const r = agg[key] || (agg[key] = [0, 0, 0, 0, 0, 0, null]);
         if (canc) { r[3] += q; continue; }
         r[0] += q; r[1] += q * (oi.unit_price || 0); r[2] += (oi.sale_fee || 0) * q;
         if (info && info.full) r[4] += q;
+        if (sid) (ships[sid] = ships[sid] || []).push([key, q * (oi.unit_price || 0)]);
       }
     }
     offset += 50;
   }
-  Object.values(agg).forEach(r => { r[1] = Math.round(r[1] * 100) / 100; r[2] = Math.round(r[2] * 100) / 100; });
+  // imposto: % do cadastro no momento da venda; se o dia já tinha sido gravado, mantém a alíquota gravada
+  Object.entries(agg).forEach(([k, r]) => {
+    const p = prev && prev[k];
+    const rate = p && p[5] != null && p[1] > 0 ? p[5] / p[1] : ecTaxPct(k, taxMap) / 100;
+    r[5] = r[1] * rate;
+  });
+  // frete real pago pelo vendedor em cada envio, rateado pelos itens do envio
+  if (withShip) {
+    const ids = Object.keys(ships); let ok = true;
+    await prPool(ids, 6, async id => {
+      const cost = await ecShipCost(id);
+      if (cost == null) { ok = false; return; }
+      const parts = ships[id]; const tot = parts.reduce((a, x) => a + x[1], 0) || 1;
+      parts.forEach(([k, v]) => { const r = agg[k]; r[6] = (r[6] || 0) + cost * (v / tot); });
+    });
+    if (!ok) Object.entries(agg).forEach(([k, r]) => { const p = prev && prev[k]; if (p && p[6] != null) r[6] = p[6]; });
+    Object.values(agg).forEach(r => { if (r[0] > 0 && r[6] == null && ok) r[6] = 0; });
+  } else if (prev) Object.entries(agg).forEach(([k, r]) => { const p = prev[k]; if (p && p[6] != null) r[6] = p[6]; });
+  Object.values(agg).forEach(r => { for (const n of [1, 2, 5]) r[n] = Math.round(r[n] * 100) / 100; if (r[6] != null) r[6] = Math.round(r[6] * 100) / 100; });
   return agg;
 }
 async function ecSyncHistory(force) {
   const h = ecLoadHist(); const itemIdx = ecItemIndex();
-  const today = ecDay();
+  const today = ecDay(); const taxMap = ecTaxPctMap();
   const need = [];
+  const shipFrom = ecDay(14); // frete real por pedido: últimos 15 dias (dias antigos ficam estimados pelo frete atual do anúncio)
   for (let i = 0; i <= 180; i++) {
     const d = ecDay(i);
-    if (i <= 2 || force === 'all' || !h.days[d]) need.push(d); // últimos 3 dias sempre (cancelamentos/atrasos)
+    const semFrete = i <= 14 && h.days[d] && Object.values(h.days[d]).some(r => r[0] > 0 && r[6] == null);
+    if (i <= 2 || force === 'all' || !h.days[d] || semFrete) need.push(d); // últimos 3 dias sempre (cancelamentos/atrasos)
   }
   let done = 0, failed = 0;
   const conc = 5;
   for (let i = 0; i < need.length; i += conc) {
     const batch = need.slice(i, i + conc);
-    const res = await Promise.all(batch.map(d => ecFetchDay(d, itemIdx).catch(() => null)));
+    const res = await Promise.all(batch.map(d => ecFetchDay(d, itemIdx, h.days[d], d >= shipFrom, taxMap).catch(() => null)));
     res.forEach((agg, k) => { if (agg) h.days[batch[k]] = agg; else failed++; });
     done += batch.length;
     if (need.length > 6) ecProgress(`Histórico de vendas ML: ${done}/${need.length} dias`, (done / need.length) * 100);
     if (i % 25 === 0) ecSaveHist();
   }
   h.updatedAt = Date.now(); h.today = today;
-  ecSaveHist();
+  ecSaveHist(); ecSaveShipCache();
   return { fetched: need.length, failed };
 }
 
@@ -2885,7 +2936,7 @@ function ecWinsorize(daily, n) {
   return sl.map(v => Math.min(v, cap));
 }
 
-function ecNewSeries(H) { return { q: new Array(H).fill(0), r: new Array(H).fill(0), f: new Array(H).fill(0), c: new Array(H).fill(0), fq: new Array(H).fill(0), qk: new Array(H).fill(0) }; }
+function ecNewSeries(H) { const z = () => new Array(H).fill(0); return { q: z(), r: z(), f: z(), c: z(), fq: z(), qk: z(), imp: z(), impR: z(), fr: z(), frQ: z() }; }
 
 function ecCompute() {
   const cfg = ecCfg(); const today = ecDay();
@@ -2899,6 +2950,8 @@ function ecCompute() {
     for (const [k, v] of Object.entries(d)) {
       const s = S[k] || (S[k] = ecNewSeries(H));
       s.q[i] += v[0]; s.r[i] += v[1]; s.f[i] += v[2]; s.c[i] += v[3]; s.fq[i] += v[4] || 0;
+      if (v[5] != null) { s.imp[i] += v[5]; s.impR[i] += v[1]; }
+      if (v[6] != null) { s.fr[i] += v[6]; s.frQ[i] += v[0]; }
     }
   }
   EC.histDays = histDays;
@@ -2963,6 +3016,11 @@ function ecCompute() {
   // taxa média de tarifa ML (para SKUs sem venda recente)
   let tr = 0, tf = 0; Object.values(S).forEach(s => { tr += ecSum(s.r, 0, 90); tf += ecSum(s.f, 0, 90); });
   const feePctGlobal = tr > 0 ? tf / tr : 0.16;
+  // frete médio por R$ vendido na conta (para SKUs sem leitura de frete)
+  let frR = 0, frV = 0; Object.values(S).forEach(s => { for (let i = 0; i < 90; i++) if (s.frQ[i] > 0) { frV += s.fr[i]; frR += s.r[i]; } });
+  const fretePctGlobal = frR > 0 ? frV / frR : 0;
+  const taxMap = ecTaxPctMap();
+  let pxFrete = {}; try { const pc = JSON.parse(localStorage.getItem('px_cache_v1') || 'null'); if (pc && pc.items) Object.entries(pc.items).forEach(([id, x]) => { if (x.frete && x.frete.cur != null) pxFrete[id] = x.frete.cur; }); } catch (e) {}
 
   const rows = [];
   for (const [sku, p] of Object.entries(bySku)) {
@@ -3023,12 +3081,22 @@ function ecCompute() {
     const precoReal = vDir90 > 0 ? rev90 / vDir90 : 0;
     const preco = precoReal || (m ? m.price : 0) || p.preco || 0;
     const tarifaUn = vDir90 > 0 ? fee90 / vDir90 : preco * feePctGlobal;
-    const margemUn = preco > 0 && custo > 0 ? preco - tarifaUn - custo - preco * (cfg.impostoPct / 100) : null;
+    // imposto: % do cadastro Bling (congelado por venda no histórico); frete: real pago nos pedidos
+    const impPct = ecTaxPct(sku, taxMap);
+    const impR90 = s ? ecSum(s.impR, 0, 90) : 0, imp90 = s ? ecSum(s.imp, 0, 90) : 0;
+    const impUn = impR90 > 0 ? preco * (imp90 / impR90) : preco * impPct / 100;
+    const frQ90 = s ? ecSum(s.frQ, 0, 90) : 0, fr90 = s ? ecSum(s.fr, 0, 90) : 0;
+    const mlId = m && m.ids && m.ids[0];
+    let freteUn, freteFonte;
+    if (frQ90 > 0) { freteUn = fr90 / frQ90; freteFonte = 'pedidos'; }
+    else if (mlId && pxFrete[mlId] != null) { freteUn = pxFrete[mlId]; freteFonte = 'anúncio'; }
+    else { freteUn = preco * fretePctGlobal; freteFonte = fretePctGlobal ? 'média conta' : '—'; }
+    const margemUn = preco > 0 && custo > 0 ? preco - tarifaUn - freteUn - impUn - custo : null;
     const margemPct = margemUn != null && preco > 0 ? margemUn / preco : null;
 
     rows.push({
       sku, id: p.id, nome: p.nome, ativo, isKit, kitFisico, formato: p.formato, blingVirt, matriz, full, total, transito, lt,
-      custo, preco, tarifaUn, margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
+      custo, preco, tarifaUn, freteUn, freteFonte, impPct, impUn, impFonte: taxMap[sku] != null ? 'Bling' : 'padrão', margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
       v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, canc90, full90, tendPct, tend90Pct, tend, vol,
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
       deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds) || full > 0, anuncioFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
@@ -3557,7 +3625,7 @@ function ecRenderDash() {
       ${semGiro.map(r => `<tr><td>${ecProd(r)}</td><td class="mono">${r.ultimaVenda ? ecFmtDate(r.ultimaVenda) : '&gt;180d'}</td><td class="r mono">${r.diasSemVenda > 180 ? '180+' : r.diasSemVenda}</td><td class="r mono">${ecInt(r.total)}</td><td class="r mono">${ecMoneyK(r.valorCusto)}</td><td class="r mono">${ecMoneyK(r.valorVenda)}</td></tr>`).join('')}
       </tbody></table>` : '<div class="ec-muted" style="padding:16px">Nenhum produto sem giro há mais de 90 dias.</div>'}
     </div></div>
-    <div class="card"><div class="card-head"><span class="card-title">Margem × giro</span><span class="ec-muted">margem de contribuição (preço − tarifa ML − custo${cfg.impostoPct ? ' − impostos' : ''})</span></div><div class="card-body">
+    <div class="card"><div class="card-head"><span class="card-title">Margem × giro</span><span class="ec-muted">margem de contribuição (preço − tarifa ML − frete − impostos − custo)</span></div><div class="card-body">
       <div class="ec-mini-h">🟢 Alto giro + boa margem (≥ 25%)</div>
       ${mBoa.length ? mBoa.map(r => `<div class="ec-li" onclick="ecOpenFilter('margemboa')"><span>${ecProdShort(r)}</span><span class="mono">${ecPct(r.margemPct)} · ${ecMoneyK(r.rev90)}</span></div>`).join('') : '<div class="ec-muted ec-li-empty">—</div>'}
       <div class="ec-mini-h" style="margin-top:12px">🟠 Alto giro + margem baixa (&lt; 15%) — rever preço/custo</div>
@@ -3694,6 +3762,7 @@ const EC_COLS = [
   ['custo', 'Custo un.', r => r.custo ? ecMoney2(r.custo) : '—'],
   ['precoCompra', 'Preço compra', r => r.precoCompra ? `${ecMoney2(r.precoCompra)}<div class="ec-sub">${r.custo ? 'custo ' + (r.custo / r.precoCompra).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '×' : ''}${r.precoCompraFonte === 'pedido' ? (r.custo ? ' · ' : '') + 'últ. pedido' : ''}</div>` : '—'], ['valorCusto', 'Estoque a custo', r => r.isKit ? '—' : ecMoney(r.valorCusto)],
   ['preco', 'Preço venda', r => r.preco ? ecMoney2(r.preco) : '—'], ['valorVenda', 'Potencial venda', r => r.isKit ? '—' : ecMoney(r.valorVenda)],
+  ['tarifaUn', 'Tarifa ML un.', r => r.preco ? ecMoney2(r.tarifaUn) : '—'], ['freteUn', 'Frete un.', r => r.preco ? `${ecMoney2(r.freteUn)}<div class="ec-sub">${ecEsc(r.freteFonte)}</div>` : '—'], ['impPct', 'Imposto', r => `${(r.impPct || 0).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%<div class="ec-sub">${r.impFonte}</div>`],
   ['margemUn', 'Margem R$', r => r.margemUn != null ? ecMoney2(r.margemUn) : '—'], ['margemPct', 'Margem %', r => r.margemPct != null ? ecPct(r.margemPct, 1) : '—'],
   ['v7', 'Venda 7D', r => ecInt(r.v7)], ['v30', 'Venda 30D', r => ecInt(r.v30) + (r.vKit30 ? `<div class="ec-sub">${ecInt(r.vKit30)} via kits</div>` : '')], ['v60', 'Venda 60D', r => ecInt(r.v60)], ['v90', 'Venda 90D', r => ecInt(r.v90)],
   ['rate', 'Média mensal', r => (r.v90 / 3).toLocaleString('pt-BR', { maximumFractionDigits: 1 })],
@@ -3758,7 +3827,7 @@ function ecEditLT(sku) {
 function ecExportCSV() {
   const rs = ecFilteredRows();
   const cols = [['SKU', r => r.sku], ['Descrição', r => r.nome], ['Status', r => r.ativo ? 'Ativo' : 'Inativo'], ['Curva', r => r.curva], ['Estoque Matriz', r => r.matriz], ['Estoque Full', r => r.full], ['Estoque Total', r => r.total], ['Em trânsito', r => r.transito],
-    ['Custo unitário', r => r.custo], ['Preço de compra (fornecedor)', r => r.precoCompra], ['Origem preço compra', r => r.precoCompraFonte], ['Fator custo/compra', r => r.custo && r.precoCompra ? (r.custo / r.precoCompra).toFixed(2) : ''], ['Estoque a custo', r => r.valorCusto], ['Preço venda', r => r.preco.toFixed(2)], ['Potencial venda', r => r.valorVenda.toFixed(2)], ['Margem R$', r => r.margemUn != null ? r.margemUn.toFixed(2) : ''], ['Margem %', r => r.margemPct != null ? (r.margemPct * 100).toFixed(1) : ''],
+    ['Custo unitário', r => r.custo], ['Preço de compra (fornecedor)', r => r.precoCompra], ['Origem preço compra', r => r.precoCompraFonte], ['Fator custo/compra', r => r.custo && r.precoCompra ? (r.custo / r.precoCompra).toFixed(2) : ''], ['Estoque a custo', r => r.valorCusto], ['Preço venda', r => r.preco.toFixed(2)], ['Potencial venda', r => r.valorVenda.toFixed(2)], ['Tarifa ML un.', r => r.tarifaUn ? r.tarifaUn.toFixed(2) : ''], ['Frete un.', r => r.freteUn != null ? r.freteUn.toFixed(2) : ''], ['Origem frete', r => r.freteFonte], ['Imposto %', r => r.impPct], ['Origem imposto', r => r.impFonte], ['Imposto un.', r => r.impUn != null ? r.impUn.toFixed(2) : ''], ['Margem R$', r => r.margemUn != null ? r.margemUn.toFixed(2) : ''], ['Margem %', r => r.margemPct != null ? (r.margemPct * 100).toFixed(1) : ''],
     ['Venda 7D', r => r.v7], ['Venda 15D', r => r.v15], ['Venda 30D', r => r.v30], ['Venda 60D', r => r.v60], ['Venda 90D', r => r.v90], ['Consumo via kits 90D', r => r.vKit90], ['Média mensal', r => (r.v90 / 3).toFixed(1)], ['Tendência %', r => (r.tendPct * 100).toFixed(0)], ['Tendência', r => r.tend],
     ['Previsão 30d', r => r.prev.d30.toFixed(1)], ['Previsão 60d', r => r.prev.d60.toFixed(1)], ['Previsão 90d', r => r.prev.d90.toFixed(1)],
     ['Cobertura dias', r => isFinite(r.cob) ? Math.round(r.cob) : ''], ['Cobertura Matriz', r => isFinite(r.cobMatriz) ? Math.round(r.cobMatriz) : ''], ['Cobertura Full', r => isFinite(r.cobFull) ? Math.round(r.cobFull) : ''],
@@ -3799,7 +3868,7 @@ function ecOpenCfg() {
       <div><div class="ec-subhead">Estoque e margem</div>
         <label class="ec-f"><span>Saldo do Bling já inclui o Full</span><span><input type="checkbox" id="ec-bif" ${c.blingIncluiFull ? 'checked' : ''}></span></label>
         <div class="ec-muted" style="font-size:11px;margin-bottom:8px">${EC.depMatriz ? `Matriz = depósito <b>${ecEsc(EC.depMatriz.nome)}</b> do Bling. Full = ${EC.depFull ? `depósito <b>${ecEsc(EC.depFull.nome)}</b> do Bling` : 'Full do Mercado Livre (nenhum depósito Fulfillment no Bling)'}. O Mercado Livre é usado só para validação (aba Conciliação). Esta opção só vale se o depósito Matriz não for identificado.` : 'Depósito Matriz não identificado — com a opção marcada, Matriz = Bling − Full do ML.'}</div>
-        ${inp('ec-imp', c.impostoPct, 'Impostos sobre a venda', '%')}
+        ${inp('ec-imp', c.impostoPct, 'Imposto padrão (SKU sem % Tributos no Bling)', '%')}
         <div class="ec-subhead" style="margin-top:12px">Curva ABC (receita 90d acumulada)</div>
         ${inp('ec-abcA', Math.round(c.abc.A * 100), 'Corte A até', '%')}${inp('ec-abcB', Math.round(c.abc.B * 100), 'Corte B até', '%')}</div>
     </div>
@@ -3973,6 +4042,7 @@ function ecExportConc() {
 const PX = { loading: false, data: null, rows: [], agg: null, view: { filter: 'reagir', q: '', page: 0, sort: { k: 'prio', d: 1 } }, cur: null };
 const PX_CACHE_KEY = 'px_cache_v1', PX_LINKS_KEY = 'px_links_v1', PX_HIST_KEY = 'px_hist_v1', PX_CFG_KEY = 'px_cfg_v1';
 const PX_DEFAULT_CFG = { pisoPct: 10, abaixoR: 0, tolPct: 1, ttlMin: 60 };
+const PX_FS_LIMIT = 79; // faixa de frete do ML: abaixo de R$ 79 o custo do vendedor é menor
 const PX_ST = {
   perdendo: ['Perdendo', 'crit'], empatado: ['Empatado', 'mon'], ganhando: ['Ganhando', 'ok'], semref: ['Sem referência', 'neutral'],
 };
@@ -4049,8 +4119,14 @@ async function pxFetch(base, onlyIds) {
       it.catalog_listing ? prGet(`/items/${it.id}/price_to_win?siteId=MLB&version=v2`) : Promise.resolve(null),
       prGet(`/seller-promotions/items/${it.id}?app_version=v2`),
     ]);
+    // frete grátis pago pelo vendedor: preço atual e a outra faixa (abaixo/acima de R$ 79)
+    const pNow = sale && sale.amount ? sale.amount : it.price;
+    const pOther = pNow < PX_FS_LIMIT ? PX_FS_LIMIT : PX_FS_LIMIT - 0.01;
+    const fr = async p => { const r = await prGet(`/users/${state.sellerId}/shipping_options/free?item_id=${it.id}&item_price=${p.toFixed(2)}`); const c = r && r.coverage && r.coverage.all_country; return c && c.list_cost != null ? +c.list_cost : null; };
+    const [fCur, fOther] = await Promise.all([fr(pNow), fr(pOther)]);
+    const frete = fCur == null && fOther == null ? null : { cur: fCur, lo: pNow < PX_FS_LIMIT ? fCur : fOther, hi: pNow < PX_FS_LIMIT ? fOther : fCur };
     D.items[it.id] = {
-      at: Date.now(),
+      at: Date.now(), frete,
       sale: sale && sale.amount ? [sale.amount, sale.regular_amount || null] : null,
       ptw: ptw ? { st: ptw.status, ptw: ptw.price_to_win, cur: ptw.current_price, win: ptw.winner ? [ptw.winner.item_id, ptw.winner.price] : null, share: ptw.competitors_sharing_first_place || 0, vs: ptw.visit_share || '', why: (ptw.reason || []).slice(0, 4), opp: (ptw.boosts || []).filter(b => b.status === 'opportunity').map(b => b.description || b.id) } : null,
       promos: Array.isArray(promos) ? promos.filter(p => p.status !== 'finished').map(p => ({ id: p.id || '', t: p.type, st: p.status, n: p.name || '', p: p.price || 0, op: p.original_price || null, mn: p.min_discounted_price ?? null, mx: p.max_discounted_price ?? null, sg: p.suggested_discounted_price ?? null, of: p.offer_id || p.ref_id || null, pct: p.fixed_percentage ?? null, s: p.start_date || null, e: p.finish_date || null })) : null,
@@ -4126,9 +4202,17 @@ function pxCompute() {
     // margem (custo e tarifa do Bling/Estoque & Compras)
     const custo = ec && ec.custo > 0 ? ec.custo : 0;
     const feePct = ec && ec.preco > 0 && ec.tarifaUn > 0 ? ec.tarifaUn / ec.preco : 0.16;
-    const marg = p => custo > 0 && p > 0 ? (p * (1 - feePct - impPct) - custo) / p : null;
+    const impPct = (ec && ec.impPct != null ? ec.impPct : ecTaxPct(sku)) / 100;
+    const fx = x && x.frete;
+    const freteAt = p => fx ? ((p < PX_FS_LIMIT ? fx.lo : fx.hi) ?? fx.cur ?? 0) : (ec && ec.freteUn != null ? ec.freteUn : 0);
+    const marg = p => custo > 0 && p > 0 ? (p * (1 - feePct - impPct) - freteAt(p) - custo) / p : null;
     const denom = 1 - feePct - impPct - cfg.pisoPct / 100;
-    const piso = custo > 0 && denom > 0 ? +(custo / denom).toFixed(2) : null;
+    // piso por faixa de frete: menor preço que mantém a margem mínima
+    let piso = null;
+    if (custo > 0 && denom > 0) {
+      const pLo = (custo + (fx ? (fx.lo ?? fx.cur ?? 0) : freteAt(0))) / denom, pHi = (custo + (fx ? (fx.hi ?? fx.cur ?? 0) : freteAt(PX_FS_LIMIT))) / denom;
+      piso = +(pLo < PX_FS_LIMIT ? pLo : Math.max(pHi, PX_FS_LIMIT)).toFixed(2);
+    }
     const margAtual = marg(my), margAlvo = alvo != null ? marg(alvo) : null;
     const podeReagir = alvo != null && (piso == null ? null : alvo >= piso);
     // promoções
@@ -4167,7 +4251,7 @@ function pxCompute() {
     if (piso == null && (st === 'perdendo' || st === 'empatado') && inScope) acao += ' · sem custo no Bling';
     rows.push({
       id: it.id, it, title: it.title || '', sku, link: it.permalink, catalogo: !!it.catalog_listing, full: it.shipping?.logistic_type === 'fulfillment', inScope,
-      my, regular, ref, ptw, st, gap, alvo, custo, feePct, piso, margAtual, margAlvo, podeReagir, ativas, cands, candPreco, caminho,
+      my, regular, ref, ptw, st, gap, alvo, custo, feePct, impPct, freteAt, freteFonte: fx ? 'ML' : ec && ec.freteUn != null ? ec.freteFonte : '—', mAt: marg, piso, margAtual, margAlvo, podeReagir, ativas, cands, candPreco, caminho,
       var1, var7, baixou, acao, tone, curva: ec ? ec.curva : null,
       prio: rk * 1e6 - (ec && ec.curva === 'A' ? 3e5 : ec && ec.curva === 'B' ? 1e5 : 0) - Math.min(9e4, Math.abs(gap || 0) * 1e5),
     });
@@ -4208,7 +4292,8 @@ function pxRender() {
       <div><b>Mesmo produto</b> — anúncios associados a um produto de catálogo comparam com todas as ofertas desse produto.</div>
       <div><b>Vinculado</b> — você escolhe o produto de catálogo equivalente (botão Agir → Referência).</div>
       <div><b>Manual</b> — preço observado que você digita quando o concorrente não está em catálogo. O ML não libera a leitura de anúncios de outros vendedores.</div>
-      <div><b>Piso</b> — menor preço que mantém a margem mínima: custo ÷ (1 − tarifa − impostos − margem mínima). Custo e tarifa vêm do Estoque &amp; Compras (Bling).</div>
+      <div><b>Margem</b> — (preço − tarifa ML − frete − imposto − custo) ÷ preço. Custo e % Tributos vêm do cadastro do Bling; tarifa é a média real das vendas; frete é o custo do frete grátis que o ML cobra de você no preço analisado (muda abaixo/acima de R$ 79).</div>
+      <div><b>Piso</b> — menor preço que mantém a margem mínima: (custo + frete) ÷ (1 − tarifa − imposto − margem mínima).</div>
     </div></details></div>
   <div class="pr-kpis">
     ${kpi('Reagir já', a.reagir, 'reagir', 'crit', 'mais caro e cabe na margem')}
@@ -4280,7 +4365,7 @@ function pxDetail(id) {
     const lo = p.mn, hi = p.mx;
     const sug = r.alvo != null ? Math.min(hi ?? r.my, Math.max(lo ?? 0, r.alvo)) : (p.sg || hi || r.my);
     const k = 'px-p-' + (p.id || p.t).replace(/[^a-zA-Z0-9]/g, '');
-    const mg = r.custo > 0 ? ((fixo ? p.p : sug) * (1 - r.feePct - ((typeof ecCfg === 'function' ? ecCfg().impostoPct : 0) || 0) / 100) - r.custo) / (fixo ? p.p : sug) : null;
+    const mg = r.mAt(fixo ? p.p : sug);
     return `<tr><td><div class="fw6">${ecEsc(prType(p.t).s)}</div><div class="ec-sub">${ecEsc(p.n || prType(p.t).n)}${p.e ? ' · até ' + ecEsc(String(p.e).slice(0, 10).split('-').reverse().join('/')) : ''}</div></td>
       <td class="mono" style="font-size:11px">${p.t === 'SELLER_COUPON_CAMPAIGN' ? (p.pct ? p.pct + '% no carrinho' : 'cupom') : fixo ? (p.p ? 'preço do ML: ' + pxM2(p.p) : 'definido pelo ML') : `faixa ${pxM2(lo)} – ${pxM2(hi)}${p.sg ? '<div class="ec-sub">sugerido ML ' + pxM2(p.sg) + '</div>' : ''}`}</td>
       <td>${fixo ? '' : `<input id="${k}" type="number" step="0.01" value="${sug != null ? sug.toFixed(2) : ''}" style="width:90px;background:var(--bg2);border:1px solid var(--border2);color:var(--text);padding:5px 8px;border-radius:6px;font:12px var(--mono);text-align:right" oninput="pxMargHint(this,'${k}-m')">`}
@@ -4296,7 +4381,7 @@ function pxDetail(id) {
         ${ecStat('Seu preço', pxM2(r.my), r.regular > r.my + 0.005 ? 'cheio ' + pxM2(r.regular) : 'sem desconto')}
         ${ecStat('Menor concorrente', pxM2(r.ref.min), r.ref.fonte || 'sem referência')}
         ${ecStat('Preço-alvo', pxM2(r.alvo), r.ptw && r.ptw.ptw ? 'preço para ganhar (ML)' : r.alvo != null ? 'igualar concorrente' + (cfg.abaixoR ? ' − ' + pxM2(cfg.abaixoR) : '') : '—')}
-        ${ecStat('Piso de margem', pxM2(r.piso), r.custo ? `custo ${pxM2(r.custo)} · tarifa ${ecPct(r.feePct, 1)}` : 'sem custo no Bling')}
+        ${ecStat('Piso de margem', pxM2(r.piso), r.custo ? `custo ${pxM2(r.custo)} · tarifa ${ecPct(r.feePct, 1)} · frete ${pxM2(r.freteAt(r.my))} · imposto ${ecPct(r.impPct, 1)}` : 'sem custo no Bling')}
         ${ecStat('Margem', r.margAtual != null ? ecPct(r.margAtual, 1) : '—', r.margAlvo != null ? 'no alvo: ' + ecPct(r.margAlvo, 1) : '')}
       </div>
       ${r.ptw ? `<div class="pr-guide" style="margin-bottom:14px"><b>Catálogo:</b> ${ecEsc({ winning: 'você está ganhando', competing: 'você está competindo (não ganha)', sharing_first_place: 'dividindo o 1º lugar', listed: 'listado sem competir' }[r.ptw.st] || r.ptw.st)}${r.ptw.win ? ` · ganhador ${r.ptw.win[0] === r.id ? '<b>é você</b>' : `<span class="mono">${ecEsc(r.ptw.win[0])}</span> a <b>${pxM2(r.ptw.win[1])}</b>`}` : ''}${r.ptw.share ? ` · ${r.ptw.share} dividindo` : ''}${r.ptw.opp.length ? `<br>Ganhar sem baixar preço: <b>${r.ptw.opp.map(ecEsc).join(', ')}</b>` : ''}</div>` : ''}
@@ -4331,9 +4416,8 @@ function pxClose() { const m = document.getElementById('px-modal'); if (m) m.sty
 function pxMargHint(inp, outId) {
   const r = PX.rows.find(x => x.id === PX.cur); const o = document.getElementById(outId); if (!r || !o) return;
   const p = parseFloat(inp.value); if (!(p > 0) || !(r.custo > 0)) { o.textContent = ''; return; }
-  const imp = ((typeof ecCfg === 'function' ? ecCfg().impostoPct : 0) || 0) / 100;
-  const mg = (p * (1 - r.feePct - imp) - r.custo) / p;
-  o.innerHTML = `margem ${ecPct(mg, 1)}${r.piso && p < r.piso ? ' · <span class="c-red">abaixo do piso</span>' : ''}`;
+  const mg = r.mAt(p);
+  o.innerHTML = `margem ${ecPct(mg, 1)} · frete ${pxM2(r.freteAt(p))}${r.piso && p < r.piso ? ' · <span class="c-red">abaixo do piso</span>' : ''}`;
 }
 async function pxRefreshOne(id) { pxClose(); await pxLoad(true, [id]); pxDetail(id); }
 
@@ -4457,6 +4541,7 @@ async function pxExport() {
     'Anúncio': r.id, 'Título': r.title, 'SKU': r.sku, 'Catálogo': r.catalogo ? 'Sim' : 'Não', 'Full': r.full ? 'Sim' : 'Não', 'Curva': r.curva || '',
     'Seu preço': n2(r.my), 'Preço cheio': n2(r.regular), 'Menor concorrente': n2(r.ref.min), 'Fonte': r.ref.fonte || '', 'Ofertas concorrentes': r.ref.nOffers || 0,
     'Diferença %': p1(r.gap), 'Situação': PX_ST[r.st][0], 'Preço-alvo': n2(r.alvo), 'Margem atual %': p1(r.margAtual), 'Margem no alvo %': p1(r.margAlvo), 'Piso': n2(r.piso), 'Custo': n2(r.custo),
+    'Tarifa %': p1(r.feePct), 'Frete atual': n2(r.freteAt(r.my)), 'Frete no alvo': r.alvo != null ? n2(r.freteAt(r.alvo)) : '', 'Imposto %': p1(r.impPct),
     'Concorrente 24h %': p1(r.var1), 'Concorrente 7d %': p1(r.var7), 'Promoções elegíveis': r.candPreco.map(p => prType(p.t).n).join(', '), 'Promoções ativas': r.ativas.map(p => prType(p.t).n).join(', '),
     'Ação sugerida': r.acao, 'Link': r.link || '',
   }));
@@ -4622,7 +4707,7 @@ function prCompute() {
     const ec = ecBySku[sku] || null;
     const feePct = ec && ec.preco > 0 ? ec.tarifaUn / ec.preco : 0.16;
     const custo = ec ? ec.custo : 0;
-    const margemPromo = custo > 0 && best > 0 ? best - best * feePct - custo : null;
+    const margemPromo = custo > 0 && best > 0 ? best - best * feePct - best * (ec.impPct || 0) / 100 - (ec.freteUn || 0) - custo : null;
     const margemPromoPct = margemPromo != null ? margemPromo / best : null;
     const r = {
       id: it.id, title: it.title || '', sku, link: it.permalink, full: it.shipping?.logistic_type === 'fulfillment', estoqueML: it.available_quantity || 0,
@@ -4719,7 +4804,7 @@ function prRender() {
   const dod = PR.rows.filter(r => r.actTypes.has('DOD'));
   const opCards = [
     ['crit', 'estoquecurto', 'Estoque curto em promoção', 'Promoção ativa em produto que pode romper. Limite a quantidade ou pause para não vender o que não vai repor.'],
-    ['crit', 'abaixocusto', 'Promoção abaixo do custo', 'Preço promocional − tarifa ML − custo < 0. Revise o desconto ou saia da campanha.'],
+    ['crit', 'abaixocusto', 'Promoção abaixo do custo', 'Preço promocional − tarifa ML − frete − imposto − custo < 0. Revise o desconto ou saia da campanha.'],
     ['aten', 'asempromo', 'Curva A sem promoção', 'Seus campeões de venda sem nenhum incentivo. Maior retorno por esforço: aderir primeiro aqui.'],
     ['aten', 'girar', 'Excesso de estoque elegível a relâmpago', 'Produto parado ou em excesso que pode entrar em relâmpago/liquidação para girar capital.'],
     ['aten', 'vencendo', 'Promoções terminando em até 3 dias', 'Sem renovação programada. Renove para não perder o ritmo de vendas.'],
