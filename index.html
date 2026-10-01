@@ -4108,19 +4108,20 @@ function ecExportConc() {
 // D3 custo do Bling no momento da venda (congelado) · D4 imposto = % Tributos do cadastro (estimado até haver NF) ·
 // D6 frete do envio rateado pelo valor dos itens · D8 inativo > 90 dias.
 // ════════════════════════════════════════════════════════════════
-const CC = { loading: false, view: { dias: 30, from: null, to: null, q: '', curva: '', tab: 'vendas', uf: '', pj: '', canal: '' }, facts: [], prev: [], agg: null, drill: null, syncedAt: null };
+const CC = { nf: { map: {}, loaded: false, listed: false, busy: false, again: false, done: 0, tot: 0, err: null }, naoFat: [], loading: false, view: { dias: 30, from: null, to: null, q: '', curva: '', tab: 'vendas', uf: '', pj: '', canal: '' }, facts: [], prev: [], agg: null, drill: null, syncedAt: null };
 const CC_DB = 'ml_intel_cc', CC_STORE = 'days', CC_MAX_DIAS = 180;
 
 // ───────── IndexedDB ─────────
 function ccDb() {
   if (CC._db) return CC._db;
   CC._db = new Promise((res, rej) => {
-    const r = indexedDB.open(CC_DB, 3);
+    const r = indexedDB.open(CC_DB, 4);
     r.onupgradeneeded = () => { const db = r.result;
       if (!db.objectStoreNames.contains(CC_STORE)) db.createObjectStore(CC_STORE, { keyPath: 'date' });
       if (!db.objectStoreNames.contains('buyers')) db.createObjectStore('buyers', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('bl')) db.createObjectStore('bl', { keyPath: 'date' });
-      if (!db.objectStoreNames.contains('bld')) db.createObjectStore('bld', { keyPath: 'id' }); };
+      if (!db.objectStoreNames.contains('bld')) db.createObjectStore('bld', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('nf')) db.createObjectStore('nf', { keyPath: 'id' }); };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
   return CC._db;
@@ -4261,7 +4262,9 @@ async function ccOpen(force) {
     await ccSync(p.pFrom < minDay ? minDay : p.pFrom, force);
     if (!CC.buyers) await ccBuyersLoad();
     await ccBlSync(p.pFrom < minDay ? minDay : p.pFrom);
+    if (!CC.nf.loaded) await ccNfLoad();
     await ccLoadFacts();
+    ccNfStart();
     if (CC.view.tab === 'regioes') ccEnrich(CC.facts);
     if (CC.view.tab === 'clientes') { CC.loading = false; await ccOpenClientes(); }
   } catch (e) {
@@ -4370,7 +4373,9 @@ function ccRender() {
       <div><b>Margem de contribuição</b> — receita − tarifa ML − frete pago por você − imposto (% Tributos do Bling) − custo do produto. Calculada só sobre itens com custo conhecido (cobertura mostrada no card).</div>
       <div><b>Custo</b> — custo do Bling no momento da venda (vendas a partir de hoje); vendas anteriores usam custo <i>reconstruído</i> pelos pedidos de compra.</div>
       <div><b>Frete</b> — real do envio (últimos 15 dias) ou estimado pela média real do SKU.</div>
-      <div><b>Receita líquida fiscal</b> — depende das notas fiscais do Bling (permissão de NF-e ainda não liberada).</div>
+      <div><b>Receita líquida fiscal</b> — valor das NF-e de venda autorizadas no Bling − NF-e de devolução de venda, pela data de emissão. Inclui o frete cobrado na nota.</div>
+      <div><b>Data da venda</b> — marketplaces: criação do pedido. Venda direta: emissão da NF (pedido sem NF autorizada ainda não é faturamento).</div>
+      <div><b>Imposto</b> — a empresa é do Simples Nacional: a NF não destaca o imposto, então vale o % Tributos do cadastro do produto.</div>
     </div></details></div>
   <div class="cc-filters">
     <div class="ec-chips">${[7, 30, 90].map(d => `<button class="ec-chip ${!CC.view.from && CC.view.dias === d ? 'active' : ''}" onclick="ccSetDias(${d})">${d} dias</button>`).join('')}
@@ -4389,11 +4394,11 @@ function ccRender() {
   el.innerHTML = head + `
   <div class="pr-kpis cc-kpis">
     ${kpi('receita', 'Faturamento bruto', ecMoneyK(a.receita), delta(a.receita, b.receita), 'neutral')}
-    ${`<div class="pr-kpi cc-kpi cc-na"><div class="ec-c-label"><span class="ec-dot" style="background:var(--text2)"></span>Receita líquida fiscal</div><div class="ec-c-val" style="font-size:14px">DADO INDISPONÍVEL</div><div class="ec-c-sub">depende das NF-e do Bling</div></div>`}
+    <button class="pr-kpi cc-kpi" id="cc-nf-kpi" onclick="ccNfDrill()">${ccNfKpiHtml()}</button>
     ${kpi('margem', 'Margem de contribuição', a.margemPct != null ? ecMoneyK(a.margem) : '—', a.margemPct != null ? `<b>${ecPct(a.margemPct, 1)}</b> · ${delta(a.margem, b.margem)}<br><span class="ec-muted">cobertura ${ecPct(a.cobMargem)} da receita</span>` : 'sem custo do Bling', a.margemPct == null ? 'neutral' : a.margemPct < 0.1 ? 'crit' : a.margemPct < 0.2 ? 'aten' : 'ok')}
     ${kpi('pedidos', 'Pedidos', ecInt(a.ped), delta(a.ped, b.ped) + `<br><span class="ec-muted">${ecInt(a.un)} unidades</span>`, 'neutral')}
     ${kpi('ticket', 'Ticket médio', ecMoney2(a.ticket), delta(a.ticket, b.ticket), 'neutral')}
-    ${kpi('cancel', 'Cancelamentos', ecInt(a.cancPed), `${ecMoneyK(a.cancVal)} · ${delta(a.cancPed, b.cancPed, true)}<br><span class="ec-muted">devoluções: indisponível</span>`, a.cancPed ? 'aten' : 'ok')}
+    ${kpi('cancel', 'Cancelamentos', ecInt(a.cancPed), `${ecMoneyK(a.cancVal)} · ${delta(a.cancPed, b.cancPed, true)}<br><span class="ec-muted" id="cc-dev-sub">${ccNfDevHtml()}</span>`, a.cancPed ? 'aten' : 'ok')}
   </div>
   ${(() => { const al = ccAlerts(rows, prow); return `<div class="card" style="margin-bottom:16px"><div class="card-head"><span class="card-title">Alertas e decisões</span><span class="ec-muted">${al.length ? 'ordenados por gravidade · clique para ver os registros e a ação sugerida' : 'nada fora do padrão neste período'}</span></div>
     ${al.length ? `<div class="pr-ops">${al.map(x => `<button class="pr-op" onclick="ccAlertOpen('${x.k}')"><div class="pr-op-top"><span class="ec-dot" style="background:${EC_STATUS[x.tone]}"></span><span class="pr-op-n">${x.n}</span></div><div class="pr-op-t">${ecEsc(x.titulo)}</div><div class="pr-op-d">${x.impacto != null ? `<b>${ecMoneyK(x.impacto)}</b> ${ecEsc(x.impL)}` : ecEsc(x.desc)}</div></button>`).join('')}</div>` : ''}
@@ -4405,7 +4410,7 @@ function ccRender() {
     </div></div>
     <div class="card"><div class="card-head"><span class="card-title">Ponte da margem</span><span class="ec-muted">do faturamento à margem</span></div><div class="card-body">
       ${pontes.map(([l, v, k, t]) => `<div class="ec-hbar" onclick="ccDrill('${k === 'receita' ? 'receita' : 'margem'}')" data-tip="${l}: ${ecMoney(v)} (${pct(Math.abs(v), a.receita)} da receita)"><div class="ec-hbar-l"><span class="ec-dot" style="background:${EC_STATUS[t]}"></span>${l}</div><div class="ec-hbar-trk"><div class="ec-hbar-fill" style="width:${Math.abs(v) / pmax * 100}%;background:${EC_STATUS[t]}"></div></div><div class="ec-hbar-v mono">${ecMoneyK(v)}</div></div>`).join('')}
-      <div class="ec-muted" style="margin-top:8px">Frete: ${pct(a.frf.real, a.receita)} da receita com frete real, ${pct(a.frf.estimado, a.receita)} estimado. Imposto pelo % Tributos do cadastro (estimado até haver NF).</div>
+      <div class="ec-muted" style="margin-top:8px">Frete: ${pct(a.frf.real, a.receita)} da receita com frete real, ${pct(a.frf.estimado, a.receita)} estimado. Imposto pelo % Tributos do cadastro (Simples Nacional: a NF não destaca o imposto).</div>
     </div></div>
   </div>
   <div class="card" style="margin-top:16px"><div class="card-head"><span class="card-title">Resultado por canal</span><span class="ec-muted">${CC.blErr ? 'Bling: ' + ecEsc(CC.blErr) : 'loja do pedido no Bling · clique para detalhar'}</span></div>
@@ -4475,10 +4480,10 @@ async function ccBlFacts(from, to, mlIds) {
     if (cfg && cfg.tipo === 'ml') return; // pedido ML fora da base lida (ex.: antigo): ignorar
     outros.push({ ...o, date: d.date });
   }));
-  const ctx = ccCostCtx(); const taxMap = ecTaxPctMap(); const facts = []; let done = 0;
+  const ctx = ccCostCtx(); const taxMap = ecTaxPctMap(); const facts = []; let done = 0; const naoFat = [];
   await prPool(outros, 2, async o => {
     let det = await ccIdb('bld', 'readonly', s => s.get(o.id));
-    const fresh = det && (det.sit === o.sit) && (det.final || Date.now() - det.at < 6 * 3600e3);
+    const fresh = det && det.nfid !== undefined && (det.sit === o.sit) && (det.final || Date.now() - det.at < 6 * 3600e3);
     if (!fresh) {
       try {
         const r = await ccBlRaw('/pedidos/vendas/' + o.id); const x = r && r.data; if (!x || !x.id) return;
@@ -4486,7 +4491,7 @@ async function ccBlFacts(from, to, mlIds) {
         const liq = Math.max(0, bruto - ((x.desconto && x.desconto.unidade === 'REAL' ? x.desconto.valor : bruto * ((x.desconto && x.desconto.valor) || 0) / 100) || 0));
         const old = det;
         det = { id: o.id, at: Date.now(), sit: o.sit, final: o.date < ecDay(30), num: x.numero, date: x.data, loja: o.loja, cid: x.contato && x.contato.id, tp: x.contato && x.contato.tipoPessoa, uf: x.transporte?.etiqueta?.uf || '', mun: x.transporte?.etiqueta?.municipio || '',
-          com: x.taxas ? x.taxas.taxaComissao || 0 : 0, frete: x.taxas ? x.taxas.custoFrete || 0 : 0, nf: !!(x.notaFiscal && x.notaFiscal.id),
+          com: x.taxas ? x.taxas.taxaComissao || 0 : 0, frete: x.taxas ? x.taxas.custoFrete || 0 : 0, nf: !!(x.notaFiscal && x.notaFiscal.id), nfid: (x.notaFiscal && x.notaFiscal.id) || 0,
           itens: (x.itens || []).map(i => { const sku = normSku(i.codigo || ''); const rec = (i.quantidade || 0) * (i.valor || 0) * (1 - (i.desconto || 0) / 100) * (liq / bruto); const prev = old && old.itens.find(k => k.s === sku);
             const [c, cf] = prev && prev.c != null ? [prev.c, prev.cf] : (ctx.ok ? ccCostAt(ctx, sku, x.data, today) : [null, null]);
             return { s: sku, t: String(i.descricao || '').slice(0, 80), q: i.quantidade || 0, u: i.quantidade ? Math.round(rec / i.quantidade * 100) / 100 : 0, c, cf, ip: prev && prev.ipf === 'Bling' ? prev.ip : ecTaxPct(sku, taxMap), ipf: prev && prev.ipf === 'Bling' ? 'Bling' : (taxMap[sku] != null ? 'Bling' : 'padrão') }; }) };
@@ -4497,6 +4502,14 @@ async function ccBlFacts(from, to, mlIds) {
     done++; if (done % 10 === 0) ccProgress(`Lendo pedidos de Shopee e outros canais: ${done}/${outros.length}`, done / outros.length * 100);
     if (!det) return;
     const cfg = lojas[det.loja] || {};
+    // D1: venda direta entra pela data de faturamento (emissão da NF autorizada); sem NF ainda não é faturamento
+    let dia = det.date;
+    if (cfg.tipo === 'outro' && det.sit !== 12 && CC.nf.listed) {
+      const nf = det.nfid ? CC.nf.map[det.nfid] : null;
+      if (nf && CC_NF_OK.includes(nf.sit)) dia = nf.d;
+      else if (nf || !det.nfid) { naoFat.push({ d: det.date, v: det.itens.reduce((s, i) => s + i.q * i.u, 0) }); return; } // sem NF ou NF não autorizada
+      // NF existe mas está fora do intervalo já listado: mantém a data do pedido
+    }
     const tot = det.itens.reduce((s, i) => s + i.q * i.u, 0) || 1;
     const bid = det.cid ? 'B' + det.cid : null;
     if (bid && CC.buyers && !CC.buyers[bid]) { const rec = { id: bid, dt: det.tp === 'J' ? 'CNPJ' : det.tp === 'F' ? 'CPF' : '', uf: det.uf, city: det.mun, contrib: '', ie: false, at: Date.now() }; CC.buyers[bid] = rec; ccBuyerPut(rec); }
@@ -4505,11 +4518,152 @@ async function ccBlFacts(from, to, mlIds) {
       // tarifa: a do Bling quando informada; senão o % configurado para o canal (tarifa estimada ou comissão);
       // loja própria / venda direta não tem tarifa de venda (zero); marketplace sem % informado = indisponível
       const f = det.com > 0 ? det.com * share : (cfg.taxaPct > 0 ? i.q * i.u * cfg.taxaPct / 100 : (cfg.tipo === 'outro' || !lojas[det.loja] ? (cfg.tipo === 'outro' ? 0 : null) : null));
-      facts.push({ o: 'BL' + det.id, num: det.num, pk: null, d: det.date + 'T12:00:00-03:00', st: det.sit === 12 ? 'cancelled' : 'paid', i: null, s: i.s, t: i.t, q: i.q, u: i.u, f: f == null ? null : Math.round(f * 100) / 100, ff: det.com > 0 ? 'Bling' : f > 0 ? (cfg.tipo === 'outro' ? 'comissão' : 'estimada') : f === 0 ? 'sem tarifa' : 'ausente',
+      facts.push({ o: 'BL' + det.id, num: det.num, pk: null, d: dia + 'T12:00:00-03:00', st: det.sit === 12 ? 'cancelled' : 'paid', i: null, s: i.s, t: i.t, q: i.q, u: i.u, f: f == null ? null : Math.round(f * 100) / 100, ff: det.com > 0 ? 'Bling' : f > 0 ? (cfg.tipo === 'outro' ? 'comissão' : 'estimada') : f === 0 ? 'sem tarifa' : 'ausente',
         sh: null, fr: Math.round(det.frete * share * 100) / 100, b: bid, n: '', b2b: false, full: false, c: i.c, cf: i.cf, ip: i.ip, ipf: i.ipf, ch: det.loja, src: 'bling' });
     });
   });
+  CC.naoFat = naoFat;
   return { chMap, facts };
+}
+// ───────── NF-e do Bling: receita líquida fiscal, devoluções e data de faturamento ─────────
+// A lista de NF não traz o valor: cada nota é lida uma vez (/nfe/{id}) e fica guardada no navegador.
+// Nenhum dado do destinatário é guardado (só número, data, situação, loja, natureza e valores).
+const CC_NF_META = 'cc_nf_meta_v1', CC_NAT_KEY = 'cc_nat_v1';
+const CC_NF_OK = [5, 6], CC_NF_DEV_OK = [5, 6, 7]; // 5 autorizada · 6 DANFE emitida · 7 registrada
+const CC_NAT_DEF = { '15109819688': 'venda', '15109543475': 'venda', '15109543827': 'venda', '8682717635': 'venda', '15109819627': 'venda', '15102134673': 'dev', '15101963259': 'dev', '15108662129': 'dev', '8682717658': 'outro', '15102105533': 'outro' };
+function ccNatMap() { let c = {}; try { c = JSON.parse(localStorage.getItem(CC_NAT_KEY) || '{}'); } catch (e) {} return { ...(c.map || {}), ...CC_NAT_DEF }; }
+const ccNatCls = (id, map) => map[String(id)] || 'outro';
+async function ccNatSync() {
+  let c = {}; try { c = JSON.parse(localStorage.getItem(CC_NAT_KEY) || '{}'); } catch (e) {}
+  if (c.at && Date.now() - c.at < 7 * 864e5) return;
+  const map = {};
+  for (let pg = 1; pg <= 5; pg++) {
+    const r = await ccBlRaw(`/naturezas-operacoes?limite=100&pagina=${pg}`); const list = (r && r.data) || [];
+    list.forEach(n => { const d = String(n.descricao || n.nome || '').toLowerCase(); map[n.id] = /compra/.test(d) ? 'outro' : /devolu|estorno/.test(d) ? 'dev' : /venda/.test(d) ? 'venda' : 'outro'; });
+    if (list.length < 100) break; await sleep(350);
+  }
+  localStorage.setItem(CC_NAT_KEY, JSON.stringify({ at: Date.now(), map }));
+}
+async function ccNfLoad() {
+  const db = await ccDb();
+  const all = await new Promise(res => { const q = db.transaction('nf').objectStore('nf').getAll(); q.onsuccess = () => res(q.result || []); q.onerror = () => res([]); });
+  CC.nf.map = {}; all.forEach(r => { if (r.sl === state.sellerId) CC.nf.map[r.id] = r; });
+  CC.nf.loaded = true;
+  let meta = {}; try { meta = JSON.parse(localStorage.getItem(CC_NF_META) || '{}'); } catch (e) {}
+  CC.nf.listed = meta.seller === state.sellerId && !!meta.at;
+}
+async function ccNfPutMany(recs) { if (!recs.length) return; const db = await ccDb(); return new Promise(res => { const t = db.transaction('nf', 'readwrite'); const st = t.objectStore('nf'); recs.forEach(r => st.put(r)); t.oncomplete = () => res(true); t.onerror = () => res(false); }); }
+// roda em segundo plano: não segura a abertura da Central
+async function ccNfStart() {
+  if (state.isDemo) return;
+  if (CC.nf.busy) { CC.nf.again = true; return; }
+  CC.nf.busy = true;
+  try { do { CC.nf.again = false; await ccNfRun(); } while (CC.nf.again); }
+  catch (e) { CC.nf.err = e.message; }
+  finally { CC.nf.busy = false; ccNfPaint(); }
+}
+async function ccNfRun() {
+  const bc = blingCfg(); if (!bc.url || !bc.key) { CC.nf.err = 'Bling não conectado'; return; }
+  CC.nf.err = null;
+  const p = ccPeriod(); const minDay = ecDay(CC_MAX_DIAS); const from = p.pFrom < minDay ? minDay : p.pFrom; const today = ecDay();
+  let meta = {}; try { meta = JSON.parse(localStorage.getItem(CC_NF_META) || '{}'); } catch (e) {}
+  const mine = meta.seller === state.sellerId; const covered = mine && meta.from <= from;
+  if (!(covered && Date.now() - meta.at < 30 * 60e3)) {
+    await ccNatSync(); const nat = ccNatMap();
+    // intervalo a listar: só o que falta (dias mais antigos) ou os últimos 3 dias (mudança de situação)
+    const start = covered ? ecDay(3) : from; const end = mine && !covered && meta.from ? meta.from : today;
+    const ranges = [[start, end]]; if (mine && !covered) ranges.push([ecDay(3), today]);
+    for (const [a, b] of ranges) for (const tipo of [1, 0]) for (let pg = 1; pg <= 600; pg++) {
+      CC.nf.msg = `listando notas (página ${pg})`; if (pg % 3 === 1) ccNfPaint();
+      const r = await ccBlRaw(`/nfe?tipo=${tipo}&limite=100&pagina=${pg}&dataEmissaoInicial=${a}%2000:00:00&dataEmissaoFinal=${b}%2023:59:59`);
+      const list = (r && r.data) || []; const recs = [];
+      list.forEach(n => { const old = CC.nf.map[n.id]; const natId = n.naturezaOperacao && n.naturezaOperacao.id;
+        const rec = { id: n.id, sl: state.sellerId, tipo, sit: n.situacao, d: String(n.dataEmissao || '').slice(0, 10), num: n.numero, loja: String((n.loja && n.loja.id) || 0), nat: natId, cls: ccNatCls(natId, nat), val: old ? old.val : null, fr: old ? old.fr : null, ped: old ? old.ped : '' };
+        CC.nf.map[n.id] = rec; recs.push(rec); });
+      await ccNfPutMany(recs);
+      if (list.length < 100) break; await sleep(350);
+    }
+    const first = !CC.nf.listed; CC.nf.listed = true; CC.nf.msg = '';
+    localStorage.setItem(CC_NF_META, JSON.stringify({ seller: state.sellerId, from: mine && meta.from < from ? meta.from : from, at: Date.now() }));
+    // a data de faturamento da venda direta depende da lista de NF: refaz os fatos
+    if ((first || CC.facts.concat(CC.prev).some(x => x.src === 'bling' && (ccLojas()[x.ch] || {}).tipo === 'outro') || CC.naoFat.length)) { await ccLoadFacts(); if (!CC.loading) ccProgress(null); }
+  }
+  // valor de cada nota (do período atual para trás)
+  const todo = Object.values(CC.nf.map).filter(r => r.val == null && r.d >= from && r.d <= p.to && ((r.cls === 'venda' && r.tipo === 1 && CC_NF_OK.includes(r.sit)) || (r.cls === 'dev' && CC_NF_DEV_OK.includes(r.sit)))).sort((x, y) => y.d.localeCompare(x.d));
+  CC.nf.tot = todo.length; CC.nf.done = 0; let fail = 0; ccNfPaint();
+  await prPool(todo, 2, async rec => {
+    if (CC.nf.again || fail > 15) return;
+    try {
+      const r = await ccBlRaw('/nfe/' + rec.id); const x = r && r.data; if (!x || !x.id) throw new Error('nota não lida');
+      rec.val = +x.valorNota || 0; rec.fr = +x.valorFrete || 0; rec.ped = String(x.numeroPedidoLoja || '');
+      await ccNfPutMany([rec]); fail = 0;
+    } catch (e) { fail++; await sleep(2000); }
+    CC.nf.done++; if (CC.nf.done % 10 === 0) ccNfPaint();
+    await sleep(350);
+  });
+  if (fail > 15) CC.nf.err = 'o Bling parou de responder — tente atualizar em alguns minutos';
+  CC.nf.tot = 0; CC.nf.done = 0;
+}
+// soma das NF do período (respeita o filtro de canal; os demais filtros não existem na nota)
+function ccNfSum(prev) {
+  const p = ccPeriod(); const a = prev ? p.pFrom : p.from, b = prev ? p.pTo : p.to; const canal = CC.view.canal;
+  const o = { vend: 0, dev: 0, nV: 0, nD: 0, pend: 0, list: [] };
+  Object.values(CC.nf.map).forEach(r => {
+    if (r.d < a || r.d > b || (canal && ccLojaNome(r.loja) !== canal)) return;
+    const isV = r.cls === 'venda' && r.tipo === 1 && CC_NF_OK.includes(r.sit), isD = r.cls === 'dev' && CC_NF_DEV_OK.includes(r.sit);
+    if (!isV && !isD) return;
+    if (r.val == null) o.pend++; else if (isV) o.vend += r.val; else o.dev += r.val;
+    if (isV) o.nV++; else o.nD++;
+    o.list.push(r);
+  });
+  o.liq = o.vend - o.dev; return o;
+}
+function ccNfKpiHtml() {
+  const lab = tone => `<div class="ec-c-label"><span class="ec-dot" style="background:${tone}"></span>Receita líquida fiscal</div>`;
+  const s = ccNfSum(); const N = CC.nf;
+  if (!s.list.length) {
+    const why = N.err ? 'DADO INDISPONÍVEL' : N.busy || !N.listed ? 'lendo notas…' : 'sem NF no período';
+    return lab('var(--text2)') + `<div class="ec-c-val" style="font-size:14px">${why}</div><div class="ec-c-sub">${N.err ? ecEsc(N.err) : N.msg ? ecEsc(N.msg) : 'NF-e do Bling'}</div>`;
+  }
+  const b = ccNfSum(true); const v = CC.view; const outros = v.q || v.curva || v.uf || v.pj || v.icms;
+  const dl = !s.pend && !b.pend && b.list.length ? (() => { const d = ccVar(s.liq, b.liq); return d == null ? '' : ` · <span class="${d >= 0 ? 'c-green' : 'c-red'}">${d >= 0 ? '▲' : '▼'} ${ecPct(Math.abs(d), 1)}</span>`; })() : '';
+  return lab(s.pend ? EC_STATUS.aten : EC_STATUS.ok) + `<div class="ec-c-val">${ecMoneyK(s.liq)}</div><div class="ec-c-sub">${ecInt(s.nV)} NF de venda${dl}<br><span class="ec-muted">devoluções ${ecMoneyK(s.dev)} (${s.nD})</span>`
+    + (s.pend ? `<br><span style="color:var(--orange)">parcial — faltam ${ecInt(s.pend)} notas${N.busy && N.tot ? ` (lendo ${N.done}/${N.tot})` : ''}</span>` : '')
+    + (N.err ? `<br><span style="color:var(--orange)">${ecEsc(N.err)}</span>` : '')
+    + (outros ? '<br><span class="ec-muted">filtros de produto/cliente não se aplicam à NF</span>' : '') + '</div>';
+}
+function ccNfDevHtml() {
+  const s = ccNfSum(); if (!CC.nf.listed) return 'devoluções: lendo notas…';
+  return `devoluções (NF): ${s.nD}${s.nD ? ' · ' + (s.list.some(r => r.cls === 'dev' && r.val == null) ? 'lendo valor…' : ecMoneyK(s.dev)) : ''}` + (() => { const p = ccPeriod(); const nf = CC.naoFat.filter(x => x.d >= p.from && x.d <= p.to); return nf.length ? `<br>venda direta sem NF: ${nf.length} · ${ecMoneyK(nf.reduce((t, x) => t + x.v, 0))}` : ''; })();
+}
+function ccNfPaint() {
+  const k = document.getElementById('cc-nf-kpi'); if (k) k.innerHTML = ccNfKpiHtml();
+  const d = document.getElementById('cc-dev-sub'); if (d) d.innerHTML = ccNfDevHtml();
+}
+const CC_NF_SIT = { 1: 'pendente', 2: 'cancelada', 3: 'aguardando recibo', 4: 'rejeitada', 5: 'autorizada', 6: 'DANFE emitida', 7: 'registrada', 8: 'aguardando protocolo', 9: 'denegada' };
+function ccNfDrill(tab, page) {
+  const m = document.getElementById('cc-modal'); if (!m) return;
+  const s = ccNfSum(); const p = ccPeriod(); CC.nfDrill = { tab: tab || 'todas', page: page || 0 }; const D = CC.nfDrill;
+  const isDev = r => r.cls === 'dev';
+  const list = s.list.filter(r => D.tab === 'todas' || (D.tab === 'dev') === isDev(r)).sort((x, y) => y.d.localeCompare(x.d) || y.num - x.num);
+  const pages = Math.max(1, Math.ceil(list.length / 50));
+  const body = list.slice(D.page * 50, D.page * 50 + 50).map(r => `<tr><td class="mono">${ecEsc(String(r.num))}</td><td class="mono">${r.d.split('-').reverse().join('/')}</td><td>${ecPill(isDev(r) ? 'devolução' : 'venda', isDev(r) ? 'aten' : 'ok')}</td><td style="font-size:11px">${ecEsc(ccLojaNome(r.loja))}</td><td>${CC_NF_SIT[r.sit] || r.sit}</td><td class="mono">${ecEsc(r.ped || '')}</td><td class="r mono">${r.fr ? ecMoney2(r.fr) : ''}</td><td class="r mono">${r.val == null ? '<span class="ec-muted">lendo…</span>' : ecMoney2(isDev(r) ? -r.val : r.val)}</td></tr>`).join('');
+  m.innerHTML = `<div class="ec-modal-box cc-drill">
+    <div class="card-head"><span class="card-title">Receita líquida fiscal</span><button class="btn-sm" onclick="ccClose()">✕</button></div>
+    <div style="padding:12px 18px">
+      <div class="ec-muted" style="margin-bottom:8px">Central Comercial › Receita líquida fiscal · ${p.from.split('-').reverse().join('/')} a ${p.to.split('-').reverse().join('/')}${CC.view.canal ? ' · ' + ecEsc(CC.view.canal) : ''}<br>NF-e de venda autorizadas no Bling − NF-e de devolução de venda, pela data de emissão. Notas canceladas, rejeitadas ou pendentes ficam fora.</div>
+      <div class="ec-strip ec-strip-sm" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px">${ecStat('NF de venda', ecMoney2(s.vend), s.nV + ' notas')}${ecStat('Devoluções', ecMoney2(s.dev), s.nD + ' notas')}${ecStat('Receita líquida fiscal', ecMoney2(s.liq), s.pend ? 'parcial' : '')}${ecStat('Notas ainda sem valor', ecInt(s.pend), s.pend ? 'leitura em andamento' : 'completo')}</div>
+      <div class="ec-chips" style="margin-bottom:8px">${[['todas', 'Todas'], ['venda', 'Vendas'], ['dev', 'Devoluções']].map(([k, l]) => `<button class="ec-chip ${D.tab === k ? 'active' : ''}" onclick="ccNfDrill('${k}')">${l}</button>`).join('')}<button class="btn-sm" style="margin-left:auto" onclick="ccNfExport()">⬇ Excel</button></div>
+      <div class="ec-table-wrap" style="max-height:55vh"><table class="t ec-t px-table" style="min-width:820px"><thead><tr><th>NF nº</th><th>Emissão</th><th>Tipo</th><th>Canal</th><th>Situação</th><th>Pedido na loja</th><th class="r">Frete na nota</th><th class="r">Valor da nota</th></tr></thead><tbody>${body || '<tr><td colspan="8" class="ec-muted" style="padding:16px;text-align:center">Nenhuma nota.</td></tr>'}</tbody></table></div>
+      ${pages > 1 ? `<div class="ec-pager"><span class="ec-muted">${list.length} notas</span><div style="display:flex;gap:6px;align-items:center"><button class="btn-sm" ${D.page ? '' : 'disabled'} onclick="ccNfDrill('${D.tab}',${D.page - 1})">‹</button><span class="ec-muted">${D.page + 1}/${pages}</span><button class="btn-sm" ${D.page < pages - 1 ? '' : 'disabled'} onclick="ccNfDrill('${D.tab}',${D.page + 1})">›</button></div></div>` : ''}
+    </div></div>`;
+  m.style.display = 'flex';
+}
+async function ccNfExport() {
+  if (!(await ccLoadXlsx())) return;
+  const linhas = ccNfSum().list.sort((x, y) => y.d.localeCompare(x.d)).map(r => ({ 'NF nº': r.num, 'Emissão': r.d, 'Tipo': r.cls === 'dev' ? 'Devolução' : 'Venda', 'Canal': ccLojaNome(r.loja), 'Situação': CC_NF_SIT[r.sit] || r.sit, 'Pedido na loja': r.ped || '', 'Frete na nota': r.fr == null ? '' : r.fr, 'Valor da nota': r.val == null ? '' : (r.cls === 'dev' ? -r.val : r.val) }));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), 'Notas fiscais');
+  XLSX.writeFile(wb, `central_comercial_nfe_${ecDay()}.xlsx`);
 }
 // fatos unificados (ML + demais canais) de um intervalo
 async function ccFactsRange(from, to) {
@@ -4826,7 +4980,7 @@ async function ccExportAlert(k) {
 
 // ───────── detalhamento universal ─────────
 const CC_DEF = {
-  receita: ['Faturamento bruto', 'Preço × quantidade dos itens de pedidos não cancelados, pela data de criação do pedido.'],
+  receita: ['Faturamento bruto', 'Preço × quantidade dos itens de pedidos não cancelados. Marketplaces: data de criação do pedido; venda direta: data de emissão da NF.'],
   margem: ['Margem de contribuição', 'Receita − tarifa ML − frete − imposto (% Tributos) − custo do produto. Itens sem custo ficam fora da margem.'],
   pedidos: ['Pedidos', 'Pedidos não cancelados criados no período.'],
   ticket: ['Ticket médio', 'Faturamento bruto ÷ pedidos.'],
@@ -4887,9 +5041,9 @@ function ccRenderDrill() {
     const t = list.reduce((s, r) => ({ rec: s.rec + r.receita, m: s.m + r.margem }), { rec: 0, m: 0 });
     foot = `<tr class="cc-total"><td colspan="3">Total (${list.length} municípios)</td><td class="r mono">${ecMoney2(t.rec)}</td><td class="r mono">${ecMoney2(t.m)}</td><td></td></tr>`;
   } else {
-    const ev = [['Venda (receita)', a.receita], ['Tarifa ML', -a.tarifa], ['Frete pago', -a.frete], ['Imposto estimado', -a.imposto], ['Custo do produto', -a.custo], ['Margem de contribuição', a.margem], ['Cancelamentos (fora da receita)', a.cancVal], ['Devoluções', null], ['Ads', null], ['Bonificação / compensação', null]];
+    const ev = [['Venda (receita)', a.receita], ['Tarifa ML', -a.tarifa], ['Frete pago', -a.frete], ['Imposto estimado', -a.imposto], ['Custo do produto', -a.custo], ['Margem de contribuição', a.margem], ['Cancelamentos (fora da receita)', a.cancVal], ['Devoluções (NF-e de devolução de venda)', !CC.nf.listed || ccNfSum().pend ? null : ccNfSum().dev], ['Ads', null], ['Bonificação / compensação', null]];
     head = '<th>Evento</th><th class="r">Valor</th><th class="r">% da receita</th><th>Fonte</th>';
-    body = ev.map(([l, v]) => `<tr><td>${l}</td><td class="r mono">${v == null ? '<span class="ec-muted">DADO INDISPONÍVEL</span>' : ecMoney2(v)}</td><td class="r mono">${v == null || !a.receita ? '—' : ecPct(Math.abs(v) / a.receita, 1)}</td><td class="ec-muted" style="font-size:11px">${v == null ? 'fonte ainda não integrada' : /Imposto/.test(l) ? '% Tributos Bling' : /Custo/.test(l) ? 'Bling (momento/reconstruído)' : /Frete/.test(l) ? 'ML envio (real) ou média do SKU' : 'pedidos ML'}</td></tr>`).join('');
+    body = ev.map(([l, v]) => `<tr><td>${l}</td><td class="r mono">${v == null ? '<span class="ec-muted">DADO INDISPONÍVEL</span>' : ecMoney2(v)}</td><td class="r mono">${v == null || !a.receita ? '—' : ecPct(Math.abs(v) / a.receita, 1)}</td><td class="ec-muted" style="font-size:11px">${v == null ? 'fonte ainda não integrada' : /Devolu/.test(l) ? 'NF-e Bling' : /Imposto/.test(l) ? '% Tributos Bling' : /Custo/.test(l) ? 'Bling (momento/reconstruído)' : /Frete/.test(l) ? 'ML envio (real) ou média do SKU' : 'pedidos ML'}</td></tr>`).join('');
   }
   const pages = Math.max(1, Math.ceil(list.length / 50));
   m.innerHTML = `<div class="ec-modal-box cc-drill">
