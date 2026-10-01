@@ -4395,6 +4395,9 @@ function ccRender() {
     ${kpi('ticket', 'Ticket médio', ecMoney2(a.ticket), delta(a.ticket, b.ticket), 'neutral')}
     ${kpi('cancel', 'Cancelamentos', ecInt(a.cancPed), `${ecMoneyK(a.cancVal)} · ${delta(a.cancPed, b.cancPed, true)}<br><span class="ec-muted">devoluções: indisponível</span>`, a.cancPed ? 'aten' : 'ok')}
   </div>
+  ${(() => { const al = ccAlerts(rows, prow); return `<div class="card" style="margin-bottom:16px"><div class="card-head"><span class="card-title">Alertas e decisões</span><span class="ec-muted">${al.length ? 'ordenados por gravidade · clique para ver os registros e a ação sugerida' : 'nada fora do padrão neste período'}</span></div>
+    ${al.length ? `<div class="pr-ops">${al.map(x => `<button class="pr-op" onclick="ccAlertOpen('${x.k}')"><div class="pr-op-top"><span class="ec-dot" style="background:${EC_STATUS[x.tone]}"></span><span class="pr-op-n">${x.n}</span></div><div class="pr-op-t">${ecEsc(x.titulo)}</div><div class="pr-op-d">${x.impacto != null ? `<b>${ecMoneyK(x.impacto)}</b> ${ecEsc(x.impL)}` : ecEsc(x.desc)}</div></button>`).join('')}</div>` : ''}
+    ${CC.base ? '' : '<div class="ec-muted" style="padding:0 18px 12px">O alerta de clientes PJ parando de comprar aparece depois que a sub-aba Clientes for aberta (carrega 180 dias).</div>'}</div>`; })()}
   <div class="g2">
     <div class="card"><div class="card-head"><span class="card-title">Receita e margem por dia</span><span class="ec-muted">clique numa barra</span></div><div class="card-body">
       <div class="cc-days">${days.map(d => `<div class="cc-day" onclick="ccDrill('dia','${d.d}')" data-tip="${fmtD(d.d)}: ${ecMoney(d.receita)} · margem ${ecMoney(d.margem)} · ${d.ped} pedidos"><div class="cc-bar" style="height:${Math.max(2, d.receita / maxR * 100)}%"><div class="cc-bar-m" style="height:${d.receita ? Math.max(0, Math.min(100, d.margem / d.receita * 100)) : 0}%"></div></div></div>`).join('')}</div>
@@ -4759,6 +4762,66 @@ function ccRenderRegioes(el, head) {
     </tbody></table></div>
     <div class="ec-muted" style="padding:10px 16px">UF e município do endereço de faturamento informado no pedido do ML. Clique numa UF para ver municípios, produtos, pedidos e clientes.</div></div>
   <div class="ec-modal" id="cc-modal" onclick="if(event.target===this)ccClose()"></div>`;
+}
+
+// ───────── alertas e decisões ─────────
+function ccAlerts(rows, prow) {
+  const cur = {}, prev = {};
+  ccBySku(rows).forEach(r => { cur[r.sku] = r; }); ccBySku(prow).forEach(r => { prev[r.sku] = r; });
+  const out = []; const nm = s => (cur[s] || prev[s]).t || s;
+  // 1. produtos em queda
+  const queda = Object.values(prev).filter(p => p.receita >= 500).map(p => { const c = cur[p.sku] ? cur[p.sku].receita : 0; return { sku: p.sku, t: nm(p.sku), a: p.receita, b: c, v: (c - p.receita) / p.receita, imp: p.receita - c }; }).filter(x => x.v <= -0.3).sort((x, y) => y.imp - x.imp);
+  if (queda.length) out.push({ k: 'queda', tone: 'crit', titulo: 'Produtos em queda', desc: 'Receita caiu 30% ou mais contra o período anterior (produtos que vendiam R$ 500 ou mais).', n: queda.length, impacto: queda.reduce((s, x) => s + x.imp, 0), impL: 'de receita a menos', acao: 'Verificar ruptura de estoque, perda de posição no anúncio, preço frente ao concorrente e fim de promoção.',
+    cols: ['Receita anterior', 'Receita atual', 'Variação', 'Perda'], linhas: queda.map(x => ({ sku: x.sku, t: x.t, vals: [ecMoney(x.a), ecMoney(x.b), `<span class="c-red">${ecPct(x.v, 0)}</span>`, ecMoney(x.imp)], raw: [x.a, x.b, x.v, x.imp] })) });
+  // 2. margem negativa
+  const neg = Object.values(cur).filter(r => r.recM > 0 && r.margem < 0).sort((x, y) => x.margem - y.margem);
+  if (neg.length) out.push({ k: 'negativa', tone: 'crit', titulo: 'Produtos com margem negativa', desc: 'A soma de tarifa, frete, imposto e custo é maior que a receita do produto no período.', n: neg.length, impacto: -neg.reduce((s, x) => s + x.margem, 0), impL: 'de prejuízo no período', acao: 'Rever preço, promoção ativa e frete; se não fechar a conta, pausar o anúncio.',
+    cols: ['Unid.', 'Faturamento', 'Margem', 'Margem %'], linhas: neg.map(r => ({ sku: r.sku, t: r.t, vals: [ecInt(r.q), ecMoney(r.receita), `<span class="c-red">${ecMoney(r.margem)}</span>`, ecPct(r.margemPct, 1)], raw: [r.q, r.receita, r.margem, r.margemPct] })) });
+  // 3. margem baixa com volume
+  const baixa = Object.values(cur).filter(r => r.recM >= 1000 && r.margem >= 0 && r.margemPct < 0.10).sort((x, y) => y.receita - x.receita);
+  if (baixa.length) out.push({ k: 'baixa', tone: 'aten', titulo: 'Volume alto com margem abaixo de 10%', desc: 'Produtos que faturam R$ 1.000 ou mais no período com margem de contribuição menor que 10%.', n: baixa.length, impacto: baixa.reduce((s, x) => s + x.receita, 0), impL: 'de receita com margem fraca', acao: 'Testar aumento de preço ou reduzir o desconto de campanha; conferir se o custo no Bling está certo.',
+    cols: ['Unid.', 'Faturamento', 'Margem', 'Margem %'], linhas: baixa.map(r => ({ sku: r.sku, t: r.t, vals: [ecInt(r.q), ecMoney(r.receita), ecMoney(r.margem), ecPct(r.margemPct, 1)], raw: [r.q, r.receita, r.margem, r.margemPct] })) });
+  // 4. vendendo bem com estoque em risco
+  const risco = Object.values(cur).map(r => ({ r, ec: ccEcRow(r.sku) })).filter(x => x.ec && (x.ec.risco === 'CRÍTICO' || x.ec.risco === 'ALTO') && x.r.receita >= 300).sort((x, y) => y.r.receita - x.r.receita);
+  if (risco.length) out.push({ k: 'estoque', tone: 'aten', titulo: 'Vendendo com estoque em risco', desc: 'Produtos com venda no período e risco de ruptura crítico ou alto no Estoque & Compras.', n: risco.length, impacto: risco.reduce((s, x) => s + x.r.receita, 0), impL: 'de receita do período exposta', acao: 'Priorizar compra ou envio ao Full; evitar promoção até repor.',
+    cols: ['Faturamento', 'Estoque', 'Cobertura', 'Risco'], linhas: risco.map(x => ({ sku: x.r.sku, t: x.r.t, vals: [ecMoney(x.r.receita), ecInt(x.ec.total), isFinite(x.ec.cob) ? Math.round(x.ec.cob) + ' d' : '—', ecPill(x.ec.risco, x.ec.risco === 'CRÍTICO' ? 'crit' : 'aten')], raw: [x.r.receita, x.ec.total, isFinite(x.ec.cob) ? Math.round(x.ec.cob) : '', x.ec.risco] })) });
+  // 5. cancelamento alto
+  const canc = Object.values(cur).filter(r => r.canc >= 3 && r.canc / (r.q + r.canc) >= 0.10).sort((x, y) => y.canc - x.canc);
+  if (canc.length) out.push({ k: 'cancel', tone: 'aten', titulo: 'Cancelamento acima de 10%', desc: 'Produtos com 3 ou mais unidades canceladas e taxa de cancelamento de 10% ou mais.', n: canc.length, impacto: null, impL: '', acao: 'Conferir estoque do anúncio, prazo de envio e descrição; cancelamento afeta a reputação.',
+    cols: ['Vendidas', 'Canceladas', 'Taxa'], linhas: canc.map(r => ({ sku: r.sku, t: r.t, vals: [ecInt(r.q), ecInt(r.canc), ecPct(r.canc / (r.q + r.canc), 1)], raw: [r.q, r.canc, r.canc / (r.q + r.canc)] })) });
+  // 6. produtos em alta
+  const alta = Object.values(cur).filter(c => c.receita >= 500).map(c => { const p = prev[c.sku] ? prev[c.sku].receita : 0; return { sku: c.sku, t: c.t, a: p, b: c.receita, v: p ? (c.receita - p) / p : null, imp: c.receita - p }; }).filter(x => x.a >= 100 && x.v >= 0.3).sort((x, y) => y.imp - x.imp);
+  if (alta.length) out.push({ k: 'alta', tone: 'ok', titulo: 'Produtos em alta', desc: 'Receita cresceu 30% ou mais contra o período anterior.', n: alta.length, impacto: alta.reduce((s, x) => s + x.imp, 0), impL: 'de receita a mais', acao: 'Garantir estoque e avaliar reforço de anúncio ou promoção.',
+    cols: ['Receita anterior', 'Receita atual', 'Variação', 'Ganho'], linhas: alta.map(x => ({ sku: x.sku, t: x.t, vals: [ecMoney(x.a), ecMoney(x.b), `<span class="c-green">+${ecPct(x.v, 0)}</span>`, ecMoney(x.imp)], raw: [x.a, x.b, x.v, x.imp] })) });
+  // 7. dados incompletos
+  const semC = Object.values(cur).filter(r => r.receita > 0 && r.recM < r.receita - 0.01).sort((x, y) => y.receita - x.receita);
+  if (semC.length) out.push({ k: 'dados', tone: 'neutral', titulo: 'Margem não calculada', desc: 'Itens sem custo no Bling ou de canal sem tarifa informada: ficam fora da margem.', n: semC.length, impacto: semC.reduce((s, x) => s + (x.receita - x.recM), 0), impL: 'de receita sem margem', acao: 'Preencher o custo no cadastro do Bling e a tarifa do canal em ⚙ Canais.',
+    cols: ['Faturamento', 'Sem margem'], linhas: semC.map(r => ({ sku: r.sku, t: r.t, vals: [ecMoney(r.receita), ecMoney(r.receita - r.recM)], raw: [r.receita, r.receita - r.recM] })) });
+  // 8. clientes PJ em risco (quando a base de clientes já foi carregada)
+  if (CC.base) { const pj = ccCustomers().filter(c => c.tipo === 'PJ' && (c.status === 'Em risco' || c.status === 'Inativo') && c.ped >= 2).sort((x, y) => y.receita - x.receita);
+    if (pj.length) out.push({ k: 'pj', tone: 'aten', titulo: 'Clientes PJ recorrentes parando de comprar', desc: 'Empresas com 2 ou mais pedidos na base que estão há mais de 60 dias sem comprar.', n: pj.length, impacto: pj.reduce((s, c) => s + c.receita, 0), impL: 'de receita histórica (180 dias)', acao: 'Abordagem ativa de reativação; ver o Cliente 360 de cada um.', cliente: true,
+      cols: ['Status', 'Pedidos', 'Receita base', 'Sem comprar há'], linhas: pj.map(c => ({ sku: String(c.id), t: ccMask(c.n, c.id) + (c.b ? ' · ' + c.b.uf : ''), vals: [ecPill(c.status, CC_ST_TONE[c.status]), c.ped, ecMoney(c.receita), c.rec + ' dias'], raw: [c.status, c.ped, c.receita, c.rec] })) }); }
+  CC.alerts = out; return out;
+}
+function ccAlertOpen(k) {
+  const al = (CC.alerts || []).find(x => x.k === k); const m = document.getElementById('cc-modal'); if (!al || !m) return;
+  const p = ccPeriod();
+  m.innerHTML = `<div class="ec-modal-box cc-drill"><div class="card-head"><span class="card-title">${ecEsc(al.titulo)}</span><button class="btn-sm" onclick="ccClose()">✕</button></div>
+    <div style="padding:12px 18px">
+      <div class="ec-muted" style="margin-bottom:8px">Central Comercial › Alertas › ${ecEsc(al.titulo)} · ${p.from.split('-').reverse().join('/')} a ${p.to.split('-').reverse().join('/')}<br>${ecEsc(al.desc)}</div>
+      <div class="pr-guide" style="margin-bottom:10px"><b>Ação sugerida:</b> ${ecEsc(al.acao)}${al.impacto != null ? `<br><b>Impacto:</b> ${ecMoney(al.impacto)} ${ecEsc(al.impL)}` : ''}</div>
+      <div class="ec-tools" style="margin-bottom:8px"><span class="ec-muted" style="align-self:center">${al.n} ${al.cliente ? 'clientes' : 'produtos'} · clique numa linha para abrir ${al.cliente ? 'o Cliente 360' : 'os pedidos'}</span><span style="flex:1"></span><button class="btn-sm" onclick="ccExportAlert('${k}')">⬇ Excel</button></div>
+      <div class="ec-table-wrap" style="max-height:58vh"><table class="t ec-t px-table" style="min-width:820px"><thead><tr><th>${al.cliente ? 'Cliente' : 'Produto'}</th>${al.cols.map(c => `<th class="r">${c}</th>`).join('')}</tr></thead><tbody>
+      ${al.linhas.slice(0, 300).map(l => `<tr style="cursor:pointer" onclick="${al.cliente ? `ccCliente360('${ecEsc(l.sku)}')` : `ccDrill('sku','${ecEsc(l.sku)}')`}"><td>${al.cliente ? ecEsc(l.t) : `<div class="ec-prod"><div class="ec-prod-n">${ecEsc(l.t)}</div><div class="ec-prod-s mono">${ecEsc(l.sku)}</div></div>`}</td>${l.vals.map(v => `<td class="r mono">${v}</td>`).join('')}</tr>`).join('')}
+      </tbody></table></div>
+    </div></div>`;
+  m.style.display = 'flex';
+}
+async function ccExportAlert(k) {
+  const al = (CC.alerts || []).find(x => x.k === k); if (!al || !(await ccLoadXlsx())) return;
+  const linhas = al.linhas.map(l => { const o = al.cliente ? { 'Cliente (mascarado)': l.t } : { 'SKU': l.sku, 'Produto': l.t }; al.cols.forEach((c, i) => { const v = l.raw[i]; o[c] = typeof v === 'number' ? +v.toFixed(4) : v; }); return o; });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), 'Alerta');
+  XLSX.writeFile(wb, `alerta_${k}_${ecDay()}.xlsx`);
 }
 
 // ───────── detalhamento universal ─────────
