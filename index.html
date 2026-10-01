@@ -689,6 +689,23 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .px-table { min-width:1300px; }
 .px-table .ec-tag { white-space:nowrap; display:inline-block; margin:1px 0; }
 
+.pr-kpis.cc-kpis { grid-template-columns:repeat(6,1fr); }
+.cc-kpi { min-height:118px; } .cc-na { cursor:default; opacity:.75; }
+.cc-filters { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; justify-content:space-between; margin-bottom:14px; }
+.cc-filters .ec-tools { flex:1; min-width:320px; max-width:720px; }
+.cc-filters select, .cc-custom input { background:var(--bg2); border:1px solid var(--border2); color:var(--text); padding:6px 8px; border-radius:8px; font-size:12px; }
+.cc-custom { display:inline-flex; gap:6px; align-items:center; font-size:12px; color:var(--text2); margin-left:6px; }
+.cc-days { display:flex; align-items:flex-end; gap:2px; height:170px; border-bottom:1px solid var(--border2); }
+.cc-day { flex:1; height:100%; display:flex; align-items:flex-end; cursor:pointer; }
+.cc-day:hover .cc-bar { opacity:.8; }
+.cc-bar { width:100%; background:var(--accent); border-radius:3px 3px 0 0; display:flex; align-items:flex-end; overflow:hidden; }
+.cc-bar-m { width:100%; background:var(--green); }
+.cc-quality { display:flex; flex-wrap:wrap; gap:6px 18px; align-items:center; font-size:11px; color:var(--text2); margin:14px 0 4px; }
+.cc-drill { width:min(1180px,100%)!important; }
+.cc-total td { border-top:1px solid var(--border2); font-weight:700; }
+@media (max-width:1200px) { .pr-kpis.cc-kpis { grid-template-columns:repeat(3,1fr); } }
+@media (max-width:700px) { .pr-kpis.cc-kpis { grid-template-columns:repeat(2,1fr); } }
+
 /* ═══ PROMOÇÕES & OFERTAS ═══ */
 .pr-guide { background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:12px; padding:12px 16px; font-size:13px; color:var(--text2); margin-bottom:16px; }
 .pr-guide b { color:var(--text); }
@@ -870,6 +887,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
   <!-- TABS -->
   <div class="tabs">
     <div class="tab active" onclick="goTab(this,'overview')">📊 Visão Geral</div>
+    <div class="tab" onclick="goTab(this,'comercial');ccOpen()">💼 Comercial</div>
     <div class="tab" onclick="goTab(this,'pricing');pxOpen()">💰 Precificação</div>
     <div class="tab" onclick="goTab(this,'demand')">📈 Demanda & Trends</div>
     <div class="tab" onclick="goTab(this,'compras');ecOpen()">🧭 Estoque &amp; Compras</div>
@@ -1331,6 +1349,22 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
           <div class="bars" id="comp-bars"></div>
         </div>
       </div>
+    </div>
+
+    <!-- ═══ CENTRAL COMERCIAL ═══ -->
+    <div class="page" id="page-comercial">
+      <div class="page-header" style="flex-wrap:wrap;gap:12px">
+        <div>
+          <div class="page-title">Central <span>Comercial</span></div>
+          <div class="page-meta" id="cc-meta">Vendas, margem e pedidos — Titanium Power Parts</div>
+        </div>
+        <div class="ec-head-actions">
+          <button class="btn-sm" onclick="ccExport()">⬇ Excel</button>
+          <button class="btn-sm btn-primary" onclick="ccOpen()">↻ Atualizar</button>
+        </div>
+      </div>
+      <div class="ec-progress" id="cc-progress"><span class="ec-prog-msg">Carregando…</span><div class="ec-prog-trk"><div class="ec-prog-fill"></div></div></div>
+      <div id="cc-body"><div class="card"><div class="card-body" style="text-align:center;padding:40px;color:var(--text2)">Abra esta aba para carregar as vendas.</div></div></div>
     </div>
 
     <!-- ═══ ALERTS ═══ -->
@@ -4065,6 +4099,386 @@ function ecExportConc() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// CENTRAL COMERCIAL — Titanium Power Parts (MVP: canal Mercado Livre)
+// Base: um registro por item de pedido (fato_item_venda), guardado por dia no IndexedDB.
+// Regras aprovadas: D1 data de criação do pedido (marketplace) · D2 cancelado não é receita ·
+// D3 custo do Bling no momento da venda (congelado) · D4 imposto = % Tributos do cadastro (estimado até haver NF) ·
+// D6 frete do envio rateado pelo valor dos itens · D8 inativo > 90 dias.
+// ════════════════════════════════════════════════════════════════
+const CC = { loading: false, view: { dias: 30, from: null, to: null, q: '', curva: '' }, facts: [], prev: [], agg: null, drill: null, syncedAt: null };
+const CC_DB = 'ml_intel_cc', CC_STORE = 'days', CC_MAX_DIAS = 180;
+
+// ───────── IndexedDB ─────────
+function ccDb() {
+  if (CC._db) return CC._db;
+  CC._db = new Promise((res, rej) => {
+    const r = indexedDB.open(CC_DB, 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore(CC_STORE, { keyPath: 'date' }); };
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+  return CC._db;
+}
+async function ccGet(date) { const db = await ccDb(); return new Promise(res => { const q = db.transaction(CC_STORE).objectStore(CC_STORE).get(date); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); }
+async function ccPut(rec) { const db = await ccDb(); return new Promise(res => { const t = db.transaction(CC_STORE, 'readwrite'); t.objectStore(CC_STORE).put(rec); t.oncomplete = () => res(true); t.onerror = () => res(false); }); }
+async function ccRange(from, to) {
+  const db = await ccDb();
+  return new Promise(res => { const out = []; const q = db.transaction(CC_STORE).objectStore(CC_STORE).openCursor(IDBKeyRange.bound(from, to)); q.onsuccess = () => { const c = q.result; if (c) { out.push(c.value); c.continue(); } else res(out); }; q.onerror = () => res(out); });
+}
+
+// ───────── custo (D3) ─────────
+function ccCostCtx() {
+  const prods = EC.bling?.produtos || [];
+  const byCod = {}, byId = {};
+  prods.forEach(p => { if (p.codigo) byCod[normSku(p.codigo)] = p; byId[p.id] = p; });
+  const cp = {}; (EC.compras?.produtos || []).forEach(p => { if (p.cod) cp[normSku(p.cod)] = p; });
+  const atual = sku => {
+    const p = byCod[sku]; const c = cp[sku];
+    if (p && p.custo > 0) return p.custo;
+    if (p && p.comp && p.comp.c && p.comp.c.length) { // kit: soma dos componentes
+      let t = 0; for (const [id, q] of p.comp.c) { const k = byId[id]; const kc = k ? (k.custo > 0 ? k.custo : (cp[normSku(k.codigo)]?.ultCusto || 0)) : 0; if (!(kc > 0)) return 0; t += kc * q; }
+      return t;
+    }
+    return c && c.ultCusto > 0 ? c.ultCusto : 0;
+  };
+  return { ok: prods.length > 0, atual, cp };
+}
+// custo de uma venda: hoje = custo do cadastro (momento da venda); dias anteriores = reconstruído pelas compras
+function ccCostAt(ctx, sku, date, today) {
+  const ca = ctx.atual(sku);
+  if (!(ca > 0)) return [null, null];
+  if (date >= today) return [ca, 'venda'];
+  const c = ctx.cp[sku];
+  if (c && Array.isArray(c.hist) && c.hist.length && c.ultCusto > 0) {
+    let last = null; for (const h of c.hist) if (h[0] <= date && (!last || h[0] >= last[0])) last = h;
+    if (last && last[2] > 0) return [Math.round(ca * (last[2] / c.ultCusto) * 100) / 100, 'reconstruído'];
+  }
+  return [ca, 'atual'];
+}
+
+// ───────── sincronização (pedidos do ML por dia) ─────────
+async function ccFetchDay(day, idx, prev, ctx, taxMap, today, shipOk) {
+  const from = encodeURIComponent(day + 'T00:00:00.000-03:00'), to = encodeURIComponent(day + 'T23:59:59.999-03:00');
+  const items = []; let offset = 0, total = 1, guard = 0;
+  const old = {}; (prev?.items || []).forEach(x => { old[x.o + '|' + x.i + '|' + x.s] = x; });
+  while (offset < total && guard++ < 60) {
+    const page = await mlGet(`/orders/search?seller=${state.sellerId}&order.date_created.from=${from}&order.date_created.to=${to}&limit=50&offset=${offset}`);
+    if (!page || !page.results) return null;
+    total = page.paging?.total ?? page.results.length;
+    for (const o of page.results) {
+      const b2b = (o.tags || []).includes('b2b') || (o.context?.flows || []).includes('b2b');
+      for (const oi of (o.order_items || [])) {
+        const iid = oi.item?.id; const info = idx[iid];
+        let sku = oi.item?.seller_sku ? normSku(oi.item.seller_sku) : null;
+        if (!sku && info && info.skus.length === 1) sku = info.skus[0];
+        if (!sku) sku = '#' + iid;
+        const k = o.id + '|' + iid + '|' + sku; const ol = old[k];
+        const rec = {
+          o: o.id, pk: o.pack_id || null, d: o.date_created, st: o.status, i: iid, s: sku, t: String(oi.item?.title || '').slice(0, 80),
+          q: oi.quantity || 0, u: oi.unit_price || 0, f: Math.round((oi.sale_fee || 0) * (oi.quantity || 0) * 100) / 100,
+          sh: o.shipping?.id || null, b: o.buyer?.id || null, n: o.buyer?.nickname || '', b2b, full: !!(info && info.full),
+        };
+        // congelados: custo e imposto gravados na primeira leitura
+        if (ol && ol.c != null) { rec.c = ol.c; rec.cf = ol.cf; } else { const [c, cf] = ctx.ok ? ccCostAt(ctx, sku, day, today) : [null, null]; rec.c = c; rec.cf = cf; }
+        if (ol && ol.ip != null && ol.ipf === 'Bling') { rec.ip = ol.ip; rec.ipf = ol.ipf; } else { rec.ip = ecTaxPct(sku, taxMap); rec.ipf = taxMap[sku] != null ? 'Bling' : 'padrão'; }
+        if (ol && ol.fr != null) rec.fr = ol.fr;
+        items.push(rec);
+      }
+    }
+    offset += 50;
+  }
+  // frete real do envio (rateado pelo valor dos itens do envio)
+  if (shipOk) {
+    const bySh = {}; items.forEach(x => { if (x.sh && x.st !== 'cancelled' && x.fr == null) (bySh[x.sh] = bySh[x.sh] || []).push(x); });
+    await prPool(Object.keys(bySh), 6, async id => {
+      const cost = await ecShipCost(id); if (cost == null) return;
+      const parts = bySh[id]; const tot = parts.reduce((a, x) => a + x.q * x.u, 0) || 1;
+      parts.forEach(x => { x.fr = Math.round(cost * (x.q * x.u / tot) * 100) / 100; });
+    });
+  }
+  return { date: day, at: Date.now(), seller: state.sellerId, items };
+}
+async function ccSync(from, force) {
+  const today = ecDay(); const idx = ecItemIndex();
+  const ctx = ccCostCtx(); const taxMap = ecTaxPctMap();
+  const need = [];
+  for (let d = from; d <= today; d = ecAddDays(d, 1)) {
+    const r = await ccGet(d);
+    const age = Math.round((new Date(today) - new Date(d)) / 864e5);
+    if (!r || r.seller !== state.sellerId || age <= 2 || force) need.push([d, r]);
+    else if (ctx.ok && r.items.some(x => x.c == null && x.st !== 'cancelled')) {
+      // custo ausente (Bling não estava carregado na leitura): completa sem reler o ML
+      r.items.forEach(x => { if (x.c == null) { const [c, cf] = ccCostAt(ctx, x.s, d, today); x.c = c; x.cf = cf; } });
+      await ccPut(r);
+    }
+  }
+  let done = 0;
+  await prPool(need, 4, async ([d, r]) => {
+    const age = Math.round((new Date(today) - new Date(d)) / 864e5);
+    const rec = await ccFetchDay(d, idx, r && r.seller === state.sellerId ? r : null, ctx, taxMap, today, age <= 14).catch(() => null);
+    if (rec) await ccPut(rec);
+    done++; ccProgress(`Lendo pedidos do Mercado Livre: ${done}/${need.length} dias`, (done / need.length) * 100);
+  });
+  try { ecSaveShipCache(); } catch (e) {}
+  CC.syncedAt = Date.now();
+}
+function ccProgress(msg, pct) {
+  const el = document.getElementById('cc-progress'); if (!el) return;
+  if (msg == null) { el.style.display = 'none'; return; }
+  el.style.display = 'flex'; el.querySelector('.ec-prog-msg').textContent = msg;
+  const f = el.querySelector('.ec-prog-fill'); f.style.width = (pct == null ? 100 : Math.max(3, Math.min(100, pct))) + '%'; f.classList.toggle('ec-indet', pct == null);
+}
+
+// ───────── abertura e período ─────────
+function ccPeriod() {
+  const v = CC.view; const today = ecDay();
+  const to = v.to || today; const from = v.from || ecAddDays(to, -(v.dias - 1));
+  const len = Math.round((new Date(to) - new Date(from)) / 864e5) + 1;
+  return { from, to, len, pFrom: ecAddDays(from, -len), pTo: ecAddDays(from, -1) };
+}
+async function ccOpen(force) {
+  if (state.isDemo) { document.getElementById('cc-body').innerHTML = '<div class="card"><div class="card-body ec-muted">Conecte sua conta do Mercado Livre para usar a Central Comercial.</div></div>'; return; }
+  if (CC.loading) return;
+  CC.loading = true;
+  try {
+    // custo e % Tributos vêm do Estoque & Compras (Bling)
+    try {
+      const bc = blingCfg();
+      if (bc.url && bc.key) {
+        ccProgress('Carregando custo e tributação do Bling…', null);
+        if (!EC.rows.length && !EC.loading) await ecLoad(false);
+        for (let i = 0; i < 600 && EC.loading; i++) await sleep(500);
+      }
+    } catch (e) {}
+    const p = ccPeriod();
+    const minDay = ecDay(CC_MAX_DIAS);
+    await ccSync(p.pFrom < minDay ? minDay : p.pFrom, force);
+    await ccLoadFacts();
+  } catch (e) {
+    document.getElementById('cc-body').innerHTML = `<div class="card"><div class="card-body" style="color:var(--orange)">Erro ao carregar a Central Comercial: ${ecEsc(e.message)}</div></div>`;
+  } finally { CC.loading = false; ccProgress(null); }
+}
+async function ccLoadFacts() {
+  const p = ccPeriod();
+  const all = await ccRange(p.pFrom, p.to);
+  const flat = []; all.forEach(r => r.items.forEach(x => flat.push(x)));
+  const day = x => ecDayOf(x.d);
+  CC.facts = flat.filter(x => day(x) >= p.from && day(x) <= p.to);
+  CC.prev = flat.filter(x => day(x) >= p.pFrom && day(x) <= p.pTo);
+  CC.daysLoaded = all.length;
+  ccRender();
+}
+// data do pedido no fuso de Brasília
+const ecDayOf = iso => { const d = new Date(iso); return isNaN(d) ? '' : new Date(d.getTime() - 3 * 3600e3).toISOString().slice(0, 10); };
+
+// ───────── cálculo ─────────
+function ccFilter(rows) {
+  const v = CC.view; const q = v.q.trim().toLowerCase();
+  const curvaOf = {}; if (v.curva) EC.rows.forEach(r => { curvaOf[r.sku] = r.curva; });
+  return rows.filter(x => (!q || (x.s + ' ' + x.t + ' ' + x.o).toLowerCase().includes(q)) && (!v.curva || curvaOf[x.s] === v.curva));
+}
+function ccItem(x) {
+  const ec = ccEcRow(x.s);
+  const receita = x.q * x.u;
+  const frete = x.fr != null ? x.fr : (ec && ec.freteUn != null ? ec.freteUn * x.q : null);
+  const freteF = x.fr != null ? 'real' : frete != null ? 'estimado' : 'ausente';
+  const imposto = receita * (x.ip || 0) / 100;
+  const custo = x.c != null ? x.c * x.q : null;
+  const margem = custo != null && frete != null ? receita - x.f - frete - imposto - custo : null;
+  return { receita, tarifa: x.f, frete, freteF, imposto, custo, margem };
+}
+function ccEcRow(sku) { if (!CC._ecIdx || CC._ecIdxAt !== EC.loadedAt) { CC._ecIdx = {}; EC.rows.forEach(r => { CC._ecIdx[r.sku] = r; }); CC._ecIdxAt = EC.loadedAt; } return CC._ecIdx[sku] || null; }
+function ccAgg(rows) {
+  const val = rows.filter(x => x.st !== 'cancelled'), canc = rows.filter(x => x.st === 'cancelled');
+  const a = { receita: 0, tarifa: 0, frete: 0, imposto: 0, custo: 0, margem: 0, recComMargem: 0, itens: val.length, un: 0,
+    ped: new Set(val.map(x => x.o)).size, cancPed: new Set(canc.map(x => x.o)).size, cancVal: canc.reduce((s, x) => s + x.q * x.u, 0),
+    cf: { venda: 0, 'reconstruído': 0, atual: 0, sem: 0 }, frf: { real: 0, estimado: 0, ausente: 0 }, ipf: { Bling: 0, 'padrão': 0 } };
+  for (const x of val) {
+    const m = ccItem(x);
+    a.receita += m.receita; a.tarifa += m.tarifa; a.un += x.q; a.imposto += m.imposto;
+    a.cf[x.cf || 'sem'] = (a.cf[x.cf || 'sem'] || 0) + m.receita;
+    a.frf[m.freteF] += m.receita; a.ipf[x.ipf || 'padrão'] = (a.ipf[x.ipf || 'padrão'] || 0) + m.receita;
+    if (m.frete != null) a.frete += m.frete;
+    if (m.margem != null) { a.margem += m.margem; a.custo += m.custo; a.recComMargem += m.receita; }
+  }
+  a.ticket = a.ped ? a.receita / a.ped : 0;
+  a.margemPct = a.recComMargem ? a.margem / a.recComMargem : null;
+  a.cobMargem = a.receita ? a.recComMargem / a.receita : 0;
+  return a;
+}
+function ccByDay(rows, p) {
+  const m = {}; for (let d = p.from; d <= p.to; d = ecAddDays(d, 1)) m[d] = { receita: 0, margem: 0, ped: new Set() };
+  rows.filter(x => x.st !== 'cancelled').forEach(x => { const d = m[ecDayOf(x.d)]; if (!d) return; const it = ccItem(x); d.receita += it.receita; if (it.margem != null) d.margem += it.margem; d.ped.add(x.o); });
+  return Object.entries(m).map(([d, v]) => ({ d, receita: v.receita, margem: v.margem, ped: v.ped.size }));
+}
+function ccBySku(rows) {
+  const m = {};
+  rows.forEach(x => {
+    const r = m[x.s] || (m[x.s] = { sku: x.s, t: x.t, q: 0, ped: new Set(), receita: 0, margem: 0, recM: 0, custo: 0, canc: 0, cf: {} });
+    if (x.st === 'cancelled') { r.canc += x.q; return; }
+    const it = ccItem(x); r.q += x.q; r.ped.add(x.o); r.receita += it.receita;
+    if (it.margem != null) { r.margem += it.margem; r.recM += it.receita; r.custo += it.custo; }
+    r.cf[x.cf || 'sem'] = 1;
+  });
+  return Object.values(m).map(r => ({ ...r, ped: r.ped.size, margemPct: r.recM ? r.margem / r.recM : null }));
+}
+function ccByOrder(rows) {
+  const m = {};
+  rows.forEach(x => {
+    const r = m[x.o] || (m[x.o] = { o: x.o, d: x.d, st: x.st, b: x.b, n: x.n, b2b: x.b2b, itens: 0, un: 0, receita: 0, margem: 0, temMargem: true, skus: [] });
+    const it = ccItem(x); r.itens++; r.un += x.q; r.receita += it.receita; r.skus.push(x.s);
+    if (it.margem == null) r.temMargem = false; else r.margem += it.margem;
+  });
+  return Object.values(m).sort((a, b) => String(b.d).localeCompare(String(a.d)));
+}
+const ccMask = (n, id) => (n ? n.slice(0, 3) + '•••' : 'comprador') + (id ? ' ' + String(id).slice(-4) : '');
+const ccVar = (a, b) => b ? (a - b) / Math.abs(b) : null;
+
+// ───────── render ─────────
+function ccRender() {
+  const el = document.getElementById('cc-body'); if (!el) return;
+  const p = ccPeriod(); const rows = ccFilter(CC.facts), prow = ccFilter(CC.prev);
+  const a = ccAgg(rows), b = ccAgg(prow); CC.agg = a;
+  const fmtD = d => d.slice(8, 10) + '/' + d.slice(5, 7);
+  document.getElementById('cc-meta').textContent = `${fmtD(p.from)} a ${fmtD(p.to)} (${p.len} dias) · comparado com ${fmtD(p.pFrom)} a ${fmtD(p.pTo)} · atualizado ${CC.syncedAt ? new Date(CC.syncedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}`;
+  const delta = (x, y, inv) => { const v = ccVar(x, y); if (v == null) return '<span class="ec-muted">sem base</span>'; const good = inv ? v <= 0 : v >= 0; return `<span class="${good ? 'c-green' : 'c-red'}">${v >= 0 ? '▲' : '▼'} ${ecPct(Math.abs(v), 1)}</span> <span class="ec-muted">vs anterior</span>`; };
+  const kpi = (k, label, val, sub, tone) => `<button class="pr-kpi cc-kpi" onclick="ccDrill('${k}')"><div class="ec-c-label"><span class="ec-dot" style="background:${EC_STATUS[tone]}"></span>${label}</div><div class="ec-c-val">${val}</div><div class="ec-c-sub">${sub}</div></button>`;
+  const days = ccByDay(rows, p); const maxR = Math.max(1, ...days.map(d => d.receita));
+  const skus = ccBySku(rows).sort((x, y) => y.receita - x.receita);
+  const pontes = [['Receita bruta', a.receita, 'receita', 'neutral'], ['Tarifa ML', -a.tarifa, 'tarifa', 'aten'], ['Frete', -a.frete, 'frete', 'aten'], ['Imposto (estimado)', -a.imposto, 'imposto', 'aten'], ['Custo do produto', -a.custo, 'custo', 'aten'], ['Margem de contribuição', a.margem, 'margem', a.margem >= 0 ? 'ok' : 'crit']];
+  const pmax = Math.max(1, a.receita);
+  const pct = (v, t) => t ? ecPct(v / t, 1) : '—';
+  const conf = a.receita ? (a.cf.venda + a.cf['reconstruído']) / a.receita : 0;
+  const sem = conf >= 0.9 && a.frf.real / (a.receita || 1) >= 0.5 ? ['ok', 'Alta'] : conf >= 0.6 ? ['mon', 'Média'] : ['aten', 'Baixa'];
+  el.innerHTML = `
+  <div class="pr-guide"><b>Como ler:</b> todos os números vêm dos pedidos reais do Mercado Livre (data de criação do pedido); cancelados não entram na receita. Clique em qualquer card, barra ou linha para ver os registros que formam o número.
+    <details><summary>Definições</summary><div class="pr-gloss">
+      <div><b>Faturamento bruto</b> — preço × quantidade dos itens de pedidos não cancelados.</div>
+      <div><b>Margem de contribuição</b> — receita − tarifa ML − frete pago por você − imposto (% Tributos do Bling) − custo do produto. Calculada só sobre itens com custo conhecido (cobertura mostrada no card).</div>
+      <div><b>Custo</b> — custo do Bling no momento da venda (vendas a partir de hoje); vendas anteriores usam custo <i>reconstruído</i> pelos pedidos de compra.</div>
+      <div><b>Frete</b> — real do envio (últimos 15 dias) ou estimado pela média real do SKU.</div>
+      <div><b>Receita líquida fiscal</b> — depende das notas fiscais do Bling (permissão de NF-e ainda não liberada).</div>
+    </div></details></div>
+  <div class="cc-filters">
+    <div class="ec-chips">${[7, 30, 90].map(d => `<button class="ec-chip ${!CC.view.from && CC.view.dias === d ? 'active' : ''}" onclick="ccSetDias(${d})">${d} dias</button>`).join('')}
+      <span class="cc-custom"><input type="date" id="cc-from" value="${p.from}" min="${ecDay(CC_MAX_DIAS - 1)}" max="${ecDay()}"> a <input type="date" id="cc-to" value="${p.to}" max="${ecDay()}"> <button class="ec-chip ${CC.view.from ? 'active' : ''}" onclick="ccSetCustom()">Aplicar</button></span></div>
+    <div class="ec-tools"><select id="cc-curva" onchange="CC.view.curva=this.value;ccRender()"><option value="">Todas as curvas</option>${['A', 'B', 'C'].map(c => `<option ${CC.view.curva === c ? 'selected' : ''}>${c}</option>`).join('')}</select>
+      <input id="cc-q" placeholder="Filtrar por SKU, produto ou nº do pedido…" value="${ecEsc(CC.view.q)}" onchange="CC.view.q=this.value;ccRender()">
+      <span class="ec-tag" title="Shopee, site e B2B ainda não estão integrados">Canal: Mercado Livre</span></div>
+  </div>
+  <div class="pr-kpis cc-kpis">
+    ${kpi('receita', 'Faturamento bruto', ecMoneyK(a.receita), delta(a.receita, b.receita), 'neutral')}
+    ${`<div class="pr-kpi cc-kpi cc-na"><div class="ec-c-label"><span class="ec-dot" style="background:var(--text2)"></span>Receita líquida fiscal</div><div class="ec-c-val" style="font-size:14px">DADO INDISPONÍVEL</div><div class="ec-c-sub">depende das NF-e do Bling</div></div>`}
+    ${kpi('margem', 'Margem de contribuição', a.margemPct != null ? ecMoneyK(a.margem) : '—', a.margemPct != null ? `<b>${ecPct(a.margemPct, 1)}</b> · ${delta(a.margem, b.margem)}<br><span class="ec-muted">cobertura ${ecPct(a.cobMargem)} da receita</span>` : 'sem custo do Bling', a.margemPct == null ? 'neutral' : a.margemPct < 0.1 ? 'crit' : a.margemPct < 0.2 ? 'aten' : 'ok')}
+    ${kpi('pedidos', 'Pedidos', ecInt(a.ped), delta(a.ped, b.ped) + `<br><span class="ec-muted">${ecInt(a.un)} unidades</span>`, 'neutral')}
+    ${kpi('ticket', 'Ticket médio', ecMoney2(a.ticket), delta(a.ticket, b.ticket), 'neutral')}
+    ${kpi('cancel', 'Cancelamentos', ecInt(a.cancPed), `${ecMoneyK(a.cancVal)} · ${delta(a.cancPed, b.cancPed, true)}<br><span class="ec-muted">devoluções: indisponível</span>`, a.cancPed ? 'aten' : 'ok')}
+  </div>
+  <div class="g2">
+    <div class="card"><div class="card-head"><span class="card-title">Receita e margem por dia</span><span class="ec-muted">clique numa barra</span></div><div class="card-body">
+      <div class="cc-days">${days.map(d => `<div class="cc-day" onclick="ccDrill('dia','${d.d}')" data-tip="${fmtD(d.d)}: ${ecMoney(d.receita)} · margem ${ecMoney(d.margem)} · ${d.ped} pedidos"><div class="cc-bar" style="height:${Math.max(2, d.receita / maxR * 100)}%"><div class="cc-bar-m" style="height:${d.receita ? Math.max(0, Math.min(100, d.margem / d.receita * 100)) : 0}%"></div></div></div>`).join('')}</div>
+      <div class="ec-legend" style="margin-top:8px"><span><i style="background:var(--accent)"></i>Receita</span><span><i style="background:var(--green)"></i>Margem</span><span class="ec-muted">${fmtD(p.from)} → ${fmtD(p.to)}</span></div>
+    </div></div>
+    <div class="card"><div class="card-head"><span class="card-title">Ponte da margem</span><span class="ec-muted">do faturamento à margem</span></div><div class="card-body">
+      ${pontes.map(([l, v, k, t]) => `<div class="ec-hbar" onclick="ccDrill('${k === 'receita' ? 'receita' : 'margem'}')" data-tip="${l}: ${ecMoney(v)} (${pct(Math.abs(v), a.receita)} da receita)"><div class="ec-hbar-l"><span class="ec-dot" style="background:${EC_STATUS[t]}"></span>${l}</div><div class="ec-hbar-trk"><div class="ec-hbar-fill" style="width:${Math.abs(v) / pmax * 100}%;background:${EC_STATUS[t]}"></div></div><div class="ec-hbar-v mono">${ecMoneyK(v)}</div></div>`).join('')}
+      <div class="ec-muted" style="margin-top:8px">Frete: ${pct(a.frf.real, a.receita)} da receita com frete real, ${pct(a.frf.estimado, a.receita)} estimado. Imposto pelo % Tributos do cadastro (estimado até haver NF).</div>
+    </div></div>
+  </div>
+  <div class="card" style="margin-top:16px"><div class="card-head"><span class="card-title">Produtos</span><span class="ec-muted">${skus.length} SKUs vendidos · clique para ver os pedidos</span></div>
+    <div class="ec-table-wrap" style="max-height:480px"><table class="t ec-t px-table"><thead><tr><th>Produto</th><th class="r">Unid.</th><th class="r">Pedidos</th><th class="r">Faturamento</th><th class="r">Part.</th><th class="r">Margem</th><th class="r">Margem %</th><th>Custo</th></tr></thead><tbody>
+    ${skus.slice(0, 100).map(r => `<tr style="cursor:pointer" onclick="ccDrill('sku','${ecEsc(r.sku)}')"><td><div class="ec-prod"><div class="ec-prod-n">${ecEsc(r.t || r.sku)}</div><div class="ec-prod-s mono">${ecEsc(r.sku)}</div></div></td><td class="r mono">${ecInt(r.q)}</td><td class="r mono">${ecInt(r.ped)}</td><td class="r mono">${ecMoney(r.receita)}</td><td class="r mono">${pct(r.receita, a.receita)}</td><td class="r mono ${r.margem < 0 ? 'c-red' : ''}">${r.recM ? ecMoney(r.margem) : '—'}</td><td class="r mono ${r.margemPct != null && r.margemPct < 0.1 ? 'c-red' : ''}">${r.margemPct != null ? ecPct(r.margemPct, 1) : '—'}</td><td class="ec-muted" style="font-size:11px">${Object.keys(r.cf).join(', ')}</td></tr>`).join('')}
+    </tbody></table></div></div>
+  <div class="cc-quality"><span class="ec-pill ec-t-${sem[0]}">Confiabilidade ${sem[1]}</span>
+    <span>Fonte: pedidos do Mercado Livre + custo e % Tributos do Bling</span>
+    <span>Custo: ${pct(a.cf.venda, a.receita)} do momento da venda · ${pct(a.cf['reconstruído'], a.receita)} reconstruído · ${pct(a.cf.atual, a.receita)} atual · ${pct(a.cf.sem || 0, a.receita)} sem custo</span>
+    <span>Imposto: ${pct(a.ipf.Bling, a.receita)} com % do Bling</span>
+    <span>${CC.daysLoaded} dias em base local</span></div>
+  <div class="ec-modal" id="cc-modal" onclick="if(event.target===this)ccClose()"></div>`;
+}
+function ccSetDias(d) { CC.view.dias = d; CC.view.from = null; CC.view.to = null; ccOpen(); }
+function ccSetCustom() {
+  const f = document.getElementById('cc-from').value, t = document.getElementById('cc-to').value;
+  if (!f || !t || f > t) { showToast('Período inválido', 'warn'); return; }
+  CC.view.from = f; CC.view.to = t; ccOpen();
+}
+
+// ───────── detalhamento universal ─────────
+const CC_DEF = {
+  receita: ['Faturamento bruto', 'Preço × quantidade dos itens de pedidos não cancelados, pela data de criação do pedido.'],
+  margem: ['Margem de contribuição', 'Receita − tarifa ML − frete − imposto (% Tributos) − custo do produto. Itens sem custo ficam fora da margem.'],
+  pedidos: ['Pedidos', 'Pedidos não cancelados criados no período.'],
+  ticket: ['Ticket médio', 'Faturamento bruto ÷ pedidos.'],
+  cancel: ['Cancelamentos', 'Pedidos com status cancelado no período (não entram na receita).'],
+  dia: ['Vendas do dia', 'Pedidos não cancelados criados no dia.'],
+  sku: ['Vendas do produto', 'Itens deste SKU em pedidos do período.'],
+};
+function ccDrill(kind, arg) {
+  const base = ccFilter(CC.facts);
+  let rows = base, title = CC_DEF[kind][0];
+  if (kind === 'cancel') rows = base.filter(x => x.st === 'cancelled');
+  else rows = base.filter(x => x.st !== 'cancelled');
+  if (kind === 'dia') { rows = rows.filter(x => ecDayOf(x.d) === arg); title += ' ' + arg.slice(8, 10) + '/' + arg.slice(5, 7); }
+  if (kind === 'sku') { rows = rows.filter(x => x.s === arg); title += ' ' + arg; }
+  CC.drill = { kind, arg, title, rows, tab: kind === 'pedidos' || kind === 'cancel' || kind === 'sku' ? 'pedidos' : 'produtos', q: '', page: 0 };
+  ccRenderDrill();
+}
+function ccRenderDrill() {
+  const D = CC.drill; const m = document.getElementById('cc-modal'); if (!D || !m) return;
+  const p = ccPeriod(); const a = ccAgg(D.rows);
+  const q = D.q.toLowerCase();
+  const tabs = [['produtos', 'Produtos'], ['pedidos', 'Pedidos'], ['eventos', 'Eventos']];
+  let head = '', body = '', foot = '', list = [];
+  if (D.tab === 'produtos') {
+    list = ccBySku(D.rows).filter(r => !q || (r.sku + ' ' + r.t).toLowerCase().includes(q)).sort((x, y) => y.receita - x.receita);
+    head = '<th>SKU / produto</th><th class="r">Unid.</th><th class="r">Pedidos</th><th class="r">Faturamento</th><th class="r">Custo</th><th class="r">Margem</th><th class="r">Margem %</th><th class="r">Cancelados</th>';
+    body = list.slice(D.page * 50, D.page * 50 + 50).map(r => `<tr><td><div class="ec-prod"><div class="ec-prod-n">${ecEsc(r.t)}</div><div class="ec-prod-s mono">${ecEsc(r.sku)}</div></div></td><td class="r mono">${ecInt(r.q)}</td><td class="r mono">${ecInt(r.ped)}</td><td class="r mono">${ecMoney2(r.receita)}</td><td class="r mono">${r.recM ? ecMoney2(r.custo) : '—'}</td><td class="r mono">${r.recM ? ecMoney2(r.margem) : '—'}</td><td class="r mono">${r.margemPct != null ? ecPct(r.margemPct, 1) : '—'}</td><td class="r mono">${r.canc || ''}</td></tr>`).join('');
+    const t = list.reduce((s, r) => ({ q: s.q + r.q, rec: s.rec + r.receita, m: s.m + r.margem }), { q: 0, rec: 0, m: 0 });
+    foot = `<tr class="cc-total"><td>Total (${list.length} SKUs)</td><td class="r mono">${ecInt(t.q)}</td><td></td><td class="r mono">${ecMoney2(t.rec)}</td><td></td><td class="r mono">${ecMoney2(t.m)}</td><td></td><td></td></tr>`;
+  } else if (D.tab === 'pedidos') {
+    list = ccByOrder(D.rows).filter(r => !q || (String(r.o) + ' ' + r.skus.join(' ')).toLowerCase().includes(q));
+    head = '<th>Pedido</th><th>Data</th><th>Status</th><th>Comprador</th><th class="r">Itens</th><th class="r">Faturamento</th><th class="r">Margem</th><th></th>';
+    body = list.slice(D.page * 50, D.page * 50 + 50).map(r => `<tr><td class="mono">${r.o}</td><td class="mono">${new Date(r.d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td><td>${ecPill(r.st === 'cancelled' ? 'cancelado' : r.st === 'paid' ? 'pago' : r.st, r.st === 'cancelled' ? 'crit' : 'ok')}</td><td>${ecEsc(ccMask(r.n, r.b))}${r.b2b ? ' <span class="ec-tag">b2b ML</span>' : ''}</td><td class="r mono">${r.un}</td><td class="r mono">${ecMoney2(r.receita)}</td><td class="r mono">${r.temMargem ? ecMoney2(r.margem) : '—'}</td><td><a href="https://www.mercadolivre.com.br/vendas/${r.o}/detalhe" target="_blank" rel="noopener" style="color:var(--accent)">abrir ↗</a></td></tr>`).join('');
+    const t = list.reduce((s, r) => ({ rec: s.rec + r.receita, m: s.m + (r.temMargem ? r.margem : 0) }), { rec: 0, m: 0 });
+    foot = `<tr class="cc-total"><td colspan="5">Total (${list.length} pedidos)</td><td class="r mono">${ecMoney2(t.rec)}</td><td class="r mono">${ecMoney2(t.m)}</td><td></td></tr>`;
+  } else {
+    const ev = [['Venda (receita)', a.receita], ['Tarifa ML', -a.tarifa], ['Frete pago', -a.frete], ['Imposto estimado', -a.imposto], ['Custo do produto', -a.custo], ['Margem de contribuição', a.margem], ['Cancelamentos (fora da receita)', a.cancVal], ['Devoluções', null], ['Ads', null], ['Bonificação / compensação', null]];
+    head = '<th>Evento</th><th class="r">Valor</th><th class="r">% da receita</th><th>Fonte</th>';
+    body = ev.map(([l, v]) => `<tr><td>${l}</td><td class="r mono">${v == null ? '<span class="ec-muted">DADO INDISPONÍVEL</span>' : ecMoney2(v)}</td><td class="r mono">${v == null || !a.receita ? '—' : ecPct(Math.abs(v) / a.receita, 1)}</td><td class="ec-muted" style="font-size:11px">${v == null ? 'fonte ainda não integrada' : /Imposto/.test(l) ? '% Tributos Bling' : /Custo/.test(l) ? 'Bling (momento/reconstruído)' : /Frete/.test(l) ? 'ML envio (real) ou média do SKU' : 'pedidos ML'}</td></tr>`).join('');
+  }
+  const pages = Math.max(1, Math.ceil(list.length / 50));
+  m.innerHTML = `<div class="ec-modal-box cc-drill">
+    <div class="card-head"><span class="card-title">${ecEsc(D.title)}</span><button class="btn-sm" onclick="ccClose()">✕</button></div>
+    <div style="padding:12px 18px">
+      <div class="ec-muted" style="margin-bottom:8px">Central Comercial › ${ecEsc(D.title)} · ${p.from.split('-').reverse().join('/')} a ${p.to.split('-').reverse().join('/')}${CC.view.curva ? ' · curva ' + CC.view.curva : ''}${CC.view.q ? ' · filtro "' + ecEsc(CC.view.q) + '"' : ''}<br>${ecEsc(CC_DEF[D.kind][1])}</div>
+      <div class="ec-strip ec-strip-sm" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px">${ecStat('Faturamento', ecMoney2(a.receita), a.ped + ' pedidos')}${ecStat('Margem', a.margemPct != null ? ecMoney2(a.margem) : '—', a.margemPct != null ? ecPct(a.margemPct, 1) : '')}${ecStat('Ticket médio', ecMoney2(a.ticket), ecInt(a.un) + ' unidades')}${ecStat('Cancelados', ecInt(a.cancPed), ecMoney(a.cancVal))}</div>
+      <div class="ec-chips" style="margin-bottom:8px">${tabs.map(([k, l]) => `<button class="ec-chip ${D.tab === k ? 'active' : ''}" onclick="CC.drill.tab='${k}';CC.drill.page=0;ccRenderDrill()">${l}</button>`).join('')}<span class="ec-muted" style="align-self:center">Clientes e Regiões: próxima etapa</span></div>
+      ${D.tab !== 'eventos' ? `<div class="ec-tools" style="margin-bottom:8px"><input placeholder="Buscar…" value="${ecEsc(D.q)}" onchange="CC.drill.q=this.value;CC.drill.page=0;ccRenderDrill()"><button class="btn-sm" onclick="ccExportDrill()">⬇ Excel</button></div>` : ''}
+      <div class="ec-table-wrap" style="max-height:55vh"><table class="t ec-t px-table" style="min-width:900px"><thead><tr>${head}</tr></thead><tbody>${body || '<tr><td colspan="8" class="ec-muted" style="padding:16px;text-align:center">Nenhum registro.</td></tr>'}${foot}</tbody></table></div>
+      ${D.tab !== 'eventos' && pages > 1 ? `<div class="ec-pager"><span class="ec-muted">${list.length} linhas</span><div style="display:flex;gap:6px;align-items:center"><button class="btn-sm" ${D.page ? '' : 'disabled'} onclick="CC.drill.page--;ccRenderDrill()">‹</button><span class="ec-muted">${D.page + 1}/${pages}</span><button class="btn-sm" ${D.page < pages - 1 ? '' : 'disabled'} onclick="CC.drill.page++;ccRenderDrill()">›</button></div></div>` : ''}
+    </div></div>`;
+  m.style.display = 'flex';
+}
+function ccClose() { const m = document.getElementById('cc-modal'); if (m) m.style.display = 'none'; CC.drill = null; }
+async function ccLoadXlsx() {
+  if (window.XLSX) return true;
+  await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload = res; s.onerror = () => rej(new Error('falha ao carregar biblioteca Excel')); document.head.appendChild(s); }).catch(e => showToast(e.message, 'err'));
+  return !!window.XLSX;
+}
+async function ccExportDrill() {
+  const D = CC.drill; if (!D || !(await ccLoadXlsx())) return;
+  const n2 = v => v == null ? '' : +v.toFixed(2);
+  const linhas = D.rows.map(x => { const it = ccItem(x); return {
+    'Pedido': x.o, 'Data': ecDayOf(x.d), 'Status': x.st, 'SKU': x.s, 'Produto': x.t, 'Qtd': x.q, 'Preço unit.': n2(x.u), 'Faturamento': n2(it.receita), 'Tarifa ML': n2(it.tarifa),
+    'Frete': n2(it.frete), 'Origem frete': it.freteF, '% Tributos': x.ip, 'Imposto': n2(it.imposto), 'Custo unit.': n2(x.c), 'Origem custo': x.cf || 'sem custo', 'Custo total': n2(it.custo), 'Margem': n2(it.margem),
+    'Comprador (mascarado)': ccMask(x.n, x.b), 'Sinal b2b ML': x.b2b ? 'Sim' : '', 'Full': x.full ? 'Sim' : '' }; });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), 'Itens');
+  XLSX.writeFile(wb, `central_comercial_${D.kind}_${ecDay()}.xlsx`);
+}
+async function ccExport() {
+  if (!CC.facts.length) { showToast('Carregue a Central Comercial primeiro', 'warn'); return; }
+  CC.drill = { kind: 'receita', rows: ccFilter(CC.facts), title: 'Faturamento bruto' }; await ccExportDrill(); CC.drill = null;
+}
+
+// ════════════════════════════════════════════════════════════════
 // PRECIFICAÇÃO DINÂMICA — paralelo com concorrentes + ação rápida em promoção
 // Camada 1: catálogo (price_to_win + ofertas do mesmo produto de catálogo)
 // Camada 2: referência vinculada (produto de catálogo escolhido ou preço observado manual)
@@ -5007,9 +5421,18 @@ async function loadCompetitorsData(){
       );
       searchResults = res?.results || null;
     }
-    const competitors = (searchResults || genFakeCompetitors(it))
+    // sem resultado real: NUNCA preencher com dados simulados fora do modo demonstração
+    const competitors = (searchResults || (state.isDemo ? genFakeCompetitors(it) : []))
       .filter(c => !state.isDemo ? (c.seller?.id != state.sellerId && c.seller_id != state.sellerId) : true);
-    compData.push({ item: it, competitors });
+    compData.push({ item: it, competitors, found: !!searchResults });
+  }
+  if(!state.isDemo && !compData.some(d => d.found)){
+    const msg = '<div style="padding:16px;font-size:13px;color:var(--orange)"><b>DADO INDISPONÍVEL</b> — o Mercado Livre bloqueou a busca pública de anúncios, então não há dados reais de concorrentes aqui.<br><span style="color:var(--muted)">Use a aba <b>💰 Precificação</b>: ela compara seus preços com os concorrentes do mesmo produto de catálogo.</span></div>';
+    document.getElementById('comp-price-body').innerHTML = msg;
+    document.getElementById('ruptures-body').innerHTML = msg;
+    const cb = document.getElementById('comp-bars'); if(cb) cb.innerHTML = msg;
+    ['comp-sellers','comp-ruptures','comp-cheaper','comp-active'].forEach(id => { const el = document.getElementById(id); if(el) el.textContent = 'indisponível'; });
+    return;
   }
 
   // ── Comparação de preços — primeiro produto ──
