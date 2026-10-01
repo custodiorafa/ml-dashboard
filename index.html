@@ -692,7 +692,8 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .pr-kpis.cc-kpis { grid-template-columns:repeat(6,1fr); }
 .cc-kpi { min-height:118px; } .cc-na { cursor:default; opacity:.75; }
 .cc-filters { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; justify-content:space-between; margin-bottom:14px; }
-.cc-filters .ec-tools { flex:1; min-width:320px; max-width:720px; }
+.cc-filters .ec-tools { flex:1 1 100%; flex-wrap:wrap; }
+.cc-filters .ec-tools input { min-width:220px; }
 .cc-filters select, .cc-custom input { background:var(--bg2); border:1px solid var(--border2); color:var(--text); padding:6px 8px; border-radius:8px; font-size:12px; }
 .cc-custom { display:inline-flex; gap:6px; align-items:center; font-size:12px; color:var(--text2); margin-left:6px; }
 .cc-days { display:flex; align-items:flex-end; gap:2px; height:170px; border-bottom:1px solid var(--border2); }
@@ -700,6 +701,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .cc-day:hover .cc-bar { opacity:.8; }
 .cc-bar { width:100%; background:var(--accent); border-radius:3px 3px 0 0; display:flex; align-items:flex-end; overflow:hidden; }
 .cc-bar-m { width:100%; background:var(--green); }
+.cc-in { background:var(--bg2); border:1px solid var(--border2); color:var(--text); padding:5px 8px; border-radius:6px; font-size:12px; width:100%; }
 .cc-tabs { margin:0 0 14px; } .cc-tabs .ec-chip { font-size:12px; padding:7px 14px; }
 .cc-quality { display:flex; flex-wrap:wrap; gap:6px 18px; align-items:center; font-size:11px; color:var(--text2); margin:14px 0 4px; }
 .cc-drill { width:min(1180px,100%)!important; }
@@ -4106,17 +4108,19 @@ function ecExportConc() {
 // D3 custo do Bling no momento da venda (congelado) · D4 imposto = % Tributos do cadastro (estimado até haver NF) ·
 // D6 frete do envio rateado pelo valor dos itens · D8 inativo > 90 dias.
 // ════════════════════════════════════════════════════════════════
-const CC = { loading: false, view: { dias: 30, from: null, to: null, q: '', curva: '', tab: 'vendas', uf: '', pj: '' }, facts: [], prev: [], agg: null, drill: null, syncedAt: null };
+const CC = { loading: false, view: { dias: 30, from: null, to: null, q: '', curva: '', tab: 'vendas', uf: '', pj: '', canal: '' }, facts: [], prev: [], agg: null, drill: null, syncedAt: null };
 const CC_DB = 'ml_intel_cc', CC_STORE = 'days', CC_MAX_DIAS = 180;
 
 // ───────── IndexedDB ─────────
 function ccDb() {
   if (CC._db) return CC._db;
   CC._db = new Promise((res, rej) => {
-    const r = indexedDB.open(CC_DB, 2);
+    const r = indexedDB.open(CC_DB, 3);
     r.onupgradeneeded = () => { const db = r.result;
       if (!db.objectStoreNames.contains(CC_STORE)) db.createObjectStore(CC_STORE, { keyPath: 'date' });
-      if (!db.objectStoreNames.contains('buyers')) db.createObjectStore('buyers', { keyPath: 'id' }); };
+      if (!db.objectStoreNames.contains('buyers')) db.createObjectStore('buyers', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('bl')) db.createObjectStore('bl', { keyPath: 'date' });
+      if (!db.objectStoreNames.contains('bld')) db.createObjectStore('bld', { keyPath: 'id' }); };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
   return CC._db;
@@ -4256,6 +4260,7 @@ async function ccOpen(force) {
     const minDay = ecDay(CC_MAX_DIAS);
     await ccSync(p.pFrom < minDay ? minDay : p.pFrom, force);
     if (!CC.buyers) await ccBuyersLoad();
+    await ccBlSync(p.pFrom < minDay ? minDay : p.pFrom);
     await ccLoadFacts();
     if (CC.view.tab === 'regioes') ccEnrich(CC.facts);
     if (CC.view.tab === 'clientes') { CC.loading = false; await ccOpenClientes(); }
@@ -4265,12 +4270,10 @@ async function ccOpen(force) {
 }
 async function ccLoadFacts() {
   const p = ccPeriod();
-  const all = await ccRange(p.pFrom, p.to);
-  const flat = []; all.forEach(r => r.items.forEach(x => flat.push(x)));
+  const flat = await ccFactsRange(p.pFrom, p.to);
   const day = x => ecDayOf(x.d);
   CC.facts = flat.filter(x => day(x) >= p.from && day(x) <= p.to);
   CC.prev = flat.filter(x => day(x) >= p.pFrom && day(x) <= p.pTo);
-  CC.daysLoaded = all.length;
   ccRender();
 }
 // data do pedido no fuso de Brasília
@@ -4283,7 +4286,8 @@ function ccFilter(rows) {
   const B = CC.buyers || {};
   return rows.filter(x => (!q || (x.s + ' ' + x.t + ' ' + x.o).toLowerCase().includes(q)) && (!v.curva || curvaOf[x.s] === v.curva)
     && (!v.uf || (B[x.b] && B[x.b].uf === v.uf)) && (!v.pj || ccTipo(B[x.b]) === v.pj)
-    && (!v.icms || (B[x.b] && (ccContrib(B[x.b]) === 'Contribuinte ICMS') === (v.icms === 'c'))));
+    && (!v.icms || (B[x.b] && (ccContrib(B[x.b]) === 'Contribuinte ICMS') === (v.icms === 'c')))
+    && (!v.canal || ccCanal(x) === v.canal));
 }
 function ccItem(x) {
   const ec = ccEcRow(x.s);
@@ -4292,8 +4296,8 @@ function ccItem(x) {
   const freteF = x.fr != null ? 'real' : frete != null ? 'estimado' : 'ausente';
   const imposto = receita * (x.ip || 0) / 100;
   const custo = x.c != null ? x.c * x.q : null;
-  const margem = custo != null && frete != null ? receita - x.f - frete - imposto - custo : null;
-  return { receita, tarifa: x.f, frete, freteF, imposto, custo, margem };
+  const margem = custo != null && frete != null && x.f != null ? receita - x.f - frete - imposto - custo : null;
+  return { receita, tarifa: x.f || 0, frete, freteF, imposto, custo, margem };
 }
 function ccEcRow(sku) { if (!CC._ecIdx || CC._ecIdxAt !== EC.loadedAt) { CC._ecIdx = {}; EC.rows.forEach(r => { CC._ecIdx[r.sku] = r; }); CC._ecIdxAt = EC.loadedAt; } return CC._ecIdx[sku] || null; }
 function ccAgg(rows) {
@@ -4333,7 +4337,7 @@ function ccBySku(rows) {
 function ccByOrder(rows) {
   const m = {};
   rows.forEach(x => {
-    const r = m[x.o] || (m[x.o] = { o: x.o, d: x.d, st: x.st, b: x.b, n: x.n, b2b: x.b2b, itens: 0, un: 0, receita: 0, margem: 0, temMargem: true, skus: [] });
+    const r = m[x.o] || (m[x.o] = { o: x.o, num: x.num, src: x.src, canal: ccCanal(x), d: x.d, st: x.st, b: x.b, n: x.n, b2b: x.b2b, itens: 0, un: 0, receita: 0, margem: 0, temMargem: true, skus: [] });
     const it = ccItem(x); r.itens++; r.un += x.q; r.receita += it.receita; r.skus.push(x.s);
     if (it.margem == null) r.temMargem = false; else r.margem += it.margem;
   });
@@ -4353,14 +4357,14 @@ function ccRender() {
   const kpi = (k, label, val, sub, tone) => `<button class="pr-kpi cc-kpi" onclick="ccDrill('${k}')"><div class="ec-c-label"><span class="ec-dot" style="background:${EC_STATUS[tone]}"></span>${label}</div><div class="ec-c-val">${val}</div><div class="ec-c-sub">${sub}</div></button>`;
   const days = ccByDay(rows, p); const maxR = Math.max(1, ...days.map(d => d.receita));
   const skus = ccBySku(rows).sort((x, y) => y.receita - x.receita);
-  const pontes = [['Receita bruta', a.receita, 'receita', 'neutral'], ['Tarifa ML', -a.tarifa, 'tarifa', 'aten'], ['Frete', -a.frete, 'frete', 'aten'], ['Imposto (estimado)', -a.imposto, 'imposto', 'aten'], ['Custo do produto', -a.custo, 'custo', 'aten'], ['Margem de contribuição', a.margem, 'margem', a.margem >= 0 ? 'ok' : 'crit']];
+  const pontes = [['Receita bruta', a.receita, 'receita', 'neutral'], ['Tarifa do canal', -a.tarifa, 'tarifa', 'aten'], ['Frete', -a.frete, 'frete', 'aten'], ['Imposto (estimado)', -a.imposto, 'imposto', 'aten'], ['Custo do produto', -a.custo, 'custo', 'aten'], ['Margem de contribuição', a.margem, 'margem', a.margem >= 0 ? 'ok' : 'crit']];
   const pmax = Math.max(1, a.receita);
   const pct = (v, t) => t ? ecPct(v / t, 1) : '—';
   const conf = a.receita ? (a.cf.venda + a.cf['reconstruído']) / a.receita : 0;
   const sem = conf >= 0.9 && a.frf.real / (a.receita || 1) >= 0.5 ? ['ok', 'Alta'] : conf >= 0.6 ? ['mon', 'Média'] : ['aten', 'Baixa'];
   const ufs = [...new Set(Object.values(CC.buyers || {}).map(b => b.uf).filter(Boolean))].sort();
   const head = `
-  <div class="pr-guide"><b>Como ler:</b> todos os números vêm dos pedidos reais do Mercado Livre (data de criação do pedido); cancelados não entram na receita. Clique em qualquer card, barra ou linha para ver os registros que formam o número.
+  <div class="pr-guide"><b>Como ler:</b> os números vêm dos pedidos reais do Mercado Livre e, para os demais canais (Shopee, loja própria), dos pedidos de venda do Bling; cancelados não entram na receita. Clique em qualquer card, barra ou linha para ver os registros que formam o número.
     <details><summary>Definições</summary><div class="pr-gloss">
       <div><b>Faturamento bruto</b> — preço × quantidade dos itens de pedidos não cancelados.</div>
       <div><b>Margem de contribuição</b> — receita − tarifa ML − frete pago por você − imposto (% Tributos do Bling) − custo do produto. Calculada só sobre itens com custo conhecido (cobertura mostrada no card).</div>
@@ -4376,7 +4380,8 @@ function ccRender() {
       <select onchange="CC.view.uf=this.value;ccRender()" title="UF de faturamento (depende da leitura do cadastro dos clientes)"><option value="">Todas as UFs</option>${ufs.map(u => `<option ${CC.view.uf === u ? 'selected' : ''}>${u}</option>`).join('')}</select>
       <select onchange="CC.view.pj=this.value;ccRender()"><option value="">PF e PJ</option><option ${CC.view.pj === 'PF' ? 'selected' : ''}>PF</option><option ${CC.view.pj === 'PJ' ? 'selected' : ''}>PJ</option></select>
       <select onchange="CC.view.icms=this.value;ccRender()"><option value="">ICMS: todos</option><option value="c" ${CC.view.icms === 'c' ? 'selected' : ''}>Contribuinte</option><option value="n" ${CC.view.icms === 'n' ? 'selected' : ''}>Não contribuinte</option></select>
-      <span class="ec-tag" title="Shopee, site e B2B ainda não estão integrados">Canal: Mercado Livre</span></div>
+      <select onchange="CC.view.canal=this.value;ccRender()"><option value="">Todos os canais</option>${[...new Set(CC.facts.concat(CC.prev).map(ccCanal))].sort().map(c => `<option ${CC.view.canal === c ? 'selected' : ''}>${ecEsc(c)}</option>`).join('')}</select>
+      <button class="btn-sm" onclick="ccOpenLojas()" title="Nomes dos canais e tarifa estimada">⚙ Canais</button></div>
   </div>
   <div class="ec-chips cc-tabs">${[['vendas', '📈 Vendas'], ['clientes', '👥 Clientes'], ['regioes', '🗺 Regiões']].map(([k, l]) => `<button class="ec-chip ${CC.view.tab === k ? 'active' : ''}" onclick="ccSetTab('${k}')">${l}</button>`).join('')}</div>`;
   if (CC.view.tab === 'clientes') return ccRenderClientes(el, head);
@@ -4400,6 +4405,11 @@ function ccRender() {
       <div class="ec-muted" style="margin-top:8px">Frete: ${pct(a.frf.real, a.receita)} da receita com frete real, ${pct(a.frf.estimado, a.receita)} estimado. Imposto pelo % Tributos do cadastro (estimado até haver NF).</div>
     </div></div>
   </div>
+  <div class="card" style="margin-top:16px"><div class="card-head"><span class="card-title">Resultado por canal</span><span class="ec-muted">${CC.blErr ? 'Bling: ' + ecEsc(CC.blErr) : 'loja do pedido no Bling · clique para detalhar'}</span></div>
+    <div class="ec-table-wrap"><table class="t ec-t px-table" style="min-width:900px"><thead><tr><th>Canal</th><th style="width:22%">Participação</th><th class="r">Faturamento</th><th class="r">Part.</th><th class="r">Margem</th><th class="r">Margem %</th><th class="r">Pedidos</th><th class="r">Unid.</th><th class="r">Ticket</th></tr></thead><tbody>
+    ${(() => { const cs = ccByCanal(rows); const mx = Math.max(1, ...cs.map(c => c.receita)); return cs.map(c => `<tr style="cursor:pointer" onclick="ccDrill('canal','${ecEsc(c.k)}')"><td><b>${ecEsc(c.k)}</b>${c.semTarifa > 0 ? '<div class="ec-sub">tarifa não informada: margem indisponível (⚙ Canais)</div>' : ''}</td><td><div class="ec-hbar-trk" style="height:10px"><div class="ec-hbar-fill" style="width:${c.receita / mx * 100}%;background:var(--accent)"></div></div></td><td class="r mono">${ecMoney(c.receita)}</td><td class="r mono">${pct(c.receita, a.receita)}</td><td class="r mono">${c.recM ? ecMoney(c.margem) : '<span class="ec-muted">indisponível</span>'}</td><td class="r mono">${c.recM ? ecPct(c.margem / c.recM, 1) : '—'}</td><td class="r mono">${c.ped.size}</td><td class="r mono">${ecInt(c.un)}</td><td class="r mono">${ecMoney2(c.receita / c.ped.size)}</td></tr>`).join(''); })()}
+    </tbody></table></div>
+    ${rows.some(x => !x.ch) ? '<div class="ec-muted" style="padding:8px 16px">* pedido ainda sem vínculo com o Bling: canal definido pelo tipo de envio atual do anúncio.</div>' : ''}</div>
   <div class="card" style="margin-top:16px"><div class="card-head"><span class="card-title">Produtos</span><span class="ec-muted">${skus.length} SKUs vendidos · clique para ver os pedidos</span></div>
     <div class="ec-table-wrap" style="max-height:480px"><table class="t ec-t px-table"><thead><tr><th>Produto</th><th class="r">Unid.</th><th class="r">Pedidos</th><th class="r">Faturamento</th><th class="r">Part.</th><th class="r">Margem</th><th class="r">Margem %</th><th>Custo</th></tr></thead><tbody>
     ${skus.slice(0, 100).map(r => `<tr style="cursor:pointer" onclick="ccDrill('sku','${ecEsc(r.sku)}')"><td><div class="ec-prod"><div class="ec-prod-n">${ecEsc(r.t || r.sku)}</div><div class="ec-prod-s mono">${ecEsc(r.sku)}</div></div></td><td class="r mono">${ecInt(r.q)}</td><td class="r mono">${ecInt(r.ped)}</td><td class="r mono">${ecMoney(r.receita)}</td><td class="r mono">${pct(r.receita, a.receita)}</td><td class="r mono ${r.margem < 0 ? 'c-red' : ''}">${r.recM ? ecMoney(r.margem) : '—'}</td><td class="r mono ${r.margemPct != null && r.margemPct < 0.1 ? 'c-red' : ''}">${r.margemPct != null ? ecPct(r.margemPct, 1) : '—'}</td><td class="ec-muted" style="font-size:11px">${Object.keys(r.cf).join(', ')}</td></tr>`).join('')}
@@ -4418,6 +4428,121 @@ function ccSetCustom() {
   CC.view.from = f; CC.view.to = t; ccOpen();
 }
 
+// ───────── canais de venda (lojas do Bling) ─────────
+// O Bling reúne os pedidos de todos os canais. ML e ML Full já vêm da API do ML: o Bling só informa a qual loja cada pedido pertence.
+// Demais lojas (Shopee, site etc.): os itens vêm do pedido de venda do Bling.
+const CC_LOJAS_KEY = 'cc_lojas_v1', CC_BL_META = 'cc_bl_meta_v1';
+const CC_LOJAS_DEF = { '204958720': { nome: 'Mercado Livre Full', tipo: 'ml' }, '203450504': { nome: 'Mercado Livre', tipo: 'ml' }, '203946006': { nome: 'Shopee', tipo: 'mkt' } };
+function ccLojas() { let c = {}; try { c = JSON.parse(localStorage.getItem(CC_LOJAS_KEY) || '{}'); } catch (e) {} return { ...CC_LOJAS_DEF, ...c }; }
+function ccLojaNome(id) { const l = ccLojas()[id]; return l ? l.nome : id === '0' || !id ? 'Venda direta (Bling)' : 'Loja ' + id; }
+const ccCanal = x => x.ch ? ccLojaNome(x.ch) : (x.full ? 'Mercado Livre Full' : 'Mercado Livre') + ' *';
+const ccBlRaw = p => blingApi('/bling/raw?p=' + encodeURIComponent(p));
+async function ccIdb(store, mode, fn) { const db = await ccDb(); return new Promise(res => { const t = db.transaction(store, mode); const r = fn(t.objectStore(store)); t.oncomplete = () => res(mode === 'readonly' ? (r && r.result !== undefined ? r.result : null) : true); t.onerror = () => res(null); }); }
+// lista de pedidos de venda do Bling por período (só id, número da loja, loja, situação, total)
+async function ccBlSync(from) {
+  const bc = blingCfg(); if (!bc.url || !bc.key) { CC.blErr = 'Bling não conectado'; return; }
+  let meta = {}; try { meta = JSON.parse(localStorage.getItem(CC_BL_META) || '{}'); } catch (e) {}
+  const today = ecDay();
+  if (meta.seller === state.sellerId && meta.from <= from && Date.now() - meta.at < 30 * 60e3) return;
+  const start = meta.seller === state.sellerId && meta.from <= from ? ecDay(3) : from;
+  const byDay = {}; let pg = 1; CC.blErr = null;
+  try {
+    for (; pg <= 400; pg++) {
+      ccProgress(`Lendo canais de venda no Bling: página ${pg}…`, null);
+      const r = await ccBlRaw(`/pedidos/vendas?limite=100&pagina=${pg}&dataInicial=${start}&dataFinal=${today}`);
+      const list = (r && r.data) || [];
+      list.forEach(o => { (byDay[o.data] = byDay[o.data] || []).push({ id: o.id, num: o.numero, nl: String(o.numeroLoja || ''), loja: String((o.loja && o.loja.id) || 0), sit: o.situacao && o.situacao.id, total: o.total || 0 }); });
+      if (list.length < 100) break;
+      await sleep(350);
+    }
+  } catch (e) { CC.blErr = e.message; return; }
+  for (let d = start; d <= today; d = ecAddDays(d, 1)) await ccIdb('bl', 'readwrite', s => s.put({ date: d, at: Date.now(), orders: byDay[d] || [] }));
+  localStorage.setItem(CC_BL_META, JSON.stringify({ seller: state.sellerId, from: meta.seller === state.sellerId && meta.from < from ? meta.from : from, at: Date.now() }));
+}
+// detalhe de pedidos de lojas que não são Mercado Livre → itens de venda
+async function ccBlFacts(from, to, mlIds) {
+  const db = await ccDb(); const lojas = ccLojas(); const today = ecDay();
+  const days = await new Promise(res => { const out = []; const q = db.transaction('bl').objectStore('bl').openCursor(IDBKeyRange.bound(from, to)); q.onsuccess = () => { const c = q.result; if (c) { out.push(c.value); c.continue(); } else res(out); }; q.onerror = () => res(out); });
+  const chMap = {}; const outros = [];
+  days.forEach(d => d.orders.forEach(o => {
+    const isMl = mlIds[o.nl] != null;
+    if (isMl) { chMap[mlIds[o.nl]] = o.loja; return; }
+    const cfg = lojas[o.loja];
+    if (cfg && cfg.tipo === 'ml') return; // pedido ML fora da base lida (ex.: antigo): ignorar
+    outros.push({ ...o, date: d.date });
+  }));
+  const ctx = ccCostCtx(); const taxMap = ecTaxPctMap(); const facts = []; let done = 0;
+  await prPool(outros, 2, async o => {
+    let det = await ccIdb('bld', 'readonly', s => s.get(o.id));
+    const fresh = det && (det.sit === o.sit) && (det.final || Date.now() - det.at < 6 * 3600e3);
+    if (!fresh) {
+      try {
+        const r = await ccBlRaw('/pedidos/vendas/' + o.id); const x = r && r.data; if (!x || !x.id) return;
+        const bruto = (x.itens || []).reduce((s, i) => s + (i.quantidade || 0) * (i.valor || 0) * (1 - (i.desconto || 0) / 100), 0) || 1;
+        const liq = Math.max(0, bruto - ((x.desconto && x.desconto.unidade === 'REAL' ? x.desconto.valor : bruto * ((x.desconto && x.desconto.valor) || 0) / 100) || 0));
+        const old = det;
+        det = { id: o.id, at: Date.now(), sit: o.sit, final: o.date < ecDay(30), num: x.numero, date: x.data, loja: o.loja, cid: x.contato && x.contato.id, tp: x.contato && x.contato.tipoPessoa, uf: x.transporte?.etiqueta?.uf || '', mun: x.transporte?.etiqueta?.municipio || '',
+          com: x.taxas ? x.taxas.taxaComissao || 0 : 0, frete: x.taxas ? x.taxas.custoFrete || 0 : 0, nf: !!(x.notaFiscal && x.notaFiscal.id),
+          itens: (x.itens || []).map(i => { const sku = normSku(i.codigo || ''); const rec = (i.quantidade || 0) * (i.valor || 0) * (1 - (i.desconto || 0) / 100) * (liq / bruto); const prev = old && old.itens.find(k => k.s === sku);
+            const [c, cf] = prev && prev.c != null ? [prev.c, prev.cf] : (ctx.ok ? ccCostAt(ctx, sku, x.data, today) : [null, null]);
+            return { s: sku, t: String(i.descricao || '').slice(0, 80), q: i.quantidade || 0, u: i.quantidade ? Math.round(rec / i.quantidade * 100) / 100 : 0, c, cf, ip: prev && prev.ipf === 'Bling' ? prev.ip : ecTaxPct(sku, taxMap), ipf: prev && prev.ipf === 'Bling' ? 'Bling' : (taxMap[sku] != null ? 'Bling' : 'padrão') }; }) };
+        await ccIdb('bld', 'readwrite', s => s.put(det));
+        await sleep(350);
+      } catch (e) { return; }
+    }
+    done++; if (done % 10 === 0) ccProgress(`Lendo pedidos de Shopee e outros canais: ${done}/${outros.length}`, done / outros.length * 100);
+    if (!det) return;
+    const cfg = lojas[det.loja] || {};
+    const tot = det.itens.reduce((s, i) => s + i.q * i.u, 0) || 1;
+    const bid = det.cid ? 'B' + det.cid : null;
+    if (bid && CC.buyers && !CC.buyers[bid]) { const rec = { id: bid, dt: det.tp === 'J' ? 'CNPJ' : det.tp === 'F' ? 'CPF' : '', uf: det.uf, city: det.mun, contrib: '', ie: false, at: Date.now() }; CC.buyers[bid] = rec; ccBuyerPut(rec); }
+    det.itens.forEach(i => {
+      const share = i.q * i.u / tot;
+      // tarifa: a do Bling quando informada; senão o % estimado configurado para o canal; senão indisponível
+      const f = det.com > 0 ? det.com * share : (cfg.taxaPct > 0 ? i.q * i.u * cfg.taxaPct / 100 : null);
+      facts.push({ o: 'BL' + det.id, num: det.num, pk: null, d: det.date + 'T12:00:00-03:00', st: det.sit === 12 ? 'cancelled' : 'paid', i: null, s: i.s, t: i.t, q: i.q, u: i.u, f: f == null ? null : Math.round(f * 100) / 100, ff: det.com > 0 ? 'Bling' : f != null ? 'estimada' : 'ausente',
+        sh: null, fr: Math.round(det.frete * share * 100) / 100, b: bid, n: '', b2b: false, full: false, c: i.c, cf: i.cf, ip: i.ip, ipf: i.ipf, ch: det.loja, src: 'bling' });
+    });
+  });
+  return { chMap, facts };
+}
+// fatos unificados (ML + demais canais) de um intervalo
+async function ccFactsRange(from, to) {
+  const all = await ccRange(from, to);
+  const ml = []; all.forEach(r => r.items.forEach(x => ml.push(x)));
+  const mlIds = {}; ml.forEach(x => { mlIds[String(x.o)] = x.o; if (x.pk) mlIds[String(x.pk)] = x.o; });
+  let extra = [];
+  try {
+    const r = await ccBlFacts(from, to, mlIds);
+    // um pacote do ML pode ter vários pedidos: todos recebem a loja do pacote
+    ml.forEach(x => { x.ch = r.chMap[x.o] || null; });
+    extra = r.facts;
+  } catch (e) { CC.blErr = e.message; }
+  CC.daysLoaded = all.length;
+  return ml.concat(extra);
+}
+function ccOpenLojas() {
+  const m = document.getElementById('cc-modal'); if (!m) return;
+  const lojas = ccLojas(); const ids = new Set(Object.keys(lojas)); (CC.facts || []).concat(CC.prev || []).forEach(x => { if (x.ch) ids.add(x.ch); });
+  m.innerHTML = `<div class="ec-modal-box" style="width:min(760px,100%)"><div class="card-head"><span class="card-title">⚙ Canais de venda</span><button class="btn-sm" onclick="ccClose()">✕</button></div>
+    <div style="padding:14px 18px"><div class="ec-muted" style="margin-bottom:10px">Cada loja do Bling é um canal. Dê o nome e, se o canal não informa a tarifa (ex.: Shopee), preencha um % estimado para o painel calcular a margem — ela fica marcada como estimada.</div>
+    <table class="t ec-t"><thead><tr><th>Loja (Bling)</th><th>Nome do canal</th><th>Tipo</th><th class="r">Tarifa estimada %</th></tr></thead><tbody>
+    ${[...ids].map(id => { const l = lojas[id] || { nome: 'Loja ' + id, tipo: 'outro' }; return `<tr data-loja="${ecEsc(id)}"><td class="mono">${ecEsc(id)}</td><td><input class="cc-in" value="${ecEsc(l.nome)}"></td><td><select class="cc-in"><option value="ml" ${l.tipo === 'ml' ? 'selected' : ''}>Mercado Livre</option><option value="mkt" ${l.tipo === 'mkt' ? 'selected' : ''}>Outro marketplace</option><option value="outro" ${l.tipo === 'outro' ? 'selected' : ''}>Loja própria / B2B</option></select></td><td class="r"><input class="cc-in" type="number" step="0.1" style="width:80px;text-align:right" value="${l.taxaPct || ''}" ${l.tipo === 'ml' ? 'disabled title="tarifa real do ML"' : ''}></td></tr>`; }).join('')}
+    </tbody></table></div>
+    <div class="ec-modal-foot"><button class="btn-sm btn-primary" onclick="ccSaveLojas()">Salvar</button></div></div>`;
+  m.style.display = 'flex';
+}
+function ccSaveLojas() {
+  const out = {}; document.querySelectorAll('#cc-modal tr[data-loja]').forEach(tr => { const [n, t, p] = tr.querySelectorAll('.cc-in'); out[tr.dataset.loja] = { nome: n.value.trim() || 'Loja ' + tr.dataset.loja, tipo: t.value, taxaPct: parseFloat(p.value) || 0 }; });
+  try { localStorage.setItem(CC_LOJAS_KEY, JSON.stringify(out)); } catch (e) {}
+  ccClose(); ccOpen();
+}
+function ccByCanal(rows) {
+  const m = {};
+  rows.forEach(x => { if (x.st === 'cancelled') return; const k = ccCanal(x); const r = m[k] || (m[k] = { k, receita: 0, margem: 0, recM: 0, ped: new Set(), un: 0, semTarifa: 0 }); const it = ccItem(x); r.receita += it.receita; r.un += x.q; r.ped.add(x.o); if (it.margem != null) { r.margem += it.margem; r.recM += it.receita; } if (x.f == null) r.semTarifa += it.receita; });
+  return Object.values(m).sort((a, b) => b.receita - a.receita);
+}
+
 // ───────── clientes: PF/PJ, contribuinte e UF (billing_info do ML — só o necessário, sem documento/nome/endereço) ─────────
 async function ccBuyersLoad() {
   const db = await ccDb();
@@ -4429,7 +4554,7 @@ async function ccEnrich(facts) {
   try {
     if (!CC.buyers) await ccBuyersLoad();
     const todo = {}; // comprador → pedido mais recente
-    facts.forEach(x => { if (x.b && !CC.buyers[x.b] && x.st !== 'cancelled' && (!todo[x.b] || x.d > todo[x.b].d)) todo[x.b] = x; });
+    facts.forEach(x => { if (x.b && x.src !== 'bling' && !CC.buyers[x.b] && x.st !== 'cancelled' && (!todo[x.b] || x.d > todo[x.b].d)) todo[x.b] = x; });
     const list = Object.values(todo).sort((a, b) => String(b.d).localeCompare(String(a.d)));
     let done = 0; CC.enrich = { done: 0, total: list.length };
     await prPool(list, 6, async x => {
@@ -4456,8 +4581,8 @@ async function ccLoadBase() {
   const from = ecDay(CC_MAX_DIAS - 1);
   ccProgress('Carregando 180 dias de pedidos para a análise de clientes…', null);
   await ccSync(from, false);
-  const all = await ccRange(from, ecDay());
-  CC.base = []; all.forEach(r => r.items.forEach(x => CC.base.push(x)));
+  await ccBlSync(from);
+  CC.base = await ccFactsRange(from, ecDay());
   CC.baseAt = Date.now(); ccProgress(null);
 }
 // status do cliente (D8: inativo > 90 dias)
@@ -4567,14 +4692,14 @@ function ccRenderClientes(el, head) {
   </div>
   <div class="card" style="margin-top:16px"><div class="ec-toolbar"><div class="ec-chips">${Object.entries(F).map(([k, x]) => `<button class="ec-chip ${k === f ? 'active' : ''}" onclick="CC.view.cf='${k}';CC.view.cpage=0;ccRender()">${x[0]} <span>${cs.filter(x[1]).length}</span></button>`).join('')}</div></div>
     <div class="ec-table-wrap" style="max-height:560px"><table class="t ec-t px-table"><thead><tr><th>Cliente</th><th>Tipo</th><th>UF / cidade</th><th>Status</th>${th('pedP', 'Pedidos período')}${th('recP', 'Receita período')}${th('ped', 'Pedidos base')}${th('receita', 'Receita base')}${th('margem', 'Margem base')}${th('ticket', 'Ticket')}${th('rec', 'Recência')}</tr></thead><tbody>
-    ${list.slice((v.cpage || 0) * 50, (v.cpage || 0) * 50 + 50).map(c => `<tr style="cursor:pointer" onclick="ccCliente360(${c.id})"><td>${ecEsc(ccMask(c.n, c.id))}${c.potB2B ? ' <span class="ec-tag">potencial B2B</span>' : ''}</td><td>${c.tipo}${c.tipo === 'PJ' ? `<div class="ec-sub">${ecEsc(ccContrib(c.b))}</div>` : c.tipo === 'PF' ? '<div class="ec-sub">Não contribuinte</div>' : ''}</td><td>${c.b ? ecEsc(c.b.uf) + `<div class="ec-sub">${ecEsc(c.b.city || '')}</div>` : '<span class="ec-muted">—</span>'}</td><td>${ecPill(c.status, CC_ST_TONE[c.status])}</td><td class="r mono">${c.pedP || ''}</td><td class="r mono">${c.pedP ? ecMoney2(c.recP) : ''}</td><td class="r mono">${c.ped}</td><td class="r mono">${ecMoney2(c.receita)}</td><td class="r mono ${c.margem < 0 ? 'c-red' : ''}">${ecMoney2(c.margem)}</td><td class="r mono">${ecMoney2(c.ticket)}</td><td class="r mono">${c.rec <= 0 ? 'hoje' : c.rec + ' d'}</td></tr>`).join('') || '<tr><td colspan="11" class="ec-muted" style="padding:16px;text-align:center">Nenhum cliente neste filtro.</td></tr>'}
+    ${list.slice((v.cpage || 0) * 50, (v.cpage || 0) * 50 + 50).map(c => `<tr style="cursor:pointer" onclick="ccCliente360('${c.id}')"><td>${ecEsc(ccMask(c.n, c.id))}${c.potB2B ? ' <span class="ec-tag">potencial B2B</span>' : ''}</td><td>${c.tipo}${c.tipo === 'PJ' ? `<div class="ec-sub">${ecEsc(ccContrib(c.b))}</div>` : c.tipo === 'PF' ? '<div class="ec-sub">Não contribuinte</div>' : ''}</td><td>${c.b ? ecEsc(c.b.uf) + `<div class="ec-sub">${ecEsc(c.b.city || '')}</div>` : '<span class="ec-muted">—</span>'}</td><td>${ecPill(c.status, CC_ST_TONE[c.status])}</td><td class="r mono">${c.pedP || ''}</td><td class="r mono">${c.pedP ? ecMoney2(c.recP) : ''}</td><td class="r mono">${c.ped}</td><td class="r mono">${ecMoney2(c.receita)}</td><td class="r mono ${c.margem < 0 ? 'c-red' : ''}">${ecMoney2(c.margem)}</td><td class="r mono">${ecMoney2(c.ticket)}</td><td class="r mono">${c.rec <= 0 ? 'hoje' : c.rec + ' d'}</td></tr>`).join('') || '<tr><td colspan="11" class="ec-muted" style="padding:16px;text-align:center">Nenhum cliente neste filtro.</td></tr>'}
     </tbody></table></div>
     <div class="ec-pager"><span class="ec-muted">${list.length} clientes</span><div style="display:flex;gap:6px;align-items:center"><button class="btn-sm" onclick="ccExportClientes()">⬇ Excel</button><button class="btn-sm" ${(v.cpage || 0) ? '' : 'disabled'} onclick="CC.view.cpage--;ccRender()">‹</button><span class="ec-muted">${(v.cpage || 0) + 1}/${pages}</span><button class="btn-sm" ${(v.cpage || 0) < pages - 1 ? '' : 'disabled'} onclick="CC.view.cpage++;ccRender()">›</button></div></div></div>
   <div class="ec-modal" id="cc-modal" onclick="if(event.target===this)ccClose()"></div>`;
   CC._clist = list;
 }
 function ccCliente360(id) {
-  const c = ccCustomers().find(x => x.id === id); const m = document.getElementById('cc-modal'); if (!c || !m) return;
+  const c = ccCustomers().find(x => String(x.id) === String(id)); const m = document.getElementById('cc-modal'); if (!c || !m) return;
   const fd = d => d.split('-').reverse().join('/');
   const prod = {}; c.ok.forEach(o => o.skus.forEach(([s, t, q, r]) => { const x = prod[s] || (prod[s] = { s, t, q: 0, r: 0, n: 0 }); x.q += q; x.r += r; x.n++; }));
   const prods = Object.values(prod).sort((a, b) => b.r - a.r);
@@ -4589,7 +4714,7 @@ function ccCliente360(id) {
   m.innerHTML = `<div class="ec-modal-box cc-drill">
     <div class="card-head"><span class="card-title">Cliente 360 — ${ecEsc(ccMask(c.n, c.id))}</span><button class="btn-sm" onclick="ccClose()">✕</button></div>
     <div style="padding:12px 18px">
-      <div class="ec-muted" style="margin-bottom:8px">Central Comercial › Clientes › ${ecEsc(ccMask(c.n, c.id))} · canal Mercado Livre · base de ${CC_MAX_DIAS} dias · identidade protegida (documento, nome e endereço não são guardados)</div>
+      <div class="ec-muted" style="margin-bottom:8px">Central Comercial › Clientes › ${ecEsc(ccMask(c.n, c.id))} · base de ${CC_MAX_DIAS} dias · identidade protegida (documento, nome e endereço não são guardados)</div>
       <div class="ec-strip ec-strip-sm" style="grid-template-columns:repeat(6,1fr);margin-bottom:10px">
         ${ecStat('Tipo', c.tipo === '—' ? 'não lido' : c.tipo, c.tipo === 'PJ' ? ecEsc(ccContrib(c.b)) + (c.b.ie ? ' · tem IE' : '') : '')}
         ${ecStat('Local', c.b ? ecEsc(c.b.uf || '—') : '—', c.b ? ecEsc(c.b.city || '') : 'faturamento')}
@@ -4602,7 +4727,7 @@ function ccCliente360(id) {
       <div class="ec-muted" style="margin-bottom:10px">${c.intervalo != null ? `Intervalo médio entre compras: <b>${Math.round(c.intervalo)} dias</b> · próxima recompra <b>estimada</b>: ${fd(prox)} (estimativa pela média do cliente)` : 'Cliente com uma única compra: sem estimativa de recompra.'}</div>
       <div class="g2">
         <div><div class="ec-subhead">Histórico de pedidos</div><div class="ec-table-wrap" style="max-height:44vh"><table class="t ec-t"><thead><tr><th>Pedido</th><th>Data</th><th>Status</th><th class="r">Unid.</th><th class="r">Receita</th><th class="r">Margem</th></tr></thead><tbody>
-          ${[...c.orders].reverse().map(o => `<tr><td class="mono"><a href="https://www.mercadolivre.com.br/vendas/${o.o}/detalhe" target="_blank" rel="noopener" style="color:var(--accent)">${o.o}</a></td><td class="mono">${fd(o.day)}</td><td>${ecPill(o.st === 'cancelled' ? 'cancelado' : 'pago', o.st === 'cancelled' ? 'crit' : 'ok')}</td><td class="r mono">${o.un}</td><td class="r mono">${ecMoney2(o.receita)}</td><td class="r mono">${o.temM ? ecMoney2(o.margem) : '—'}</td></tr>`).join('')}
+          ${[...c.orders].reverse().map(o => `<tr><td class="mono">${String(o.o).startsWith('BL') ? 'Bling' : `<a href="https://www.mercadolivre.com.br/vendas/${o.o}/detalhe" target="_blank" rel="noopener" style="color:var(--accent)">${o.o}</a>`}</td><td class="mono">${fd(o.day)}</td><td>${ecPill(o.st === 'cancelled' ? 'cancelado' : 'pago', o.st === 'cancelled' ? 'crit' : 'ok')}</td><td class="r mono">${o.un}</td><td class="r mono">${ecMoney2(o.receita)}</td><td class="r mono">${o.temM ? ecMoney2(o.margem) : '—'}</td></tr>`).join('')}
         </tbody></table></div></div>
         <div><div class="ec-subhead">Produtos comprados</div><div class="ec-table-wrap" style="max-height:44vh"><table class="t ec-t"><thead><tr><th>Produto</th><th class="r">Unid.</th><th class="r">Pedidos</th><th class="r">Receita</th></tr></thead><tbody>
           ${prods.map(x => `<tr><td><div class="ec-prod"><div class="ec-prod-n">${ecEsc(x.t)}</div><div class="ec-prod-s mono">${ecEsc(x.s)}</div></div></td><td class="r mono">${x.q}</td><td class="r mono">${x.n}</td><td class="r mono">${ecMoney2(x.r)}</td></tr>`).join('')}
@@ -4643,6 +4768,7 @@ const CC_DEF = {
   cancel: ['Cancelamentos', 'Pedidos com status cancelado no período (não entram na receita).'],
   dia: ['Vendas do dia', 'Pedidos não cancelados criados no dia.'],
   sku: ['Vendas do produto', 'Itens deste SKU em pedidos do período.'],
+  canal: ['Vendas do canal', 'Pedidos não cancelados do canal (loja do pedido no Bling).'],
   uf: ['Vendas da UF', 'Pedidos não cancelados com faturamento para esta UF (UF não lida = cadastro do cliente ainda não consultado).'],
 };
 function ccDrill(kind, arg) {
@@ -4652,6 +4778,7 @@ function ccDrill(kind, arg) {
   else rows = base.filter(x => x.st !== 'cancelled');
   if (kind === 'dia') { rows = rows.filter(x => ecDayOf(x.d) === arg); title += ' ' + arg.slice(8, 10) + '/' + arg.slice(5, 7); }
   if (kind === 'sku') { rows = rows.filter(x => x.s === arg); title += ' ' + arg; }
+  if (kind === 'canal') { rows = rows.filter(x => ccCanal(x) === arg); title += ' ' + arg; }
   if (kind === 'uf') { rows = rows.filter(x => { const b = ccB(x); return arg === '?' ? !(b && b.uf) : (b && b.uf === arg); }); title += ' ' + (arg === '?' ? 'não lida' : arg); }
   CC.drill = { kind, arg, title, rows, tab: kind === 'uf' ? 'municipios' : kind === 'pedidos' || kind === 'cancel' || kind === 'sku' ? 'pedidos' : 'produtos', q: '', page: 0 };
   ccRenderDrill();
@@ -4660,7 +4787,7 @@ function ccRenderDrill() {
   const D = CC.drill; const m = document.getElementById('cc-modal'); if (!D || !m) return;
   const p = ccPeriod(); const a = ccAgg(D.rows);
   const q = D.q.toLowerCase();
-  const tabs = [['produtos', 'Produtos'], ['pedidos', 'Pedidos'], ['clientes', 'Clientes'], ['municipios', 'Regiões'], ['eventos', 'Eventos']];
+  const tabs = [['produtos', 'Produtos'], ['pedidos', 'Pedidos'], ['clientes', 'Clientes'], ['canais', 'Canais'], ['municipios', 'Regiões'], ['eventos', 'Eventos']];
   let head = '', body = '', foot = '', list = [];
   if (D.tab === 'produtos') {
     list = ccBySku(D.rows).filter(r => !q || (r.sku + ' ' + r.t).toLowerCase().includes(q)).sort((x, y) => y.receita - x.receita);
@@ -4670,10 +4797,10 @@ function ccRenderDrill() {
     foot = `<tr class="cc-total"><td>Total (${list.length} SKUs)</td><td class="r mono">${ecInt(t.q)}</td><td></td><td class="r mono">${ecMoney2(t.rec)}</td><td></td><td class="r mono">${ecMoney2(t.m)}</td><td></td><td></td></tr>`;
   } else if (D.tab === 'pedidos') {
     list = ccByOrder(D.rows).filter(r => !q || (String(r.o) + ' ' + r.skus.join(' ')).toLowerCase().includes(q));
-    head = '<th>Pedido</th><th>Data</th><th>Status</th><th>Comprador</th><th class="r">Itens</th><th class="r">Faturamento</th><th class="r">Margem</th><th></th>';
-    body = list.slice(D.page * 50, D.page * 50 + 50).map(r => `<tr><td class="mono">${r.o}</td><td class="mono">${new Date(r.d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td><td>${ecPill(r.st === 'cancelled' ? 'cancelado' : r.st === 'paid' ? 'pago' : r.st, r.st === 'cancelled' ? 'crit' : 'ok')}</td><td>${ecEsc(ccMask(r.n, r.b))}${r.b2b ? ' <span class="ec-tag">b2b ML</span>' : ''}</td><td class="r mono">${r.un}</td><td class="r mono">${ecMoney2(r.receita)}</td><td class="r mono">${r.temMargem ? ecMoney2(r.margem) : '—'}</td><td><a href="https://www.mercadolivre.com.br/vendas/${r.o}/detalhe" target="_blank" rel="noopener" style="color:var(--accent)">abrir ↗</a></td></tr>`).join('');
+    head = '<th>Pedido</th><th>Canal</th><th>Data</th><th>Status</th><th>Comprador</th><th class="r">Itens</th><th class="r">Faturamento</th><th class="r">Margem</th><th></th>';
+    body = list.slice(D.page * 50, D.page * 50 + 50).map(r => `<tr><td class="mono">${r.src === 'bling' ? 'Bling nº ' + r.num : r.o}</td><td style="font-size:11px">${ecEsc(r.canal)}</td><td class="mono">${new Date(r.d).toLocaleString('pt-BR', r.src === 'bling' ? { day: '2-digit', month: '2-digit' } : { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td><td>${ecPill(r.st === 'cancelled' ? 'cancelado' : r.st === 'paid' ? 'pago' : r.st, r.st === 'cancelled' ? 'crit' : 'ok')}</td><td>${ecEsc(ccMask(r.n, r.b))}${r.b2b ? ' <span class="ec-tag">b2b ML</span>' : ''}</td><td class="r mono">${r.un}</td><td class="r mono">${ecMoney2(r.receita)}</td><td class="r mono">${r.temMargem ? ecMoney2(r.margem) : '—'}</td><td>${r.src === 'bling' ? '' : `<a href="https://www.mercadolivre.com.br/vendas/${r.o}/detalhe" target="_blank" rel="noopener" style="color:var(--accent)">abrir ↗</a>`}</td></tr>`).join('');
     const t = list.reduce((s, r) => ({ rec: s.rec + r.receita, m: s.m + (r.temMargem ? r.margem : 0) }), { rec: 0, m: 0 });
-    foot = `<tr class="cc-total"><td colspan="5">Total (${list.length} pedidos)</td><td class="r mono">${ecMoney2(t.rec)}</td><td class="r mono">${ecMoney2(t.m)}</td><td></td></tr>`;
+    foot = `<tr class="cc-total"><td colspan="6">Total (${list.length} pedidos)</td><td class="r mono">${ecMoney2(t.rec)}</td><td class="r mono">${ecMoney2(t.m)}</td><td></td></tr>`;
   } else if (D.tab === 'clientes') {
     const g = {}; D.rows.forEach(x => { if (!x.b) return; const r = g[x.b] || (g[x.b] = { b: x.b, n: x.n, ped: new Set(), receita: 0, margem: 0 }); const it = ccItem(x); if (x.st === 'cancelled') return; r.ped.add(x.o); r.receita += it.receita; if (it.margem != null) r.margem += it.margem; });
     list = Object.values(g).filter(r => !q || (String(r.b) + ' ' + r.n).toLowerCase().includes(q)).sort((x, y) => y.receita - x.receita);
@@ -4681,6 +4808,12 @@ function ccRenderDrill() {
     body = list.slice(D.page * 50, D.page * 50 + 50).map(r => { const b = (CC.buyers || {})[r.b]; return `<tr><td>${ecEsc(ccMask(r.n, r.b))}</td><td>${ccTipo(b)}${b && b.dt === 'CNPJ' ? `<div class="ec-sub">${ecEsc(ccContrib(b))}</div>` : ''}</td><td>${b ? ecEsc(b.uf) + `<div class="ec-sub">${ecEsc(b.city || '')}</div>` : '<span class="ec-muted">—</span>'}</td><td class="r mono">${r.ped.size}</td><td class="r mono">${ecMoney2(r.receita)}</td><td class="r mono">${ecMoney2(r.margem)}</td><td class="r mono">${r.ped.size ? ecMoney2(r.receita / r.ped.size) : '—'}</td></tr>`; }).join('');
     const t = list.reduce((s, r) => ({ rec: s.rec + r.receita, m: s.m + r.margem }), { rec: 0, m: 0 });
     foot = `<tr class="cc-total"><td colspan="4">Total (${list.length} clientes)</td><td class="r mono">${ecMoney2(t.rec)}</td><td class="r mono">${ecMoney2(t.m)}</td><td></td></tr>`;
+  } else if (D.tab === 'canais') {
+    list = ccByCanal(D.rows).filter(r => !q || r.k.toLowerCase().includes(q));
+    head = '<th>Canal</th><th class="r">Pedidos</th><th class="r">Unid.</th><th class="r">Faturamento</th><th class="r">Margem</th><th class="r">Margem %</th><th class="r">Ticket</th>';
+    body = list.map(r => `<tr><td>${ecEsc(r.k)}</td><td class="r mono">${r.ped.size}</td><td class="r mono">${ecInt(r.un)}</td><td class="r mono">${ecMoney2(r.receita)}</td><td class="r mono">${r.recM ? ecMoney2(r.margem) : '—'}</td><td class="r mono">${r.recM ? ecPct(r.margem / r.recM, 1) : '—'}</td><td class="r mono">${ecMoney2(r.receita / r.ped.size)}</td></tr>`).join('');
+    const t = list.reduce((s, r) => ({ rec: s.rec + r.receita, m: s.m + r.margem }), { rec: 0, m: 0 });
+    foot = `<tr class="cc-total"><td colspan="3">Total (${list.length} canais)</td><td class="r mono">${ecMoney2(t.rec)}</td><td class="r mono">${ecMoney2(t.m)}</td><td></td><td></td></tr>`;
   } else if (D.tab === 'municipios') {
     const g = {}; D.rows.forEach(x => { if (x.st === 'cancelled') return; const b = ccB(x); const k = b && b.uf ? b.uf + ' · ' + (b.city || '—') : 'não lido'; const r = g[k] || (g[k] = { k, ped: new Set(), cli: new Set(), receita: 0, margem: 0 }); const it = ccItem(x); r.ped.add(x.o); if (x.b) r.cli.add(x.b); r.receita += it.receita; if (it.margem != null) r.margem += it.margem; });
     list = Object.values(g).filter(r => !q || r.k.toLowerCase().includes(q)).sort((x, y) => y.receita - x.receita);
@@ -4716,7 +4849,7 @@ async function ccExportDrill() {
   const D = CC.drill; if (!D || !(await ccLoadXlsx())) return;
   const n2 = v => v == null ? '' : +v.toFixed(2);
   const linhas = D.rows.map(x => { const it = ccItem(x); return {
-    'Pedido': x.o, 'Data': ecDayOf(x.d), 'Status': x.st, 'SKU': x.s, 'Produto': x.t, 'Qtd': x.q, 'Preço unit.': n2(x.u), 'Faturamento': n2(it.receita), 'Tarifa ML': n2(it.tarifa),
+    'Pedido': x.src === 'bling' ? 'Bling ' + x.num : x.o, 'Canal': ccCanal(x), 'Data': ecDayOf(x.d), 'Status': x.st, 'SKU': x.s, 'Produto': x.t, 'Qtd': x.q, 'Preço unit.': n2(x.u), 'Faturamento': n2(it.receita), 'Tarifa ML': n2(it.tarifa),
     'Frete': n2(it.frete), 'Origem frete': it.freteF, '% Tributos': x.ip, 'Imposto': n2(it.imposto), 'Custo unit.': n2(x.c), 'Origem custo': x.cf || 'sem custo', 'Custo total': n2(it.custo), 'Margem': n2(it.margem),
     'Comprador (mascarado)': ccMask(x.n, x.b), 'Tipo': ccTipo(ccB(x)), 'ICMS': ccContribX(ccB(x)), 'UF': (ccB(x) || {}).uf || '', 'Cidade': (ccB(x) || {}).city || '', 'Sinal b2b ML': x.b2b ? 'Sim' : '', 'Full': x.full ? 'Sim' : '' }; });
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), 'Itens');
