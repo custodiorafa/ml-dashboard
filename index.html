@@ -4282,7 +4282,8 @@ function ccFilter(rows) {
   const curvaOf = {}; if (v.curva) EC.rows.forEach(r => { curvaOf[r.sku] = r.curva; });
   const B = CC.buyers || {};
   return rows.filter(x => (!q || (x.s + ' ' + x.t + ' ' + x.o).toLowerCase().includes(q)) && (!v.curva || curvaOf[x.s] === v.curva)
-    && (!v.uf || (B[x.b] && B[x.b].uf === v.uf)) && (!v.pj || ccTipo(B[x.b]) === v.pj));
+    && (!v.uf || (B[x.b] && B[x.b].uf === v.uf)) && (!v.pj || ccTipo(B[x.b]) === v.pj)
+    && (!v.icms || (B[x.b] && (ccContrib(B[x.b]) === 'Contribuinte ICMS') === (v.icms === 'c'))));
 }
 function ccItem(x) {
   const ec = ccEcRow(x.s);
@@ -4374,6 +4375,7 @@ function ccRender() {
       <input id="cc-q" placeholder="Filtrar por SKU, produto ou nº do pedido…" value="${ecEsc(CC.view.q)}" onchange="CC.view.q=this.value;ccRender()">
       <select onchange="CC.view.uf=this.value;ccRender()" title="UF de faturamento (depende da leitura do cadastro dos clientes)"><option value="">Todas as UFs</option>${ufs.map(u => `<option ${CC.view.uf === u ? 'selected' : ''}>${u}</option>`).join('')}</select>
       <select onchange="CC.view.pj=this.value;ccRender()"><option value="">PF e PJ</option><option ${CC.view.pj === 'PF' ? 'selected' : ''}>PF</option><option ${CC.view.pj === 'PJ' ? 'selected' : ''}>PJ</option></select>
+      <select onchange="CC.view.icms=this.value;ccRender()"><option value="">ICMS: todos</option><option value="c" ${CC.view.icms === 'c' ? 'selected' : ''}>Contribuinte</option><option value="n" ${CC.view.icms === 'n' ? 'selected' : ''}>Não contribuinte</option></select>
       <span class="ec-tag" title="Shopee, site e B2B ainda não estão integrados">Canal: Mercado Livre</span></div>
   </div>
   <div class="ec-chips cc-tabs">${[['vendas', '📈 Vendas'], ['clientes', '👥 Clientes'], ['regioes', '🗺 Regiões']].map(([k, l]) => `<button class="ec-chip ${CC.view.tab === k ? 'active' : ''}" onclick="ccSetTab('${k}')">${l}</button>`).join('')}</div>`;
@@ -4446,6 +4448,7 @@ async function ccEnrich(facts) {
 function ccEnrichNote() { const el = document.getElementById('cc-enrich'); if (el && CC.enrich) el.textContent = `Lendo UF e PF/PJ dos clientes: ${CC.enrich.done}/${CC.enrich.total}…`; }
 const ccB = x => (CC.buyers && CC.buyers[x.b]) || null;
 const ccTipo = b => !b ? '—' : b.dt === 'CNPJ' ? 'PJ' : b.dt === 'CPF' ? 'PF' : '—';
+const ccContribX = b => !b ? '' : b.dt === 'CPF' ? 'Não contribuinte' : ccContrib(b); // para exportação (PF = não contribuinte)
 const ccContrib = b => !b || b.dt !== 'CNPJ' ? '' : /n[aã]o/i.test(b.contrib || '') ? 'Não contribuinte' : b.contrib ? 'Contribuinte ICMS' : 'não informado';
 
 // base completa (até 180 dias) para análises de cliente
@@ -4525,16 +4528,18 @@ function ccRenderClientes(el, head) {
   const q = v.q.trim().toLowerCase();
   if (v.uf) cs = cs.filter(c => c.b && c.b.uf === v.uf);
   if (v.pj) cs = cs.filter(c => c.tipo === v.pj);
+  if (v.icms) cs = cs.filter(c => c.b && (ccContrib(c.b) === 'Contribuinte ICMS') === (v.icms === 'c'));
   const per = cs.filter(c => c.pedP > 0);
   const cnt = s => cs.filter(c => c.status === s).length;
   const recTot = per.reduce((s, c) => s + c.recP, 0);
   const top10 = [...per].sort((a, b) => b.recP - a.recP).slice(0, 10).reduce((s, c) => s + c.recP, 0);
   const lidos = per.filter(c => c.b).length, pj = per.filter(c => c.tipo === 'PJ').length, pf = per.filter(c => c.tipo === 'PF').length;
   const contrib = per.filter(c => ccContrib(c.b) === 'Contribuinte ICMS').length;
+  const naoContribPJ = per.filter(c => ccContrib(c.b) === 'Não contribuinte').length; // PF é sempre não contribuinte
   const multi = cs.filter(c => c.intervalo != null);
   const intMed = multi.length ? multi.reduce((s, c) => s + c.intervalo, 0) / multi.length : null;
   const rr = n => { const r = ccRecompra(cs, n); return r == null ? '<span class="ec-muted">base insuficiente</span>' : ecPct(r, 1); };
-  const F = { periodo: ['Compraram no período', c => c.pedP > 0], Novo: ['Novos', c => c.status === 'Novo'], Recorrente: ['Recorrentes', c => c.status === 'Recorrente'], Reativado: ['Reativados', c => c.status === 'Reativado'], 'Em risco': ['Em risco (61–90 dias)', c => c.status === 'Em risco'], Inativo: ['Inativos (> 90 dias)', c => c.status === 'Inativo'], pj: ['PJ', c => c.tipo === 'PJ'], b2b: ['Potencial B2B', c => c.potB2B], todos: ['Todos da base', c => true] };
+  const F = { periodo: ['Compraram no período', c => c.pedP > 0], Novo: ['Novos', c => c.status === 'Novo'], Recorrente: ['Recorrentes', c => c.status === 'Recorrente'], Reativado: ['Reativados', c => c.status === 'Reativado'], 'Em risco': ['Em risco (61–90 dias)', c => c.status === 'Em risco'], Inativo: ['Inativos (> 90 dias)', c => c.status === 'Inativo'], pj: ['PJ', c => c.tipo === 'PJ'], contrib: ['Contribuinte ICMS', c => ccContrib(c.b) === 'Contribuinte ICMS'], naocontrib: ['Não contribuinte ICMS', c => !!c.b && ccContrib(c.b) !== 'Contribuinte ICMS'], b2b: ['Potencial B2B', c => c.potB2B], todos: ['Todos da base', c => true] };
   const f = F[v.cf] ? v.cf : 'periodo';
   let list = cs.filter(F[f][1]).filter(c => !q || (String(c.id) + ' ' + (c.n || '') + ' ' + (c.b ? c.b.city + ' ' + c.b.uf : '')).toLowerCase().includes(q));
   const sk = v.csort || 'recP'; list.sort((a, b) => sk === 'rec' ? a.rec - b.rec : (b[sk] || 0) - (a[sk] || 0));
@@ -4552,7 +4557,7 @@ function ccRenderClientes(el, head) {
   </div>
   <div class="g2">
     <div class="card"><div class="card-head"><span class="card-title">Perfil dos clientes do período</span><span class="ec-muted" id="cc-enrich">${CC.enrich ? `Lendo UF e PF/PJ dos clientes: ${CC.enrich.done}/${CC.enrich.total}…` : `${lidos}/${per.length} com cadastro lido`}</span></div><div class="card-body">
-      <div class="ec-strip ec-strip-sm" style="grid-template-columns:repeat(4,1fr)">${ecStat('Pessoa física', ecInt(pf), lidos ? ecPct(pf / lidos) : '')}${ecStat('Pessoa jurídica', ecInt(pj), lidos ? ecPct(pj / lidos) : '')}${ecStat('Contribuintes ICMS', ecInt(contrib), 'entre os PJ')}${ecStat('Potencial B2B', ecInt(per.filter(c => c.potB2B).length), 'CNPJ + recompra ou b2b ML')}</div>
+      <div class="ec-strip ec-strip-sm" style="grid-template-columns:repeat(5,1fr)">${ecStat('Pessoa física', ecInt(pf), lidos ? ecPct(pf / lidos) : '')}${ecStat('Pessoa jurídica', ecInt(pj), lidos ? ecPct(pj / lidos) : '')}${ecStat('Contribuintes ICMS', ecInt(contrib), lidos ? ecPct(contrib / lidos, 1) + ' · todos PJ' : 'PJ')}${ecStat('Não contribuintes ICMS', ecInt(naoContribPJ + pf), `${ecInt(naoContribPJ)} PJ + ${ecInt(pf)} PF`)}${ecStat('Potencial B2B', ecInt(per.filter(c => c.potB2B).length), 'CNPJ + recompra ou b2b ML')}</div>
       <div class="ec-muted" style="margin-top:8px">PF/PJ, contribuinte e UF vêm dos dados de faturamento do pedido no ML. O painel não guarda CPF/CNPJ, nome nem endereço. "Potencial B2B" é um sinal, não um segmento validado.</div>
     </div></div>
     <div class="card"><div class="card-head"><span class="card-title">Recompra e concentração</span><span class="ec-muted">base de ${CC_MAX_DIAS} dias</span></div><div class="card-body">
@@ -4562,7 +4567,7 @@ function ccRenderClientes(el, head) {
   </div>
   <div class="card" style="margin-top:16px"><div class="ec-toolbar"><div class="ec-chips">${Object.entries(F).map(([k, x]) => `<button class="ec-chip ${k === f ? 'active' : ''}" onclick="CC.view.cf='${k}';CC.view.cpage=0;ccRender()">${x[0]} <span>${cs.filter(x[1]).length}</span></button>`).join('')}</div></div>
     <div class="ec-table-wrap" style="max-height:560px"><table class="t ec-t px-table"><thead><tr><th>Cliente</th><th>Tipo</th><th>UF / cidade</th><th>Status</th>${th('pedP', 'Pedidos período')}${th('recP', 'Receita período')}${th('ped', 'Pedidos base')}${th('receita', 'Receita base')}${th('margem', 'Margem base')}${th('ticket', 'Ticket')}${th('rec', 'Recência')}</tr></thead><tbody>
-    ${list.slice((v.cpage || 0) * 50, (v.cpage || 0) * 50 + 50).map(c => `<tr style="cursor:pointer" onclick="ccCliente360(${c.id})"><td>${ecEsc(ccMask(c.n, c.id))}${c.potB2B ? ' <span class="ec-tag">potencial B2B</span>' : ''}</td><td>${c.tipo}${c.tipo === 'PJ' ? `<div class="ec-sub">${ecEsc(ccContrib(c.b))}</div>` : ''}</td><td>${c.b ? ecEsc(c.b.uf) + `<div class="ec-sub">${ecEsc(c.b.city || '')}</div>` : '<span class="ec-muted">—</span>'}</td><td>${ecPill(c.status, CC_ST_TONE[c.status])}</td><td class="r mono">${c.pedP || ''}</td><td class="r mono">${c.pedP ? ecMoney2(c.recP) : ''}</td><td class="r mono">${c.ped}</td><td class="r mono">${ecMoney2(c.receita)}</td><td class="r mono ${c.margem < 0 ? 'c-red' : ''}">${ecMoney2(c.margem)}</td><td class="r mono">${ecMoney2(c.ticket)}</td><td class="r mono">${c.rec <= 0 ? 'hoje' : c.rec + ' d'}</td></tr>`).join('') || '<tr><td colspan="11" class="ec-muted" style="padding:16px;text-align:center">Nenhum cliente neste filtro.</td></tr>'}
+    ${list.slice((v.cpage || 0) * 50, (v.cpage || 0) * 50 + 50).map(c => `<tr style="cursor:pointer" onclick="ccCliente360(${c.id})"><td>${ecEsc(ccMask(c.n, c.id))}${c.potB2B ? ' <span class="ec-tag">potencial B2B</span>' : ''}</td><td>${c.tipo}${c.tipo === 'PJ' ? `<div class="ec-sub">${ecEsc(ccContrib(c.b))}</div>` : c.tipo === 'PF' ? '<div class="ec-sub">Não contribuinte</div>' : ''}</td><td>${c.b ? ecEsc(c.b.uf) + `<div class="ec-sub">${ecEsc(c.b.city || '')}</div>` : '<span class="ec-muted">—</span>'}</td><td>${ecPill(c.status, CC_ST_TONE[c.status])}</td><td class="r mono">${c.pedP || ''}</td><td class="r mono">${c.pedP ? ecMoney2(c.recP) : ''}</td><td class="r mono">${c.ped}</td><td class="r mono">${ecMoney2(c.receita)}</td><td class="r mono ${c.margem < 0 ? 'c-red' : ''}">${ecMoney2(c.margem)}</td><td class="r mono">${ecMoney2(c.ticket)}</td><td class="r mono">${c.rec <= 0 ? 'hoje' : c.rec + ' d'}</td></tr>`).join('') || '<tr><td colspan="11" class="ec-muted" style="padding:16px;text-align:center">Nenhum cliente neste filtro.</td></tr>'}
     </tbody></table></div>
     <div class="ec-pager"><span class="ec-muted">${list.length} clientes</span><div style="display:flex;gap:6px;align-items:center"><button class="btn-sm" onclick="ccExportClientes()">⬇ Excel</button><button class="btn-sm" ${(v.cpage || 0) ? '' : 'disabled'} onclick="CC.view.cpage--;ccRender()">‹</button><span class="ec-muted">${(v.cpage || 0) + 1}/${pages}</span><button class="btn-sm" ${(v.cpage || 0) < pages - 1 ? '' : 'disabled'} onclick="CC.view.cpage++;ccRender()">›</button></div></div></div>
   <div class="ec-modal" id="cc-modal" onclick="if(event.target===this)ccClose()"></div>`;
@@ -4608,7 +4613,7 @@ function ccCliente360(id) {
 }
 async function ccExportClientes() {
   if (!CC._clist || !(await ccLoadXlsx())) return;
-  const linhas = CC._clist.map(c => ({ 'Cliente (mascarado)': ccMask(c.n, c.id), 'Tipo': c.tipo, 'Contribuinte': ccContrib(c.b), 'UF': c.b ? c.b.uf : '', 'Cidade': c.b ? c.b.city : '', 'Status': c.status, 'Potencial B2B': c.potB2B ? 'Sim' : '',
+  const linhas = CC._clist.map(c => ({ 'Cliente (mascarado)': ccMask(c.n, c.id), 'Tipo': c.tipo, 'ICMS': ccContribX(c.b), 'UF': c.b ? c.b.uf : '', 'Cidade': c.b ? c.b.city : '', 'Status': c.status, 'Potencial B2B': c.potB2B ? 'Sim' : '',
     'Pedidos período': c.pedP, 'Receita período': +c.recP.toFixed(2), 'Pedidos base': c.ped, 'Receita base': +c.receita.toFixed(2), 'Margem base': +c.margem.toFixed(2), 'Ticket': +c.ticket.toFixed(2), '1º pedido': c.first, 'Último pedido': c.last, 'Recência (dias)': c.rec, 'Intervalo médio (dias)': c.intervalo != null ? Math.round(c.intervalo) : '' }));
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), 'Clientes');
   XLSX.writeFile(wb, `clientes_${ecDay()}.xlsx`);
@@ -4713,7 +4718,7 @@ async function ccExportDrill() {
   const linhas = D.rows.map(x => { const it = ccItem(x); return {
     'Pedido': x.o, 'Data': ecDayOf(x.d), 'Status': x.st, 'SKU': x.s, 'Produto': x.t, 'Qtd': x.q, 'Preço unit.': n2(x.u), 'Faturamento': n2(it.receita), 'Tarifa ML': n2(it.tarifa),
     'Frete': n2(it.frete), 'Origem frete': it.freteF, '% Tributos': x.ip, 'Imposto': n2(it.imposto), 'Custo unit.': n2(x.c), 'Origem custo': x.cf || 'sem custo', 'Custo total': n2(it.custo), 'Margem': n2(it.margem),
-    'Comprador (mascarado)': ccMask(x.n, x.b), 'Tipo': ccTipo(ccB(x)), 'Contribuinte': ccContrib(ccB(x)), 'UF': (ccB(x) || {}).uf || '', 'Cidade': (ccB(x) || {}).city || '', 'Sinal b2b ML': x.b2b ? 'Sim' : '', 'Full': x.full ? 'Sim' : '' }; });
+    'Comprador (mascarado)': ccMask(x.n, x.b), 'Tipo': ccTipo(ccB(x)), 'ICMS': ccContribX(ccB(x)), 'UF': (ccB(x) || {}).uf || '', 'Cidade': (ccB(x) || {}).city || '', 'Sinal b2b ML': x.b2b ? 'Sim' : '', 'Full': x.full ? 'Sim' : '' }; });
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), 'Itens');
   XLSX.writeFile(wb, `central_comercial_${D.kind}_${ecDay()}.xlsx`);
 }
