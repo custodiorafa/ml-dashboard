@@ -4407,9 +4407,9 @@ function ccRender() {
   </div>
   <div class="card" style="margin-top:16px"><div class="card-head"><span class="card-title">Resultado por canal</span><span class="ec-muted">${CC.blErr ? 'Bling: ' + ecEsc(CC.blErr) : 'loja do pedido no Bling · clique para detalhar'}</span></div>
     <div class="ec-table-wrap"><table class="t ec-t px-table" style="min-width:900px"><thead><tr><th>Canal</th><th style="width:22%">Participação</th><th class="r">Faturamento</th><th class="r">Part.</th><th class="r">Margem</th><th class="r">Margem %</th><th class="r">Pedidos</th><th class="r">Unid.</th><th class="r">Ticket</th></tr></thead><tbody>
-    ${(() => { const cs = ccByCanal(rows); const mx = Math.max(1, ...cs.map(c => c.receita)); return cs.map(c => `<tr style="cursor:pointer" onclick="ccDrill('canal','${ecEsc(c.k)}')"><td><b>${ecEsc(c.k)}</b>${c.semTarifa > 0 ? '<div class="ec-sub">tarifa não informada: margem indisponível (⚙ Canais)</div>' : ''}</td><td><div class="ec-hbar-trk" style="height:10px"><div class="ec-hbar-fill" style="width:${c.receita / mx * 100}%;background:var(--accent)"></div></div></td><td class="r mono">${ecMoney(c.receita)}</td><td class="r mono">${pct(c.receita, a.receita)}</td><td class="r mono">${c.recM ? ecMoney(c.margem) : '<span class="ec-muted">indisponível</span>'}</td><td class="r mono">${c.recM ? ecPct(c.margem / c.recM, 1) : '—'}</td><td class="r mono">${c.ped.size}</td><td class="r mono">${ecInt(c.un)}</td><td class="r mono">${ecMoney2(c.receita / c.ped.size)}</td></tr>`).join(''); })()}
+    ${(() => { const cs = ccByCanal(rows); const mx = Math.max(1, ...cs.map(c => c.receita)); return cs.map(c => `<tr style="cursor:pointer" onclick="ccDrill('canal','${ecEsc(c.k)}')"><td><b>${ecEsc(c.k)}</b>${c.semTarifa > 0 ? '<div class="ec-sub">tarifa não informada: margem indisponível (⚙ Canais)</div>' : ''}${c.inf.size ? `<div class="ec-sub">${c.inf.size} pedido${c.inf.size > 1 ? 's' : ''} recente${c.inf.size > 1 ? 's' : ''} ainda sem registro no Bling</div>` : ''}</td><td><div class="ec-hbar-trk" style="height:10px"><div class="ec-hbar-fill" style="width:${c.receita / mx * 100}%;background:var(--accent)"></div></div></td><td class="r mono">${ecMoney(c.receita)}</td><td class="r mono">${pct(c.receita, a.receita)}</td><td class="r mono">${c.recM ? ecMoney(c.margem) : '<span class="ec-muted">indisponível</span>'}</td><td class="r mono">${c.recM ? ecPct(c.margem / c.recM, 1) : '—'}</td><td class="r mono">${c.ped.size}</td><td class="r mono">${ecInt(c.un)}</td><td class="r mono">${ecMoney2(c.receita / c.ped.size)}</td></tr>`).join(''); })()}
     </tbody></table></div>
-    ${rows.some(x => !x.ch) ? '<div class="ec-muted" style="padding:8px 16px">* pedido ainda sem vínculo com o Bling: canal definido pelo tipo de envio atual do anúncio.</div>' : ''}</div>
+    ${rows.some(x => !x.ch) ? '<div class="ec-muted" style="padding:8px 16px">Pedidos do Mercado Livre que o Bling ainda não importou entram no canal pelo tipo de envio do anúncio (Full ou não) e são corrigidos quando o Bling registrar o pedido.</div>' : ''}</div>
   <div class="card" style="margin-top:16px"><div class="card-head"><span class="card-title">Produtos</span><span class="ec-muted">${skus.length} SKUs vendidos · clique para ver os pedidos</span></div>
     <div class="ec-table-wrap" style="max-height:480px"><table class="t ec-t px-table"><thead><tr><th>Produto</th><th class="r">Unid.</th><th class="r">Pedidos</th><th class="r">Faturamento</th><th class="r">Part.</th><th class="r">Margem</th><th class="r">Margem %</th><th>Custo</th></tr></thead><tbody>
     ${skus.slice(0, 100).map(r => `<tr style="cursor:pointer" onclick="ccDrill('sku','${ecEsc(r.sku)}')"><td><div class="ec-prod"><div class="ec-prod-n">${ecEsc(r.t || r.sku)}</div><div class="ec-prod-s mono">${ecEsc(r.sku)}</div></div></td><td class="r mono">${ecInt(r.q)}</td><td class="r mono">${ecInt(r.ped)}</td><td class="r mono">${ecMoney(r.receita)}</td><td class="r mono">${pct(r.receita, a.receita)}</td><td class="r mono ${r.margem < 0 ? 'c-red' : ''}">${r.recM ? ecMoney(r.margem) : '—'}</td><td class="r mono ${r.margemPct != null && r.margemPct < 0.1 ? 'c-red' : ''}">${r.margemPct != null ? ecPct(r.margemPct, 1) : '—'}</td><td class="ec-muted" style="font-size:11px">${Object.keys(r.cf).join(', ')}</td></tr>`).join('')}
@@ -4432,10 +4432,11 @@ function ccSetCustom() {
 // O Bling reúne os pedidos de todos os canais. ML e ML Full já vêm da API do ML: o Bling só informa a qual loja cada pedido pertence.
 // Demais lojas (Shopee, site etc.): os itens vêm do pedido de venda do Bling.
 const CC_LOJAS_KEY = 'cc_lojas_v1', CC_BL_META = 'cc_bl_meta_v1';
-const CC_LOJAS_DEF = { '204958720': { nome: 'Mercado Livre Full', tipo: 'ml' }, '203450504': { nome: 'Mercado Livre', tipo: 'ml' }, '203946006': { nome: 'Shopee', tipo: 'mkt' } };
+const CC_LOJAS_DEF = { '204958720': { nome: 'Mercado Livre Full', tipo: 'ml' }, '203450504': { nome: 'Mercado Livre', tipo: 'ml' }, '203946006': { nome: 'Shopee', tipo: 'mkt' }, '204989836': { nome: 'Titanium (venda direta)', tipo: 'outro' } };
 function ccLojas() { let c = {}; try { c = JSON.parse(localStorage.getItem(CC_LOJAS_KEY) || '{}'); } catch (e) {} return { ...CC_LOJAS_DEF, ...c }; }
 function ccLojaNome(id) { const l = ccLojas()[id]; return l ? l.nome : id === '0' || !id ? 'Venda direta (Bling)' : 'Loja ' + id; }
-const ccCanal = x => x.ch ? ccLojaNome(x.ch) : (x.full ? 'Mercado Livre Full' : 'Mercado Livre') + ' *';
+// pedido do ML ainda não importado pelo Bling: entra no mesmo canal, definido pelo tipo de envio do anúncio
+const ccCanal = x => x.ch ? ccLojaNome(x.ch) : ccLojaNome(x.full ? '204958720' : '203450504');
 const ccBlRaw = p => blingApi('/bling/raw?p=' + encodeURIComponent(p));
 async function ccIdb(store, mode, fn) { const db = await ccDb(); return new Promise(res => { const t = db.transaction(store, mode); const r = fn(t.objectStore(store)); t.oncomplete = () => res(mode === 'readonly' ? (r && r.result !== undefined ? r.result : null) : true); t.onerror = () => res(null); }); }
 // lista de pedidos de venda do Bling por período (só id, número da loja, loja, situação, total)
@@ -4498,9 +4499,10 @@ async function ccBlFacts(from, to, mlIds) {
     if (bid && CC.buyers && !CC.buyers[bid]) { const rec = { id: bid, dt: det.tp === 'J' ? 'CNPJ' : det.tp === 'F' ? 'CPF' : '', uf: det.uf, city: det.mun, contrib: '', ie: false, at: Date.now() }; CC.buyers[bid] = rec; ccBuyerPut(rec); }
     det.itens.forEach(i => {
       const share = i.q * i.u / tot;
-      // tarifa: a do Bling quando informada; senão o % estimado configurado para o canal; senão indisponível
-      const f = det.com > 0 ? det.com * share : (cfg.taxaPct > 0 ? i.q * i.u * cfg.taxaPct / 100 : null);
-      facts.push({ o: 'BL' + det.id, num: det.num, pk: null, d: det.date + 'T12:00:00-03:00', st: det.sit === 12 ? 'cancelled' : 'paid', i: null, s: i.s, t: i.t, q: i.q, u: i.u, f: f == null ? null : Math.round(f * 100) / 100, ff: det.com > 0 ? 'Bling' : f != null ? 'estimada' : 'ausente',
+      // tarifa: a do Bling quando informada; senão o % configurado para o canal (tarifa estimada ou comissão);
+      // loja própria / venda direta não tem tarifa de venda (zero); marketplace sem % informado = indisponível
+      const f = det.com > 0 ? det.com * share : (cfg.taxaPct > 0 ? i.q * i.u * cfg.taxaPct / 100 : (cfg.tipo === 'outro' || !lojas[det.loja] ? (cfg.tipo === 'outro' ? 0 : null) : null));
+      facts.push({ o: 'BL' + det.id, num: det.num, pk: null, d: det.date + 'T12:00:00-03:00', st: det.sit === 12 ? 'cancelled' : 'paid', i: null, s: i.s, t: i.t, q: i.q, u: i.u, f: f == null ? null : Math.round(f * 100) / 100, ff: det.com > 0 ? 'Bling' : f > 0 ? (cfg.tipo === 'outro' ? 'comissão' : 'estimada') : f === 0 ? 'sem tarifa' : 'ausente',
         sh: null, fr: Math.round(det.frete * share * 100) / 100, b: bid, n: '', b2b: false, full: false, c: i.c, cf: i.cf, ip: i.ip, ipf: i.ipf, ch: det.loja, src: 'bling' });
     });
   });
@@ -4525,9 +4527,9 @@ function ccOpenLojas() {
   const m = document.getElementById('cc-modal'); if (!m) return;
   const lojas = ccLojas(); const ids = new Set(Object.keys(lojas)); (CC.facts || []).concat(CC.prev || []).forEach(x => { if (x.ch) ids.add(x.ch); });
   m.innerHTML = `<div class="ec-modal-box" style="width:min(760px,100%)"><div class="card-head"><span class="card-title">⚙ Canais de venda</span><button class="btn-sm" onclick="ccClose()">✕</button></div>
-    <div style="padding:14px 18px"><div class="ec-muted" style="margin-bottom:10px">Cada loja do Bling é um canal. Dê o nome e, se o canal não informa a tarifa (ex.: Shopee), preencha um % estimado para o painel calcular a margem — ela fica marcada como estimada.</div>
-    <table class="t ec-t"><thead><tr><th>Loja (Bling)</th><th>Nome do canal</th><th>Tipo</th><th class="r">Tarifa estimada %</th></tr></thead><tbody>
-    ${[...ids].map(id => { const l = lojas[id] || { nome: 'Loja ' + id, tipo: 'outro' }; return `<tr data-loja="${ecEsc(id)}"><td class="mono">${ecEsc(id)}</td><td><input class="cc-in" value="${ecEsc(l.nome)}"></td><td><select class="cc-in"><option value="ml" ${l.tipo === 'ml' ? 'selected' : ''}>Mercado Livre</option><option value="mkt" ${l.tipo === 'mkt' ? 'selected' : ''}>Outro marketplace</option><option value="outro" ${l.tipo === 'outro' ? 'selected' : ''}>Loja própria / B2B</option></select></td><td class="r"><input class="cc-in" type="number" step="0.1" style="width:80px;text-align:right" value="${l.taxaPct || ''}" ${l.tipo === 'ml' ? 'disabled title="tarifa real do ML"' : ''}></td></tr>`; }).join('')}
+    <div style="padding:14px 18px"><div class="ec-muted" style="margin-bottom:10px">Cada loja do Bling é um canal. Dê o nome e o tipo. Marketplace que não informa a tarifa (ex.: Shopee): preencha um % estimado para o painel calcular a margem. Loja própria / venda direta: não tem tarifa de venda; preencha o % só se houver comissão.</div>
+    <table class="t ec-t"><thead><tr><th>Loja (Bling)</th><th>Nome do canal</th><th>Tipo</th><th class="r">Tarifa / comissão %</th></tr></thead><tbody>
+    ${[...ids].map(id => { const l = lojas[id] || { nome: 'Loja ' + id, tipo: 'outro' }; return `<tr data-loja="${ecEsc(id)}"><td class="mono">${ecEsc(id)}</td><td><input class="cc-in" value="${ecEsc(l.nome)}"></td><td><select class="cc-in"><option value="ml" ${l.tipo === 'ml' ? 'selected' : ''}>Mercado Livre</option><option value="mkt" ${l.tipo === 'mkt' ? 'selected' : ''}>Outro marketplace</option><option value="outro" ${l.tipo === 'outro' ? 'selected' : ''}>Loja própria / venda direta</option></select></td><td class="r"><input class="cc-in" type="number" step="0.1" style="width:80px;text-align:right" value="${l.taxaPct || ''}" ${l.tipo === 'ml' ? 'disabled title="tarifa real do ML"' : ''}></td></tr>`; }).join('')}
     </tbody></table></div>
     <div class="ec-modal-foot"><button class="btn-sm btn-primary" onclick="ccSaveLojas()">Salvar</button></div></div>`;
   m.style.display = 'flex';
@@ -4539,7 +4541,7 @@ function ccSaveLojas() {
 }
 function ccByCanal(rows) {
   const m = {};
-  rows.forEach(x => { if (x.st === 'cancelled') return; const k = ccCanal(x); const r = m[k] || (m[k] = { k, receita: 0, margem: 0, recM: 0, ped: new Set(), un: 0, semTarifa: 0 }); const it = ccItem(x); r.receita += it.receita; r.un += x.q; r.ped.add(x.o); if (it.margem != null) { r.margem += it.margem; r.recM += it.receita; } if (x.f == null) r.semTarifa += it.receita; });
+  rows.forEach(x => { if (x.st === 'cancelled') return; const k = ccCanal(x); const r = m[k] || (m[k] = { k, receita: 0, margem: 0, recM: 0, ped: new Set(), un: 0, semTarifa: 0, inf: new Set() }); const it = ccItem(x); r.receita += it.receita; if (!x.ch) r.inf.add(x.o); r.un += x.q; r.ped.add(x.o); if (it.margem != null) { r.margem += it.margem; r.recM += it.receita; } if (x.f == null) r.semTarifa += it.receita; });
   return Object.values(m).sort((a, b) => b.receita - a.receita);
 }
 
