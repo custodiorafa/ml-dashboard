@@ -661,6 +661,16 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .ec-pager { display:flex; justify-content:space-between; align-items:center; padding:10px 16px; border-top:1px solid var(--border); }
 .ec-modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:1000; align-items:center; justify-content:center; padding:16px; }
 .ec-modal-box { background:var(--surface); border:1px solid var(--border2); border-radius:14px; width:min(980px,100%); max-height:90vh; overflow:auto; }
+.ec-side { justify-content:flex-end; padding:0; }
+.ec-side .ec-modal-box { width:min(560px,100%); height:100vh; max-height:100vh; border-radius:0; border-width:0 0 0 1px; }
+.ec-memo-sec { padding:12px 18px; border-bottom:1px solid var(--border); }
+.ec-memo-sec h4 { font:600 11px var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--text2); margin:0 0 8px; }
+.ec-memo-row { display:flex; justify-content:space-between; gap:12px; font-size:12px; padding:3px 0; }
+.ec-memo-row span:first-child { color:var(--text2); }
+.ec-memo-row span:last-child { font-family:var(--mono); text-align:right; }
+.ec-memo-f { font:12px var(--mono); background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin-top:6px; line-height:1.6; white-space:normal; }
+.ec-link { background:none; border:0; padding:0; color:inherit; font:inherit; cursor:pointer; text-align:left; border-bottom:1px dotted var(--text2); }
+.ec-link:hover { color:var(--accent); }
 .ec-cfg-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:22px; }
 .ec-f { display:flex; justify-content:space-between; align-items:center; gap:10px; font-size:12px; margin-bottom:8px; color:var(--text2); }
 .ec-f input[type=number] { width:70px; background:var(--bg2); border:1px solid var(--border2); color:var(--text); padding:5px 8px; border-radius:6px; font:12px var(--mono); text-align:right; }
@@ -1264,6 +1274,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
             <button class="ec-subtab" data-t="conc" onclick="ecSetTab('conc')">Conciliação</button>
           </div>
           <button class="ec-iconbtn" id="ec-bell" onclick="ecToggleNotif()" title="Notificações">🔔</button>
+          <button class="btn-sm" onclick="ecComo()" title="Universos, numeradores e denominadores de cada indicador">ⓘ Como é calculado</button>
           <button class="ec-iconbtn" onclick="ecOpenCfg()" title="Configurações">⚙</button>
           <button class="btn-sm btn-primary" onclick="ecLoad(true)">↻ Atualizar</button>
           <div class="ec-notif" id="ec-notif"></div>
@@ -1274,6 +1285,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
       <div id="ec-itens" style="display:none"></div>
       <div id="ec-conc" style="display:none"></div>
       <div class="ec-modal" id="ec-cfg" onclick="if(event.target===this)ecCloseCfg()"></div>
+      <div class="ec-modal ec-side" id="ec-memo" onclick="if(event.target===this)ecMemoClose()"></div>
       <div id="ec-tip"></div>
     </div>
 
@@ -3437,6 +3449,197 @@ function ecAggregate(rows) {
   return a;
 }
 
+// ════════════════════════════════════════════════════════════════
+// CONFIABILIDADE DOS DADOS · MEMÓRIA DE CÁLCULO · COMO É CALCULADO
+// Só leitura: nada aqui altera EC.rows nem o resultado de ecCompute.
+// ════════════════════════════════════════════════════════════════
+const EC_CONF_CUSTO_DIAS = 180, EC_CONF_HIST_DIAS = 30;
+// dias com venda (direta ou via kit) por SKU nos últimos 90 dias
+function ecDiasVenda() {
+  if (EC._dv && EC._dv.rows === EC.rows) return EC._dv.map;
+  const map = {}; const days = EC.hist?.days || {};
+  const kits = {}; const idToSku = {}; (EC.bling?.produtos || []).forEach(p => { if (p.codigo) idToSku[p.id] = normSku(p.codigo); });
+  (EC.bling?.produtos || []).forEach(p => { if (p.formato === 'E' && p.comp && p.comp.t !== 'F' && p.comp.c) kits[normSku(p.codigo)] = p.comp.c.map(([id]) => idToSku[id]).filter(Boolean); });
+  for (let i = 0; i < 90; i++) { const d = days[ecDay(i)]; if (!d) continue; const seen = new Set();
+    Object.entries(d).forEach(([k, v]) => { if (!(v[0] > 0)) return; seen.add(k); (kits[k] || []).forEach(c => seen.add(c)); });
+    seen.forEach(k => { map[k] = (map[k] || 0) + 1; }); }
+  EC._dv = { rows: EC.rows, map }; return map;
+}
+function ecConf(r) {
+  if (EC._conf && EC._conf.rows === EC.rows) { const c = EC._conf.map[r.sku]; if (c) return c; } else EC._conf = { rows: EC.rows, map: {} };
+  const cfg = ecCfg(); const m = []; const add = (peso, txt) => m.push({ peso, txt });
+  if (!r.isKit && r.concFull && r.concFull.st !== 'OK') add(2, `Estoque Full diverge: Bling ${ecInt(r.concFull.bling)} × ML ${ecInt(r.concFull.ml)}`);
+  if (r.isKit) {
+    const ids = new Set((EC.bling?.produtos || []).map(p => p.id));
+    if (!r.comp || !r.comp.c || !r.comp.c.length) add(3, 'Kit sem composição cadastrada no Bling');
+    else if (r.comp.c.some(([id]) => !ids.has(id))) add(3, 'Kit com componente que não está no cadastro lido do Bling');
+  } else {
+    if (!(r.custo > 0)) add(3, 'Sem custo no Bling e sem compra registrada');
+    else {
+      if (r.custoFonte !== 'Bling') add(1, 'Custo do cadastro zerado: usando o da última compra');
+      const ud = r.compra && r.compra.ultData; const dias = ud ? ecDaysBetween(String(ud).slice(0, 10), ecDay()) : null;
+      if (dias != null && dias > EC_CONF_CUSTO_DIAS) add(1, `Custo possivelmente desatualizado: última compra há ${dias} dias`);
+      else if (dias == null) add(1, 'Sem compra registrada para conferir o custo');
+    }
+    if (!(r.precoCompra > 0)) add(1, 'Sem preço de compra do fornecedor');
+    if (!r.fornecedor) add(1, 'Sem fornecedor no cadastro');
+    if (!cfg.ltSku[r.sku]) add(1, `Lead time padrão (${cfg.leadTime}d), não informado para este SKU`);
+    if (r.transito > 0 && !(r.compra && r.compra.prevChegada)) add(2, 'Compra em trânsito sem previsão de chegada');
+  }
+  if (r.preco > 0 && r.freteFonte !== 'pedidos') add(1, r.freteFonte === '—' ? 'Frete sem fonte (considerado zero na margem)' : `Frete estimado (${r.freteFonte}), não o real dos pedidos`);
+  if (r.impFonte !== 'Bling' && !r.isKit) add(1, 'Imposto pelo % padrão, sem % Tributos no cadastro');
+  if (r.rate > 0.001) { const dv = ecDiasVenda()[r.sku] || 0; if (dv < EC_CONF_HIST_DIAS) add(dv < 5 ? 2 : 1, `Previsão apoiada em poucas vendas: ${dv} dia${dv === 1 ? '' : 's'} com venda em 90`); }
+  const pts = m.reduce((s, x) => s + x.peso, 0); const grave = m.some(x => x.peso >= 3);
+  const nivel = grave || pts >= 5 ? 'baixa' : pts >= 3 ? 'média' : 'alta';
+  const c = { nivel, tone: nivel === 'baixa' ? 'crit' : nivel === 'média' ? 'mon' : 'ok', pts, motivos: m.sort((a, b) => b.peso - a.peso) };
+  EC._conf.map[r.sku] = c; return c;
+}
+function ecConfAgg() {
+  const rel = EC.rows.filter(r => r.relevante); const o = { n: rel.length, alta: 0, 'média': 0, baixa: 0, vAlta: 0, vTot: 0, sug: 0, sugBaixa: 0, top: {} };
+  rel.forEach(r => { const c = ecConf(r); o[c.nivel]++; if (!r.isKit) { o.vTot += r.valorCusto; if (c.nivel === 'alta') o.vAlta += r.valorCusto; }
+    if (r.sugCompra > 0 && !r.bloqueado) { o.sug++; if (c.nivel === 'baixa') o.sugBaixa++; }
+    c.motivos.forEach(m => { const k = m.txt.replace(/[:(].*$/, '').replace(/\d+/g, '').trim(); o.top[k] = (o.top[k] || 0) + 1; }); });
+  return o;
+}
+function ecConfCard() {
+  const o = ecConfAgg(); if (!o.n) return '';
+  const top = Object.entries(o.top).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  const pA = o.alta / o.n; const tone = pA >= 0.7 ? 'ok' : pA >= 0.4 ? 'mon' : 'aten';
+  return `<div class="card ec-sec"><div class="card-head"><span class="card-title">🔎 Confiabilidade dos dados</span><span class="ec-muted">${ecInt(o.n)} SKUs relevantes (com estoque, venda em 90d ou trânsito) · sugestões de baixa confiança continuam visíveis, só sinalizadas</span></div>
+    <div class="ec-buy-row">
+      <button class="ec-counter" onclick="ecOpenFilter('relevantes');EC.view.sort={k:'conf',d:1};ecRenderItens()"><div class="ec-c-label"><span class="ec-dot" style="background:${EC_STATUS[tone]}"></span>Confiança alta</div><div class="ec-c-val">${ecPct(pA)}</div><div class="ec-c-sub">${ecInt(o.alta)} de ${ecInt(o.n)} SKUs · ${o.vTot > 0 ? ecPct(o.vAlta / o.vTot) : '—'} do estoque a custo</div></button>
+      ${ecCounter('Confiança média', o['média'], 'mon', 'confmedia')}
+      ${ecCounter('Confiança baixa', o.baixa, 'crit', 'confbaixa', o.sug ? `${ecInt(o.sugBaixa)} de ${ecInt(o.sug)} sugestões de compra` : 'SKUs')}
+      <div class="ec-counter ec-counter-total" style="cursor:default"><div class="ec-c-label">Ressalvas mais comuns</div><div class="ec-c-sub" style="line-height:1.7">${top.map(([k, n]) => `${ecEsc(k)} — <b>${ecInt(n)}</b>`).join('<br>') || 'nenhuma'}</div></div>
+    </div></div>`;
+}
+function ecBloqMotivo(r) {
+  if (!r.bloqueado) return '';
+  if (!r.ativo && r.total > 0) return 'inativo com estoque';
+  if (r.total > 0 && r.diasSemVenda > 180) return 'sem venda há mais de 180 dias';
+  if (r.total > 0 && r.diasSemVenda > 90) return 'sem venda há mais de 90 dias';
+  return 'excesso acima de 2× a faixa saudável';
+}
+function ecBloqResumo() {
+  const g = {}; EC.rows.filter(r => r.bloqueado).forEach(r => { const k = ecBloqMotivo(r); g[k] = (g[k] || 0) + 1; });
+  const ab = { 'inativo com estoque': 'inativos', 'sem venda há mais de 180 dias': 'sem venda +180d', 'sem venda há mais de 90 dias': 'sem venda +90d', 'excesso acima de 2× a faixa saudável': 'excesso' };
+  return Object.entries(g).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${ab[k]}`).join(' · ') || 'SKUs';
+}
+
+// ───────── Memória de cálculo por SKU ─────────
+function ecMemoClose() { const m = document.getElementById('ec-memo'); if (m) m.style.display = 'none'; }
+function ecMemo(sku) {
+  const r = EC.rows.find(x => x.sku === sku); const el = document.getElementById('ec-memo'); if (!r || !el) return;
+  const cfg = ecCfg(); const c = ecConf(r); const p = (EC.bling?.produtos || []).find(x => x.id === r.id) || {};
+  const n1 = v => (v == null || !isFinite(v)) ? '—' : v.toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+  const n2 = v => (v == null || !isFinite(v)) ? '—' : v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+  const row = (l, v) => `<div class="ec-memo-row"><span>${l}</span><span>${v}</span></div>`;
+  const na = t => `<span class="ec-muted">${t || 'não disponível'}</span>`;
+  const sec = (t, h) => `<div class="ec-memo-sec"><h4>${t}</h4>${h}</div>`;
+  const dem = r.rate > 0.001;
+  // demanda
+  const a7 = r.v7 / 7, a30 = r.v30 / 30, a60 = r.v60 / 60, a90 = r.v90 / 90;
+  const tf = r.vol >= 6 ? ecClamp(1 + 0.5 * ecClamp(r.tendPct, -0.5, 0.6), 0.75, 1.3) : 1;
+  const base = tf ? r.rate / tf : r.rate; const bruta = 0.15 * Math.min(a7, 2 * a30 + 0.1) + 0.35 * a30 + 0.30 * a60 + 0.20 * a90;
+  const cortou = bruta > base * 1.02;
+  const dv = ecDiasVenda()[r.sku] || 0;
+  const demanda = row('Vendas 7 / 30 / 60 / 90 dias', `${ecInt(r.v7)} / ${ecInt(r.v30)} / ${ecInt(r.v60)} / ${ecInt(r.v90)} un`)
+    + (r.vKit90 ? row('das quais via kits (90d)', ecInt(r.vKit90) + ' un') : '')
+    + row('Médias diárias 7 / 30 / 60 / 90', `${n2(a7)} / ${n2(a30)} / ${n2(a60)} / ${n2(a90)}`)
+    + row('Dias com venda em 90', dv)
+    + row('Tratamento de picos', cortou ? `aplicado (média bruta ${n2(bruta)} → ${n2(base)})` : 'sem efeito neste SKU')
+    + row('Tendência (30d × 30d anteriores)', r.vol >= 4 ? `${ecSigned(r.tendPct)} · ${ecEsc(r.tend)}` : na('sem volume'))
+    + row('Fator de tendência', r.vol >= 6 ? n2(tf) : '1 ' + na('(menos de 6 un em 60d)'))
+    + `<div class="ec-memo-f">demanda = (15% × 7d + 35% × 30d + 30% × 60d + 20% × 90d, sem picos) × fator<br>= ${n2(base)} × ${n2(tf)} = <b>${n2(r.rate)} un/dia</b> (${n1(r.rate * 30)} un/mês)</div>`;
+  // estoque
+  const reserv = p.fisico != null && p.virtual != null ? Math.max(0, p.fisico - p.virtual) : null;
+  const estoque = row('Matriz', ecInt(r.matriz) + ' un') + row('Full (Bling)', r.temFull || r.full ? ecInt(r.full) + ' un' : '—')
+    + (r.concFull && r.concFull.st !== 'OK' ? row('Full no Mercado Livre', `<span class="c-orange">${ecInt(r.concFull.ml)} un (${ecEsc(r.concFull.st)})</span>`) : '')
+    + row('Total considerado', `<b>${ecInt(r.total)} un</b>`)
+    + row('Reservado (físico − disponível no Bling)', reserv == null ? na() : ecInt(reserv) + ' un')
+    + row('Em trânsito', r.transito ? `${ecInt(r.transito)} un · ${r.compra && r.compra.prevChegada ? 'previsão ' + ecFmtDate(r.compra.prevChegada) : '<span class="c-orange">sem previsão</span>'}` : '0')
+    + (r.transito ? row('Trânsito que chega dentro do lead time', ecInt(r.transitoNoLT) + ' un') : '')
+    + (r.isKit ? `<div class="ec-memo-f">Kit virtual: o estoque vem dos componentes e a compra é decidida neles.</div>` : '');
+  // reposição
+  const alvoDias = cfg.alvo[r.curva]; const alvoUn = r.rate * alvoDias; const brutoSug = r.consumoLT + r.ss + alvoUn - r.total - r.transito;
+  const rupt = dem && isFinite(r.cob) ? ecAddDays(ecDay(), Math.floor(r.cob)) : null;
+  const repos = row('Lead time usado', `${r.lt} dias · ${cfg.ltSku[r.sku] ? 'manual para este SKU' : 'padrão do módulo'}`)
+    + row('Consumo no lead time', dem ? `${n2(r.rate)} × ${r.lt} = ${n1(r.consumoLT)} un` : '—')
+    + row('Estoque de segurança', dem ? `${ecInt(r.ss)} un` : '—')
+    + (dem ? `<div class="ec-memo-f">segurança = z (curva ${r.curva}: ${cfg.z[r.curva]}) × desvio-padrão diário (${n2(r.sd)}) × √lead time (${r.lt})<br>= ${n2(cfg.z[r.curva] * r.sd * Math.sqrt(r.lt))} → arredonda para cima = <b>${ecInt(r.ss)} un</b></div>` : '')
+    + row('Cobertura atual', dem ? `${ecDays(r.cob)} (Matriz ${ecDays(r.cobMatriz)} · Full ${r.temFull ? ecDays(r.cobFull) : '—'})` : na('sem demanda'))
+    + row('Cobertura alvo após a compra', `${alvoDias} dias (curva ${r.curva})`)
+    + row('Projetado na chegada da reposição', dem ? `${n1(r.projetado)} un` : '—')
+    + row('Ruptura estimada', r.ruptura ? '<span class="c-red">já em ruptura</span>' : rupt ? ecFmtDate(rupt) + (r.rupturaAntes ? ' <span class="c-red">(antes da reposição)</span>' : '') : na('sem demanda'))
+    + row('Data limite para comprar', r.comprarAte && r.sugCompra > 0 ? (r.diasAteComprar <= 0 ? '<span class="c-red">hoje</span>' : ecFmtDate(r.comprarAte)) : '—');
+  const compra = r.isKit ? `<div class="ec-memo-f">Kit virtual: compra sugerida sempre zero. Veja os componentes.</div>`
+    : !dem ? `<div class="ec-memo-f">Sem demanda prevista: compra sugerida = 0.</div>`
+    : `<div class="ec-memo-f">compra = consumo no lead time + segurança + alvo − estoque − trânsito<br>= ${n1(r.consumoLT)} + ${ecInt(r.ss)} + ${n1(alvoUn)} (${n2(r.rate)} × ${alvoDias}d) − ${ecInt(r.total)} − ${ecInt(r.transito)}<br>= ${n1(brutoSug)} → ${brutoSug <= 0 ? 'não precisa comprar' : 'arredonda para cima'} = <b>${ecInt(r.sugCompra)} un</b></div>`
+      + row('Pedido mínimo, MOQ e múltiplo de embalagem', na('não informado — nenhum ajuste aplicado'))
+      + (r.sugCompra > 0 ? row('Valor a custo', ecMoney2(r.sugCompra * r.custo)) + row('Valor a preço de compra', r.precoCompra ? ecMoney2(r.sugCompra * r.precoCompra) : na('sem preço de compra')) : '')
+      + (r.compra && r.compra.ultQtd ? row('Última compra', `${ecInt(r.compra.ultQtd)} un${r.compra.ultData ? ' em ' + ecFmtDate(String(r.compra.ultData).slice(0, 10)) : ''}`) : row('Última compra', na('sem registro')));
+  // custo e margem
+  const custos = row('Custo usado', r.custo > 0 ? `${ecMoney2(r.custo)} · ${r.custoFonte === 'Bling' ? 'custo do cadastro Bling' : 'custo da última compra'}` : '<span class="c-orange">sem custo</span>')
+    + row('Último custo de compra', r.compra && r.compra.ultCusto > 0 ? ecMoney2(r.compra.ultCusto) : na('sem registro'))
+    + row('Preço de compra (fornecedor)', r.precoCompra > 0 ? `${ecMoney2(r.precoCompra)} · ${r.precoCompraFonte === 'cadastro' ? 'cadastro do fornecedor' : 'último pedido'}` : na('não informado'))
+    + row('Custo de reposição', na('sem regra definida'))
+    + row('Fornecedor', r.fornecedor ? ecEsc(r.fornecedor) + (r.fornDiverge ? ' <span class="c-orange">(≠ último pedido)</span>' : '') : na('não informado'));
+  const margem = r.margemUn == null ? `<div class="ec-memo-f">Margem não calculada: ${r.preco > 0 ? 'falta o custo' : 'falta preço de venda'}.</div>`
+    : row('Preço de referência', `${ecMoney2(r.preco)} · ${r.v90 - r.vKit90 > 0 ? 'média real de 90d' : 'preço do anúncio/cadastro'}`)
+      + row('Tarifa ML', '− ' + ecMoney2(r.tarifaUn)) + row(`Frete (${ecEsc(r.freteFonte)})`, '− ' + ecMoney2(r.freteUn))
+      + row(`Imposto (${n1(r.preco > 0 ? r.impUn / r.preco * 100 : r.impPct)}% efetivo · cadastro ${ecEsc(r.impFonte)})`, '− ' + ecMoney2(r.impUn)) + row('Custo', '− ' + ecMoney2(r.custo))
+      + `<div class="ec-memo-f">margem projetada = <b>${ecMoney2(r.margemUn)}</b> por unidade (${ecPct(r.margemPct, 1)})<br><span class="ec-muted">É projeção. A margem realizada fica na Central Comercial.</span></div>`;
+  const conf = c.motivos.length ? c.motivos.map(m => `<div class="ec-memo-row"><span>${m.peso >= 3 ? '🔴' : m.peso === 2 ? '🟠' : '🟡'} ${ecEsc(m.txt)}</span><span></span></div>`).join('') : '<div class="ec-muted" style="font-size:12px">Nenhuma ressalva nos dados deste SKU.</div>';
+  el.innerHTML = `<div class="ec-modal-box">
+    <div class="card-head" style="position:sticky;top:0;background:var(--surface);z-index:2"><span class="card-title">Memória de cálculo</span><button class="btn-sm" onclick="ecMemoClose()">✕</button></div>
+    <div class="ec-memo-sec"><div style="font-weight:600">${ecEsc(r.nome)}</div><div class="ec-muted mono" style="font-size:12px;margin:2px 0 8px">${ecEsc(r.sku)}${r.isKit ? ' · kit virtual' : r.kitFisico ? ' · kit físico' : ''}${r.ativo ? '' : ' · inativo'}</div>
+      ${ecCurva(r.curva)} ${ecPill(ecRiskIcon(r.risco) + ' ' + r.risco, ecRiskTone(r.risco))} ${ecPill(r.rec, ecRecTone(r.rec))} ${ecPill('confiança ' + c.nivel, c.tone)}${r.bloqueado ? `<div class="ec-sub" style="margin-top:6px">Compra bloqueada: ${ecEsc(ecBloqMotivo(r))}</div>` : ''}</div>
+    ${sec('Confiabilidade dos dados', conf)}${sec('Demanda', demanda)}${sec('Estoque', estoque)}${sec('Reposição', repos)}${sec('Compra sugerida', compra)}${sec('Custo e fornecedor', custos)}${sec('Margem unitária projetada', margem)}
+  </div>`;
+  el.style.display = 'flex';
+}
+
+// ───────── Como é calculado: universos e denominadores ─────────
+function ecComo() {
+  const el = document.getElementById('ec-memo'); const a = EC.agg; if (!el || !a) { showToast('Carregue o módulo primeiro', 'warn'); return; }
+  const prods = EC.bling?.produtos || []; const parents = new Set(prods.filter(p => p.pai).map(p => p.pai));
+  const nPais = prods.filter(p => parents.has(p.id) || p.formato === 'V').length; const nSemCod = prods.filter(p => !p.codigo).length;
+  const inv = EC.rows.filter(r => !r.isKit); const rel = EC.rows.filter(r => r.relevante);
+  const U = [
+    ['Produtos recebidos do Bling', prods.length, 'tudo o que o cadastro devolve'],
+    ['Pais de variação (excluídos)', nPais, 'o estoque fica nas variações'],
+    ['Sem código/SKU (excluídos)', nSemCod, 'não há como ligar à venda'],
+    ['SKUs analisáveis', EC.rows.length, 'base de todos os cálculos'],
+    ['Ativos', a.skusAtivos, 'situação ativa no Bling'],
+    ['Relevantes', rel.length, 'com estoque, venda em 90 dias ou compra em trânsito'],
+    ['Com demanda', a.nDemanda, 'demanda prevista maior que zero'],
+    ['Kits virtuais', EC.rows.filter(r => r.isKit).length, 'fora dos valores em R$ e da compra'],
+    ['Componentes de kits com consumo', EC.rows.filter(r => r.vKit90 > 0).length, 'venda do kit vira consumo do componente'],
+    ['Itens na conciliação Full', a.conc.skus, 'com saldo Full no Bling ou anúncio Full'],
+    ['Vendidos no ML sem cadastro no Bling', EC.pendencias.length, 'fora da análise (pendência)'],
+  ];
+  const I = [
+    ['Risco de perder venda', `${a.nRuptura} em ruptura + ${a.nRisco} em risco crítico/alto`, `${a.nDemanda} SKUs com demanda`, 'hoje + lead time', 'SKUs sem demanda'],
+    ['Faturamento exposto /mês', 'demanda prevista de 30 dias × preço dos SKUs em risco crítico/alto', '—', 'próximos 30 dias', 'é exposição, não venda perdida'],
+    ['Capital empatado %', `sem giro >90d (${ecMoneyK(a.capSemGiro)}) + excesso dos demais (${ecMoneyK(a.capExcesso)})`, `estoque a custo (${ecMoneyK(a.valorCusto)})`, 'posição de hoje', 'kits virtuais; SKU sem giro não soma excesso'],
+    ['Estoque a custo', 'unidades × custo usado', '—', 'posição de hoje', `kits virtuais; ${a.semCusto} SKUs sem custo ficam em zero`],
+    ['Estoque a preço de referência', 'unidades × preço médio real de 90d (ou do anúncio)', '—', 'posição de hoje', 'kits virtuais'],
+    ['Cobertura geral', `unidades em estoque (${ecInt(a.unidades)})`, 'soma da demanda diária prevista', 'posição de hoje', 'kits virtuais'],
+    ['Curva ABC', 'receita acumulada do SKU', 'receita total de 90 dias', '90 dias', 'sem receita = curva C'],
+    ['Valor sugerido de compra', 'compra sugerida × custo (e × preço de compra)', '—', 'lead time + cobertura alvo', 'bloqueados e kits virtuais'],
+    ['% ruptura e % risco (saúde)', 'SKUs em ruptura / em risco', `${a.nDemanda} SKUs com demanda`, 'hoje', 'SKUs sem demanda'],
+    ['Confiança alta %', 'SKUs sem ressalva grave e com menos de 3 pontos de ressalva', `${rel.length} SKUs relevantes`, 'hoje', 'SKUs não relevantes'],
+  ];
+  el.innerHTML = `<div class="ec-modal-box" style="width:min(760px,100%)">
+    <div class="card-head" style="position:sticky;top:0;background:var(--surface);z-index:2"><span class="card-title">Como é calculado</span><button class="btn-sm" onclick="ecMemoClose()">✕</button></div>
+    <div class="ec-memo-sec"><h4>Universos</h4><table class="t ec-t"><tbody>${U.map(([l, n, d]) => `<tr><td>${l}</td><td class="r mono"><b>${ecInt(n)}</b></td><td class="ec-muted" style="font-size:11px">${d}</td></tr>`).join('')}</tbody></table></div>
+    <div class="ec-memo-sec"><h4>Indicadores</h4><div class="ec-table-wrap"><table class="t ec-t" style="min-width:680px"><thead><tr><th>Indicador</th><th>Numerador</th><th>Denominador</th><th>Período</th><th>Exclusões</th></tr></thead><tbody>${I.map(x => `<tr>${x.map((c, i) => `<td style="white-space:normal;font-size:12px${i ? ';color:var(--text2)' : ''}">${ecEsc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>
+    <div class="ec-memo-sec"><h4>Confiabilidade</h4><div style="font-size:12px;line-height:1.7;color:var(--text2)">Cada ressalva soma pontos: grave 3 (sem custo, kit sem composição), média 2 (divergência Full, trânsito sem previsão, menos de 5 dias com venda), leve 1 (custo com última compra há mais de ${EC_CONF_CUSTO_DIAS} dias, sem preço de compra, sem fornecedor, lead time padrão, frete estimado, imposto padrão, menos de ${EC_CONF_HIST_DIAS} dias com venda em 90).<br><b>Baixa</b>: alguma ressalva grave ou 5+ pontos · <b>Média</b>: 3 ou 4 pontos · <b>Alta</b>: até 2 pontos. Nenhuma sugestão é ocultada ou bloqueada por confiança.</div></div>
+    <div class="ec-memo-sec"><div class="ec-muted" style="font-size:12px">Clique em qualquer SKU para ver a memória de cálculo com os valores dele.</div></div>
+  </div>`;
+  el.style.display = 'flex';
+}
+
 // ───────── filtros rápidos (usados nos alertas, KPIs e na tabela) ─────────
 const EC_FILTERS = {
   relevantes: { label: 'Todos', fn: r => r.relevante },
@@ -3472,6 +3675,8 @@ const EC_FILTERS = {
   aumentar: { label: 'Aumentar próxima compra', fn: r => r.ajustePct != null && r.ajustePct >= 0.2, hidden: true },
   reduzir: { label: 'Reduzir próxima compra', fn: r => r.rec === EC_REC.REDUZIR || (r.ajustePct != null && r.ajustePct <= -0.2), hidden: true },
   margembaixa: { label: 'Alto giro + margem baixa', fn: r => r.giro === 'ALTO' && r.margemPct != null && r.margemPct < 0.15, hidden: true },
+  confbaixa: { label: 'Confiança baixa', fn: r => r.relevante && ecConf(r).nivel === 'baixa' },
+  confmedia: { label: 'Confiança média', fn: r => r.relevante && ecConf(r).nivel === 'média', hidden: true },
   margemboa: { label: 'Alto giro + boa margem', fn: r => r.giro === 'ALTO' && r.margemPct != null && r.margemPct >= 0.25, hidden: true },
 };
 ['A', 'B', 'C'].forEach(c => ['ALTO', 'BAIXO'].forEach(g => {
@@ -3575,14 +3780,16 @@ function ecRenderDash() {
     <div class="card ec-hero" style="--tone:var(--red)" onclick="ecOpenFilter('risco')">
       <div class="ec-hero-label">Risco de perder venda</div>
       <div class="ec-hero-val">${ecInt(a.nRuptura + a.nRisco)} <span>SKUs</span></div>
-      <div class="ec-hero-sub">${ecInt(a.nRuptura)} em ruptura · ${ecInt(a.nRisco)} vão romper antes da reposição · <b>${ecMoneyK(a.receitaRisco30)}/mês</b> de faturamento exposto</div>
+      <div class="ec-hero-sub">${ecInt(a.nRuptura)} em ruptura · ${ecInt(a.nRisco)} vão romper antes da reposição · <b>${ecMoneyK(a.receitaRisco30)}/mês</b> de faturamento exposto <span title="Demanda prevista de 30 dias × preço dos SKUs em risco crítico ou alto. É exposição, não venda perdida.">ⓘ</span></div>
     </div>
     <div class="card ec-hero" style="--tone:var(--ml-yellow)" onclick="ecOpenFilter('empatado')">
       <div class="ec-hero-label">Capital empatado</div>
       <div class="ec-hero-val">${ecMoneyK(a.capEmpatado)} <span>${ecPct(a.pctEmpatado)} do estoque</span></div>
-      <div class="ec-hero-sub">${ecMoneyK(a.capSemGiro)} sem giro &gt;90d · ${ecMoneyK(a.capExcesso)} em excesso · ${ecInt(a.nEmpatado)} SKUs</div>
+      <div class="ec-hero-sub">${ecMoneyK(a.capSemGiro)} sem giro &gt;90d · ${ecMoneyK(a.capExcesso)} em excesso · ${ecInt(a.nEmpatado)} SKUs · sem dupla contagem</div>
     </div>
   </div>
+
+  ${ecConfCard()}
 
   <!-- POSIÇÃO DO ESTOQUE -->
   <div class="card ec-sec">
@@ -3593,7 +3800,7 @@ function ecRenderDash() {
       <div class="ec-stat ec-click" onclick="ecOpenFilter('semestoque')"><div class="ec-stat-l">Ativos sem estoque</div><div class="ec-stat-v">${ecInt(a.skusAtivosSemEstoque)}</div><div class="ec-stat-s">sem kits virtuais</div></div>
       ${ecStat('Unidades', ecInt(a.unidades), 'Matriz + Full')}
       ${ecStat('Estoque a custo', ecMoneyK(a.valorCusto), 'Matriz + Full')}
-      ${ecStat('Potencial de venda', ecMoneyK(a.valorVenda), 'Matriz + Full')}
+      ${ecStat('Estoque a preço de referência', ecMoneyK(a.valorVenda), 'estoque × preço médio real de 90d (ou do anúncio)')}
     </div>
     <div style="padding:0 18px 16px"><table class="t ec-t"><thead><tr><th>Local</th><th>Fonte</th><th class="r">SKUs com saldo</th><th class="r">Unidades</th><th class="r">Valor a custo</th><th class="r">Valor de venda</th><th>No total?</th></tr></thead><tbody>
       ${a.depTable.filter(d => d.entra).sort((x, y) => x.ordem - y.ordem).map(d => ecDepRow(d, d.ordem === 1 ? 'fullbaixo' : 'comestoque')).join('')}
@@ -3611,7 +3818,7 @@ function ecRenderDash() {
       ${ecCounter('Comprar agora', a.nComprar, 'crit', 'comprar', ecMoneyK(a.valorComprarAgora))}
       ${ecCounter('Programar compra', a.nProgramar, 'aten', 'programar')}
       ${ecCounter('Não precisa comprar', a.nNaoPrecisa, 'ok', 'naoprecisa')}
-      ${ecCounter('Compra bloqueada', a.nBloqueado, 'mon', 'bloqueado', 'sem giro / descontinuar')}
+      ${ecCounter('Compra bloqueada', a.nBloqueado, 'mon', 'bloqueado', ecBloqResumo())}
       <div class="ec-counter ec-counter-total"><div class="ec-c-label">Valor sugerido — próximas compras</div><div class="ec-c-val">${ecMoneyK(a.valorSugerido)}</div><div class="ec-c-sub">a custo · ${ecMoneyK(a.valorSugeridoCompra)} a preço de compra (fornecedor)</div></div>
     </div>
     <div class="ec-buy-grid">
@@ -3717,7 +3924,7 @@ function ecMeter(label, pct, tone, f, detail) {
 }
 const ecCurva = c => `<span class="ec-abc ec-abc-${c}">${c}</span>`;
 function ecProd(r) {
-  return `<div class="ec-prod" title="${ecEsc(r.nome)}"><div class="ec-prod-n">${ecEsc(r.nome)}</div><div class="ec-prod-s mono">${ecEsc(r.sku)}${r.isKit ? ' · kit' : ''}${!r.ativo ? ' · inativo' : ''}</div></div>`;
+  return `<div class="ec-prod" title="${ecEsc(r.nome)}"><div class="ec-prod-n">${ecEsc(r.nome)}</div><div class="ec-prod-s mono"><button class="ec-link" onclick="event.stopPropagation();ecMemo('${ecEsc(r.sku)}')" title="Ver memória de cálculo">${ecEsc(r.sku)}</button>${r.isKit ? ' · kit' : ''}${!r.ativo ? ' · inativo' : ''}</div></div>`;
 }
 const ecProdShort = r => `<span class="ec-prod-inline" title="${ecEsc(r.nome)}"><b class="mono">${ecEsc(r.sku)}</b> ${ecEsc(r.nome)}</span>`;
 
@@ -3820,16 +4027,16 @@ function ecMatrix(a) {
 
 // ───────── Itens em linha ─────────
 const EC_COLS = [
-  ['sku', 'SKU', r => `<span class="mono">${ecEsc(r.sku)}</span>`, 's'],
+  ['sku', 'SKU', r => `<button class="ec-link mono" onclick="ecMemo('${ecEsc(r.sku)}')" title="Ver memória de cálculo">${ecEsc(r.sku)}</button>`, 's'],
   ['nome', 'Descrição', r => `<span class="ec-desc" title="${ecEsc(r.nome)}">${ecEsc(r.nome)}</span>${r.isKit ? ' <span class="ec-tag">kit</span>' : r.kitFisico ? ' <span class="ec-tag">kit físico</span>' : ''}`, 's'],
   ['fornecedor', 'Fornecedor / Ref.', r => r.fornecedor || r.refForn ? `<span class="ec-desc" style="max-width:200px" title="${ecEsc(r.fornecedor)}${r.fornQtd > 1 ? ' (padrão de ' + r.fornQtd + ' fornecedores)' : ''}">${ecEsc(r.fornecedor || '—')}</span>${r.fornDiverge ? ` <span class="c-orange" title="Último pedido foi de ${ecEsc(r.fornUltPedido)} — diferente do fornecedor padrão do cadastro">⚠</span>` : ''}<div class="ec-sub">${r.refForn ? 'ref. ' + ecEsc(r.refForn) : ''}${r.fornFonte === 'pedido' ? (r.refForn ? ' · ' : '') + 'últ. pedido' : ''}</div>` : '<span class="ec-muted">—</span>', 's'],
   ['ativo', 'Status', r => r.ativo ? 'Ativo' : '<span class="c-orange">Inativo</span>', 's'],
   ['curva', 'Curva', r => ecCurva(r.curva), 's'],
   ['matriz', 'Matriz', r => ecInt(r.matriz)], ['full', 'Full', r => r.temFull || r.full ? ecInt(r.full) : '—'], ['total', 'Total', r => `<b>${ecInt(r.total)}</b>`],
   ['transito', 'Trânsito', r => r.transito ? ecInt(r.transito) + (r.compra?.prevChegada ? `<div class="ec-sub">${ecFmtDate(r.compra.prevChegada)}</div>` : '') : '—'],
-  ['custo', 'Custo un.', r => r.custo ? ecMoney2(r.custo) : '—'],
+  ['custo', 'Custo un.', r => r.custo ? `${ecMoney2(r.custo)}<div class="ec-sub">${r.custoFonte === 'Bling' ? 'cadastro Bling' : 'última compra'}</div>` : '<span class="c-orange">sem custo</span>'],
   ['precoCompra', 'Preço compra', r => r.precoCompra ? `${ecMoney2(r.precoCompra)}<div class="ec-sub">${r.custo ? 'custo ' + (r.custo / r.precoCompra).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '×' : ''}${r.precoCompraFonte === 'pedido' ? (r.custo ? ' · ' : '') + 'últ. pedido' : ''}</div>` : '—'], ['valorCusto', 'Estoque a custo', r => r.isKit ? '—' : ecMoney(r.valorCusto)],
-  ['preco', 'Preço venda', r => r.preco ? ecMoney2(r.preco) : '—'], ['valorVenda', 'Potencial venda', r => r.isKit ? '—' : ecMoney(r.valorVenda)],
+  ['preco', 'Preço venda', r => r.preco ? ecMoney2(r.preco) : '—'], ['valorVenda', 'Valor a preço de ref.', r => r.isKit ? '—' : ecMoney(r.valorVenda)],
   ['tarifaUn', 'Tarifa ML un.', r => r.preco ? ecMoney2(r.tarifaUn) : '—'], ['freteUn', 'Frete un.', r => r.preco ? `${ecMoney2(r.freteUn)}<div class="ec-sub">${ecEsc(r.freteFonte)}</div>` : '—'], ['impPct', 'Imposto', r => `${(r.impPct || 0).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%<div class="ec-sub">${r.impFonte}</div>`],
   ['margemUn', 'Margem R$', r => r.margemUn != null ? ecMoney2(r.margemUn) : '—'], ['margemPct', 'Margem %', r => r.margemPct != null ? ecPct(r.margemPct, 1) : '—'],
   ['v7', 'Venda 7D', r => ecInt(r.v7)], ['v30', 'Venda 30D', r => ecInt(r.v30) + (r.vKit30 ? `<div class="ec-sub">${ecInt(r.vKit30)} via kits</div>` : '')], ['v60', 'Venda 60D', r => ecInt(r.v60)], ['v90', 'Venda 90D', r => ecInt(r.v90)],
@@ -3844,7 +4051,8 @@ const EC_COLS = [
   ['excessoUn', 'Excesso', r => r.excessoUn ? `${ecInt(r.excessoUn)} un<div class="ec-sub">${ecMoneyK(r.excessoR)}</div>` : '—'],
   ['sugCompra', 'Compra sugerida', r => r.sugCompra ? `<b>${ecInt(r.sugCompra)}</b>${r.comprarAte ? `<div class="ec-sub">até ${r.diasAteComprar <= 0 ? 'hoje' : ecFmtDate(r.comprarAte)}</div>` : ''}` : '—'],
   ['envioFull', 'Envio Full', r => r.envioFull ? `<b>${ecInt(r.envioFull)}</b><div class="ec-sub">→ ${ecDays(r.cobFullApos)}</div>` : (r.fullStatus === 'EXCESSIVO' ? '<span class="ec-sub">excesso</span>' : '—')],
-  ['rec', 'Recomendação', r => ecPill(r.rec, ecRecTone(r.rec)) + (r.ajustePct != null && Math.abs(r.ajustePct) >= 0.2 ? `<div class="ec-sub">${ecSigned(r.ajustePct)} vs última compra</div>` : ''), 's'],
+  ['rec', 'Recomendação', r => ecPill(r.rec, ecRecTone(r.rec)) + (r.ajustePct != null && Math.abs(r.ajustePct) >= 0.2 ? `<div class="ec-sub">${ecSigned(r.ajustePct)} vs última compra</div>` : '') + (r.bloqueado ? `<div class="ec-sub">${ecEsc(ecBloqMotivo(r))}</div>` : ''), 's'],
+  ['conf', 'Confiança do dado', r => { const c = ecConf(r); return `<button class="ec-link" onclick="ecMemo('${ecEsc(r.sku)}')" title="${ecEsc(c.motivos.map(m => m.txt).join(' · ') || 'sem ressalvas')}">${ecPill(c.nivel, c.tone)}</button>${c.motivos.length ? `<div class="ec-sub">${c.motivos.length} ressalva${c.motivos.length > 1 ? 's' : ''}</div>` : ''}`; }, 's'],
 ];
 function ecFilteredRows() {
   const f = EC_FILTERS[EC.view.filter] || EC_FILTERS.relevantes; const q = EC.view.q.trim().toUpperCase();
@@ -3854,6 +4062,7 @@ function ecFilteredRows() {
   rs.sort((x, y) => {
     let a = x[k], b = y[k];
     if (k === 'ultimaVenda') { a = a || ''; b = b || ''; }
+    if (k === 'conf') { a = ecConf(x).pts; b = ecConf(y).pts; }
     if (typeof a === 'string' || typeof b === 'string') return String(a ?? '').localeCompare(String(b ?? '')) * d;
     a = a == null ? -Infinity : a; b = b == null ? -Infinity : b;
     return (a === b ? 0 : a > b ? 1 : -1) * d;
@@ -3901,7 +4110,8 @@ function ecExportCSV() {
     ['Cobertura dias', r => isFinite(r.cob) ? Math.round(r.cob) : ''], ['Cobertura Matriz', r => isFinite(r.cobMatriz) ? Math.round(r.cobMatriz) : ''], ['Cobertura Full', r => isFinite(r.cobFull) ? Math.round(r.cobFull) : ''],
     ['Lead time', r => r.lt], ['Estoque segurança', r => r.ss], ['Estoque projetado', r => Math.round(r.projetado)], ['Última venda', r => r.ultimaVenda || ''], ['Dias sem venda', r => r.diasSemVenda],
     ['Risco ruptura', r => r.risco], ['Excesso un', r => r.excessoUn], ['Excesso R$', r => r.excessoR.toFixed(2)], ['Compra sugerida', r => r.sugCompra], ['Valor sugerido a preço de compra', r => (r.sugCompra * r.precoCompra).toFixed(2)], ['Valor sugerido a custo', r => (r.sugCompra * r.custo).toFixed(2)], ['Comprar até', r => r.comprarAte || ''], ['Envio Full', r => r.envioFull], ['Recomendação', r => r.rec],
-    ['Última compra', r => r.compra?.ultData || ''], ['Qtd última compra', r => r.compra?.ultQtd || ''], ['Último custo', r => r.compra?.ultCusto || ''], ['Fornecedor (cadastro)', r => r.fornecedor], ['Referência fornecedor', r => r.refForn], ['Origem fornecedor', r => r.fornFonte], ['Fornecedor do último pedido', r => r.fornUltPedido]];
+    ['Última compra', r => r.compra?.ultData || ''], ['Qtd última compra', r => r.compra?.ultQtd || ''], ['Último custo', r => r.compra?.ultCusto || ''], ['Fornecedor (cadastro)', r => r.fornecedor], ['Referência fornecedor', r => r.refForn], ['Origem fornecedor', r => r.fornFonte], ['Fornecedor do último pedido', r => r.fornUltPedido],
+    ['Origem custo', r => r.custoFonte], ['Motivo do bloqueio', r => r.bloqueado ? ecBloqMotivo(r) : ''], ['Confiança do dado', r => ecConf(r).nivel], ['Ressalvas', r => ecConf(r).motivos.map(m => m.txt).join(' | ')]];
   (EC.bling?.depositos || []).forEach(d => cols.splice(7, 0, ['Dep. ' + d.nome, r => r.deps[d.id] ? r.deps[d.id][1] : 0]));
   const esc = v => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const csv = '﻿' + cols.map(c => c[0]).join(';') + '\n' + rs.map(r => cols.map(c => esc(typeof c[1](r) === 'number' ? String(c[1](r)).replace('.', ',') : c[1](r))).join(';')).join('\n');
