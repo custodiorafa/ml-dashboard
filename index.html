@@ -1271,6 +1271,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
           <div class="ec-subtabs">
             <button class="ec-subtab active" data-t="dash" onclick="ecSetTab('dash')">Dashboard</button>
             <button class="ec-subtab" data-t="itens" onclick="ecSetTab('itens')">Itens em linha</button>
+            <button class="ec-subtab" data-t="cesta" onclick="ecSetTab('cesta')">Cesta por fornecedor</button>
             <button class="ec-subtab" data-t="conc" onclick="ecSetTab('conc')">Conciliação</button>
           </div>
           <button class="ec-iconbtn" id="ec-bell" onclick="ecToggleNotif()" title="Notificações">🔔</button>
@@ -1284,6 +1285,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
       <div id="ec-dash"><div class="card"><div class="card-body" style="text-align:center;padding:40px;color:var(--text2)">Abra esta aba para carregar o módulo.</div></div></div>
       <div id="ec-itens" style="display:none"></div>
       <div id="ec-conc" style="display:none"></div>
+      <div id="ec-cesta" style="display:none"></div>
       <div class="ec-modal" id="ec-cfg" onclick="if(event.target===this)ecCloseCfg()"></div>
       <div class="ec-modal ec-side" id="ec-memo" onclick="if(event.target===this)ecMemoClose()"></div>
       <div id="ec-tip"></div>
@@ -3640,6 +3642,94 @@ function ecComo() {
   el.style.display = 'flex';
 }
 
+// ════════════════════════════════════════════════════════════════
+// CESTA DE COMPRA POR FORNECEDOR — agrupa a recomendação atual (não recalcula nada)
+// Mesmo universo do "Valor sugerido" do Dashboard: SKUs com recomendação COMPRAR AGORA ou PROGRAMAR COMPRA, sem kits virtuais.
+// Nenhuma compra é emitida: o painel recomenda, o responsável revisa e aprova.
+// ════════════════════════════════════════════════════════════════
+const EC_SEM_FORN = '(sem fornecedor no cadastro)';
+function ecCesta() {
+  const g = {};
+  EC.rows.filter(r => !r.isKit && (r.rec === EC_REC.COMPRAR || r.rec === EC_REC.PROGRAMAR)).forEach(r => {
+    const k = r.fornecedor || EC_SEM_FORN;
+    const f = g[k] || (g[k] = { nome: k, itens: [], qtd: 0, vCusto: 0, vCompra: 0, semPreco: 0, transito: 0, agora: 0, vAgora: 0, ate: null, est: 0, rate: 0, margem: 0, semMargem: 0, baixa: 0, vBaixa: 0, semPrev: 0, semCusto: 0 });
+    const c = ecConf(r);
+    f.itens.push(r); f.qtd += r.sugCompra; f.vCusto += r.sugCompra * r.custo; if (!(r.custo > 0)) f.semCusto++;
+    if (r.precoCompra > 0) f.vCompra += r.sugCompra * r.precoCompra; else f.semPreco++;
+    f.transito += r.transito; if (r.transito > 0 && !(r.compra && r.compra.prevChegada)) f.semPrev++;
+    if (r.rec === EC_REC.COMPRAR) { f.agora++; f.vAgora += r.sugCompra * r.custo; }
+    if (r.comprarAte && (!f.ate || r.comprarAte < f.ate)) f.ate = r.comprarAte;
+    f.est += r.total; f.rate += r.rate;
+    if (r.margemUn != null) f.margem += r.margemUn * r.sugCompra; else f.semMargem++;
+    if (c.nivel === 'baixa') { f.baixa++; f.vBaixa += r.sugCompra * r.custo; }
+  });
+  return Object.values(g).map(f => {
+    f.cobAntes = f.rate > 0 ? f.est / f.rate : null;
+    f.cobDepois = f.rate > 0 ? (f.est + f.transito + f.qtd) / f.rate : null;
+    // decisão: orientação, não ordem de compra
+    f.dec = f.nome === EC_SEM_FORN ? ['REVISAR', 'mon', 'sem fornecedor no cadastro do Bling']
+      : f.vCusto > 0 && f.vBaixa / f.vCusto >= 0.3 ? ['REVISAR', 'mon', `${ecPct(f.vBaixa / f.vCusto)} do valor em SKUs de confiança baixa`]
+      : f.agora ? ['COMPRAR', 'crit', `${f.agora} SKU${f.agora > 1 ? 's' : ''} em risco de ruptura`]
+      : f.transito >= f.qtd ? ['AGUARDAR', 'ok', 'o que está em trânsito cobre a quantidade sugerida']
+      : ['PROGRAMAR', 'aten', 'sem risco imediato de ruptura'];
+    f.itens.sort((x, y) => x.prio - y.prio);
+    return f;
+  }).sort((x, y) => (y.agora > 0) - (x.agora > 0) || y.vCusto - x.vCusto);
+}
+function ecRenderCesta() {
+  const el = document.getElementById('ec-cesta'); if (!el) return;
+  const V = EC.view; V.cestaQ = V.cestaQ || ''; V.cestaOpen = V.cestaOpen || {};
+  const all = ecCesta(); const q = V.cestaQ.trim().toUpperCase();
+  const fs = q ? all.filter(f => f.nome.toUpperCase().includes(q) || f.itens.some(r => r.sku.includes(q) || r.nome.toUpperCase().includes(q))) : all;
+  const T = all.reduce((t, f) => ({ sk: t.sk + f.itens.length, q: t.q + f.qtd, c: t.c + f.vCusto, p: t.p + f.vCompra, sp: t.sp + f.semPreco, ag: t.ag + f.vAgora, m: t.m + f.margem }), { sk: 0, q: 0, c: 0, p: 0, sp: 0, ag: 0, m: 0 });
+  const a = EC.agg; const ok = Math.abs(T.c - a.valorSugerido) < 1 && Math.abs(T.p - a.valorSugeridoCompra) < 1;
+  const na = '<span class="ec-muted">não informado</span>';
+  const item = r => { const c = ecConf(r); const dep = r.rate > 0 ? (r.total + r.transito + r.sugCompra) / r.rate : null;
+    return `<tr><td>${ecProd(r)}</td><td>${ecCurva(r.curva)}</td><td>${ecPill(r.rec, ecRecTone(r.rec))}</td><td class="r mono">${ecInt(r.total)}</td><td class="r mono">${r.transito ? ecInt(r.transito) : '—'}</td><td class="r mono">${ecDays(r.cob)} → ${ecDays(dep)}</td><td class="r mono"><b>${ecInt(r.sugCompra)}</b></td><td class="r mono">${r.precoCompra > 0 ? ecMoney2(r.precoCompra) : '<span class="c-orange">sem preço</span>'}</td><td class="r mono">${r.precoCompra > 0 ? ecMoney(r.sugCompra * r.precoCompra) : '—'}</td><td class="r mono">${r.custo > 0 ? ecMoney(r.sugCompra * r.custo) : '<span class="c-orange">sem custo</span>'}</td><td class="mono">${r.diasAteComprar <= 0 ? '<span class="c-red">hoje</span>' : ecFmtDate(r.comprarAte)}</td><td>${ecPill(c.nivel, c.tone)}</td></tr>`; };
+  const card = (f, i) => { const open = !!V.cestaOpen[f.nome];
+    return `<div class="card ec-sec" style="margin-bottom:10px">
+      <div class="card-head" style="cursor:pointer;gap:10px;flex-wrap:wrap" onclick="ecCestaToggle(${i})">
+        <span class="card-title" style="text-transform:none;letter-spacing:0">${open ? '▾' : '▸'} ${ecEsc(f.nome)}</span>
+        <span>${ecPill(f.dec[0], f.dec[1])} <span class="ec-muted" style="font-size:11px">${ecEsc(f.dec[2])}</span></span></div>
+      <div class="ec-strip ec-strip-sm" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
+        ${ecStat('SKUs / unidades', `${ecInt(f.itens.length)} / ${ecInt(f.qtd)}`, f.agora ? `${f.agora} para comprar agora` : 'programar')}
+        ${ecStat('Valor a preço de compra', f.vCompra > 0 ? ecMoney(f.vCompra) : '—', f.semPreco ? `<span class="c-orange">${f.semPreco} SKU${f.semPreco > 1 ? 's' : ''} sem preço — total parcial</span>` : 'preço do fornecedor')}
+        ${ecStat('Valor a custo', f.semCusto === f.itens.length ? '—' : ecMoney(f.vCusto), f.semCusto ? `<span class="c-orange">${f.semCusto} SKU${f.semCusto > 1 ? 's' : ''} sem custo — total parcial</span>` : 'capital adicional em estoque')}
+        ${ecStat('Comprar até', f.ate ? (ecDaysBetween(ecDay(), f.ate) <= 0 ? '<span class="c-red">hoje</span>' : ecFmtDate(f.ate)) : '—', 'data limite mais próxima')}
+        ${ecStat('Cobertura', f.cobAntes != null ? `${ecDays(f.cobAntes)} → ${ecDays(f.cobDepois)}` : '—', 'antes → depois da compra')}
+        ${ecStat('Em trânsito', ecInt(f.transito) + ' un', f.semPrev ? `<span class="c-orange">${f.semPrev} sem previsão de chegada</span>` : 'destes SKUs')}
+        ${ecStat('Margem projetada', ecMoney(f.margem), f.semMargem ? `${f.semMargem} SKU${f.semMargem > 1 ? 's' : ''} sem margem calculada` : 'das unidades sugeridas')}
+      </div>
+      ${open ? `<div style="padding:0 18px 6px;font-size:12px;color:var(--text2)">Pedido mínimo: ${na} · MOQ e múltiplo de embalagem: ${na} · Condição de pagamento: ${na} · Frete de entrada: ${na} <span title="Esses dados não existem no Bling nem no Mercado Livre. Entram na próxima etapa, por cadastro manual do fornecedor.">ⓘ</span></div>
+      <div class="ec-table-wrap" style="margin:0 18px 14px"><table class="t ec-t" style="min-width:1020px"><thead><tr><th>Produto</th><th>Curva</th><th>Recomendação</th><th class="r">Estoque</th><th class="r">Trânsito</th><th class="r">Cobertura</th><th class="r">Qtd sugerida</th><th class="r">Preço compra</th><th class="r">Valor compra</th><th class="r">Valor a custo</th><th>Comprar até</th><th>Confiança</th></tr></thead><tbody>${f.itens.map(item).join('')}</tbody></table></div>` : ''}
+    </div>`; };
+  EC._cesta = fs;
+  el.innerHTML = `<div class="card ec-sec"><div class="card-head"><span class="card-title">🧺 Cesta de compra por fornecedor</span><span class="ec-muted">mesma recomendação da lista por SKU, agrupada · nenhuma compra é emitida pelo painel</span></div>
+      <div class="ec-strip">
+        ${ecStat('Fornecedores', ecInt(all.length), `${ecInt(all.filter(f => f.dec[0] === 'COMPRAR').length)} com compra imediata`)}
+        ${ecStat('SKUs / unidades', `${ecInt(T.sk)} / ${ecInt(T.q)}`, 'comprar agora + programar')}
+        ${ecStat('Total a preço de compra', ecMoneyK(T.p), T.sp ? `<span class="c-orange">${T.sp} SKUs sem preço de compra</span>` : 'preço do fornecedor')}
+        ${ecStat('Total a custo', ecMoneyK(T.c), `${ecMoneyK(T.ag)} para comprar agora`)}
+        ${ecStat('Margem projetada', ecMoneyK(T.m), 'das unidades sugeridas · projeção')}
+        ${ecStat('Conferência', ok ? '<span class="c-green">✓ confere</span>' : '<span class="c-red">diverge</span>', `com o valor sugerido do Dashboard (${ecMoneyK(a.valorSugerido)})`)}
+      </div>
+      <div class="ec-toolbar"><div class="ec-muted" style="font-size:12px">Decisão é orientação: <b>comprar</b> (há SKU em risco), <b>programar</b>, <b>aguardar</b> (trânsito cobre) ou <b>revisar</b> (dados fracos ou sem fornecedor). Clique no fornecedor para ver os SKUs.</div>
+        <div class="ec-tools"><input id="ec-cesta-q" type="text" placeholder="Buscar fornecedor, SKU ou produto…" value="${ecEsc(V.cestaQ)}" onchange="EC.view.cestaQ=this.value;ecRenderCesta()"><button class="btn-sm" onclick="ecCestaAll(true)">Abrir todos</button><button class="btn-sm" onclick="ecCestaAll(false)">Fechar</button><button class="btn-sm" onclick="ecExportCesta()">⬇ Excel</button></div></div>
+    </div>
+    ${fs.length ? fs.map(card).join('') : '<div class="card"><div class="card-body ec-muted" style="text-align:center;padding:30px">Nenhuma compra sugerida' + (q ? ' para esta busca' : '') + '.</div></div>'}`;
+}
+function ecCestaToggle(i) { const f = (EC._cesta || [])[i]; if (!f) return; EC.view.cestaOpen[f.nome] = !EC.view.cestaOpen[f.nome]; ecRenderCesta(); }
+function ecCestaAll(v) { EC.view.cestaOpen = {}; if (v) (EC._cesta || []).forEach(f => { EC.view.cestaOpen[f.nome] = true; }); ecRenderCesta(); }
+async function ecExportCesta() {
+  if (!(await ccLoadXlsx())) return;
+  const n2 = v => v == null || !isFinite(v) ? '' : +v.toFixed(2); const fs = ecCesta();
+  const forn = fs.map(f => ({ 'Fornecedor': f.nome, 'Decisão': f.dec[0], 'Motivo': f.dec[2], 'SKUs': f.itens.length, 'Unidades': f.qtd, 'SKUs comprar agora': f.agora, 'Valor a preço de compra': n2(f.vCompra), 'SKUs sem preço de compra': f.semPreco, 'Valor a custo': n2(f.vCusto), 'Comprar até': f.ate || '', 'Cobertura antes (dias)': f.cobAntes == null ? '' : Math.round(f.cobAntes), 'Cobertura depois (dias)': f.cobDepois == null ? '' : Math.round(f.cobDepois), 'Em trânsito (un)': f.transito, 'Margem projetada': n2(f.margem), 'SKUs confiança baixa': f.baixa, 'Pedido mínimo': 'não informado', 'MOQ / embalagem': 'não informado', 'Condição de pagamento': 'não informado', 'Frete de entrada': 'não informado' }));
+  const itens = []; fs.forEach(f => f.itens.forEach(r => { const c = ecConf(r); itens.push({ 'Fornecedor': f.nome, 'Referência fornecedor': r.refForn || '', 'SKU': r.sku, 'Produto': r.nome, 'Curva': r.curva, 'Recomendação': r.rec, 'Risco': r.risco, 'Estoque total': r.total, 'Em trânsito': r.transito, 'Previsão de chegada': (r.compra && r.compra.prevChegada) || '', 'Demanda diária': n2(r.rate), 'Cobertura atual (dias)': isFinite(r.cob) ? Math.round(r.cob) : '', 'Cobertura após (dias)': r.rate > 0 ? Math.round((r.total + r.transito + r.sugCompra) / r.rate) : '', 'Lead time': r.lt, 'Qtd sugerida': r.sugCompra, 'Preço de compra': r.precoCompra > 0 ? n2(r.precoCompra) : '', 'Origem preço': r.precoCompraFonte || '', 'Valor a preço de compra': r.precoCompra > 0 ? n2(r.sugCompra * r.precoCompra) : '', 'Custo unitário': r.custo > 0 ? n2(r.custo) : '', 'Valor a custo': r.custo > 0 ? n2(r.sugCompra * r.custo) : '', 'Comprar até': r.comprarAte || '', 'Margem unitária projetada': n2(r.margemUn), 'Confiança': c.nivel, 'Ressalvas': c.motivos.map(m => m.txt).join(' | ') }); }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(forn), 'Fornecedores'); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itens), 'Itens');
+  XLSX.writeFile(wb, `cesta_compra_fornecedor_${ecDay()}.xlsx`);
+}
+
 // ───────── filtros rápidos (usados nos alertas, KPIs e na tabela) ─────────
 const EC_FILTERS = {
   relevantes: { label: 'Todos', fn: r => r.relevante },
@@ -3715,6 +3805,7 @@ function ecSetTab(t) {
   document.getElementById('ec-dash').style.display = t === 'dash' ? '' : 'none';
   document.getElementById('ec-itens').style.display = t === 'itens' ? '' : 'none';
   document.getElementById('ec-conc').style.display = t === 'conc' ? '' : 'none';
+  const ce = document.getElementById('ec-cesta'); if (ce) ce.style.display = t === 'cesta' ? '' : 'none';
   ecRender();
 }
 function ecOpenFilter(f) { EC.view.filter = f; EC.view.page = 0; EC.view.q = ''; EC.view.sort = { k: 'prio', d: 1 }; ecSetTab('itens'); window.scrollTo({ top: 0, behavior: 'smooth' }); }
@@ -3729,7 +3820,7 @@ function ecRender() {
   const meta = document.getElementById('ec-meta');
   if (meta) meta.textContent = `Bling ${b ? new Date(b.updatedAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'} · ML ${EC.histDays} dias de vendas · lead time padrão ${ecCfg().leadTime}d`;
   ecRenderNotifBell();
-  if (EC.view.tab === 'dash') ecRenderDash(); else if (EC.view.tab === 'conc') ecRenderConc(); else ecRenderItens();
+  if (EC.view.tab === 'dash') ecRenderDash(); else if (EC.view.tab === 'conc') ecRenderConc(); else if (EC.view.tab === 'cesta') ecRenderCesta(); else ecRenderItens();
 }
 
 // ───────── Dashboard ─────────
@@ -3819,7 +3910,7 @@ function ecRenderDash() {
       ${ecCounter('Programar compra', a.nProgramar, 'aten', 'programar')}
       ${ecCounter('Não precisa comprar', a.nNaoPrecisa, 'ok', 'naoprecisa')}
       ${ecCounter('Compra bloqueada', a.nBloqueado, 'mon', 'bloqueado', ecBloqResumo())}
-      <div class="ec-counter ec-counter-total"><div class="ec-c-label">Valor sugerido — próximas compras</div><div class="ec-c-val">${ecMoneyK(a.valorSugerido)}</div><div class="ec-c-sub">a custo · ${ecMoneyK(a.valorSugeridoCompra)} a preço de compra (fornecedor)</div></div>
+      <div class="ec-counter ec-counter-total"><div class="ec-c-label">Valor sugerido — próximas compras</div><div class="ec-c-val">${ecMoneyK(a.valorSugerido)}</div><div class="ec-c-sub">a custo · ${ecMoneyK(a.valorSugeridoCompra)} a preço de compra (fornecedor)<br><button class="ec-link" style="color:var(--accent)" onclick="ecSetTab('cesta')">ver cesta por fornecedor →</button></div></div>
     </div>
     <div class="ec-buy-grid">
       <div>
