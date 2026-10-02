@@ -2949,6 +2949,7 @@ async function ecLoad(force = false) {
     try { EC.snaps = (await blingApi('/bling/snapshots')).snapshots || []; } catch (e) { EC.snaps = []; }
     ecCompute();
     EC.loadedAt = Date.now();
+    try { await ecStkSync(); } catch (e) { EC.stk = null; }
     ecSaveSnapshot();
     ecNotify();
     ecRender();
@@ -3491,6 +3492,7 @@ function ecConf(r) {
   if (r.preco > 0 && r.freteFonte !== 'pedidos') add(1, r.freteFonte === '—' ? 'Frete sem fonte (considerado zero na margem)' : `Frete estimado (${r.freteFonte}), não o real dos pedidos`);
   if (r.impFonte !== 'Bling' && !r.isKit) add(1, 'Imposto pelo % padrão, sem % Tributos no cadastro');
   if (r.rate > 0.001) { const dv = ecDiasVenda()[r.sku] || 0; if (dv < EC_CONF_HIST_DIAS) add(dv < 5 ? 2 : 1, `Previsão apoiada em poucas vendas: ${dv} dia${dv === 1 ? '' : 's'} com venda em 90`); }
+  const rp = ecRupt(r); if (rp && rp.aviso) add(rp.dias / rp.obs >= 0.5 ? 2 : 1, `Demanda possivelmente subestimada: ${rp.dias} dia${rp.dias > 1 ? 's' : ''} sem estoque em ${rp.obs} registrados`);
   const pts = m.reduce((s, x) => s + x.peso, 0); const grave = m.some(x => x.peso >= 3);
   const nivel = grave || pts >= 5 ? 'baixa' : pts >= 3 ? 'média' : 'alta';
   const c = { nivel, tone: nivel === 'baixa' ? 'crit' : nivel === 'média' ? 'mon' : 'ok', pts, motivos: m.sort((a, b) => b.peso - a.peso) };
@@ -3508,6 +3510,7 @@ function ecConfCard() {
   const top = Object.entries(o.top).sort((a, b) => b[1] - a[1]).slice(0, 4);
   const pA = o.alta / o.n; const tone = pA >= 0.7 ? 'ok' : pA >= 0.4 ? 'mon' : 'aten';
   return `<div class="card ec-sec"><div class="card-head"><span class="card-title">🔎 Confiabilidade dos dados</span><span class="ec-muted">${ecInt(o.n)} SKUs relevantes (com estoque, venda em 90d ou trânsito) · sugestões de baixa confiança continuam visíveis, só sinalizadas</span></div>
+    ${ecStkNote()}
     <div class="ec-buy-row">
       <button class="ec-counter" onclick="ecOpenFilter('relevantes');EC.view.sort={k:'conf',d:1};ecRenderItens()"><div class="ec-c-label"><span class="ec-dot" style="background:${EC_STATUS[tone]}"></span>Confiança alta</div><div class="ec-c-val">${ecPct(pA)}</div><div class="ec-c-sub">${ecInt(o.alta)} de ${ecInt(o.n)} SKUs · ${o.vTot > 0 ? ecPct(o.vAlta / o.vTot) : '—'} do estoque a custo</div></button>
       ${ecCounter('Confiança média', o['média'], 'mon', 'confmedia')}
@@ -3526,6 +3529,37 @@ function ecBloqResumo() {
   const g = {}; EC.rows.filter(r => r.bloqueado).forEach(r => { const k = ecBloqMotivo(r); g[k] = (g[k] || 0) + 1; });
   const ab = { 'inativo com estoque': 'inativos', 'sem venda há mais de 180 dias': 'sem venda +180d', 'sem venda há mais de 90 dias': 'sem venda +90d', 'excesso acima de 2× a faixa saudável': 'excesso' };
   return Object.entries(g).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${ab[k]}`).join(' · ') || 'SKUs';
+}
+
+// ───────── Histórico diário de estoque por SKU (base para medir ruptura e demanda censurada) ─────────
+// Gravado no navegador (IndexedDB) a cada carga. Só leitura para o cálculo: não altera ecCompute.
+// Formato: { date, seller, at, s: { SKU: [matriz, full] } } — todos os SKUs analisáveis, exceto kits virtuais; SKU ausente no dia = ainda não existia.
+const EC_STK_DIAS = 180, EC_STK_MIN_OBS = 7, EC_STK_MIN_PCT = 0.2;
+async function ecStkSync() {
+  if (state.isDemo || !EC.bling || !EC.rows.length) return;
+  const db = await ccDb(); const today = ecDay(); const min = ecDay(EC_STK_DIAS);
+  const s = {};
+  EC.rows.forEach(r => { if (!r.isKit) s[r.sku] = [r.matriz, r.full]; });
+  await new Promise(res => { const t = db.transaction('stk', 'readwrite'); const st = t.objectStore('stk');
+    st.put({ date: today, seller: state.sellerId, at: Date.now(), s });
+    st.delete(IDBKeyRange.upperBound(min, true)); t.oncomplete = () => res(); t.onerror = () => res(); });
+  const all = await new Promise(res => { const q = db.transaction('stk').objectStore('stk').getAll(); q.onsuccess = () => res(q.result || []); q.onerror = () => res([]); });
+  const days = all.filter(d => d.seller === state.sellerId && d.date >= ecDay(89)).sort((a, b) => a.date.localeCompare(b.date));
+  const every = all.filter(d => d.seller === state.sellerId);
+  const rupt = {};
+  every.sort((a, b) => a.date.localeCompare(b.date));
+  days.forEach(d => { for (const k in d.s) { const x = rupt[k] || (rupt[k] = { obs: 0, dias: 0 }); x.obs++; if (!((d.s[k][0] || 0) + (d.s[k][1] || 0) > 0)) x.dias++; } });
+  EC.stk = { n: every.length, first: every.length ? every[0].date : null, rupt };
+  EC._conf = null;
+}
+function ecRupt(r) {
+  if (!EC.stk || r.isKit) return null; const x = EC.stk.rupt[r.sku]; if (!x || !x.obs) return null;
+  return { obs: x.obs, dias: x.dias, aviso: x.obs >= EC_STK_MIN_OBS && x.dias / x.obs >= EC_STK_MIN_PCT && (r.v90 > 0 || r.rate > 0.001) };
+}
+function ecStkNote() {
+  const k = EC.stk; if (!k || !k.n) return '<div class="ec-muted" style="padding:0 18px 10px;font-size:12px">Histórico diário de estoque: ainda não iniciado.</div>';
+  const n = EC.rows.filter(EC_FILTERS.censurada.fn).length;
+  return `<div class="ec-muted" style="padding:0 18px 10px;font-size:12px">Histórico diário de estoque: <b>${k.n}</b> dia${k.n > 1 ? 's' : ''} registrado${k.n > 1 ? 's' : ''} desde ${ecFmtDate(k.first)} (grava a cada vez que o módulo é carregado). ${k.n < EC_STK_MIN_OBS ? `O aviso de demanda subestimada por ruptura começa com ${EC_STK_MIN_OBS} dias registrados.` : n ? `<button class="ec-link" style="color:var(--orange)" onclick="ecOpenFilter('censurada')">${ecInt(n)} SKU${n > 1 ? 's' : ''} com demanda possivelmente subestimada por ruptura →</button>` : 'Nenhum SKU com ruptura relevante no período registrado.'}</div>`;
 }
 
 // ───────── Memória de cálculo por SKU ─────────
@@ -3549,6 +3583,8 @@ function ecMemo(sku) {
     + (r.vKit90 ? row('das quais via kits (90d)', ecInt(r.vKit90) + ' un') : '')
     + row('Médias diárias 7 / 30 / 60 / 90', `${n2(a7)} / ${n2(a30)} / ${n2(a60)} / ${n2(a90)}`)
     + row('Dias com venda em 90', dv)
+    + row('Dias sem estoque (registrados, 90d)', (() => { const x = ecRupt(r); return !x ? na(r.isKit ? 'não se aplica a kit virtual' : 'histórico de estoque ainda não iniciado') : `${x.dias} de ${x.obs} dias registrados` + (x.aviso ? ' <span class="c-orange">⚠</span>' : ''); })())
+    + (() => { const x = ecRupt(r); return x && x.aviso ? `<div class="ec-memo-f"><span class="c-orange">Demanda possivelmente subestimada.</span> O produto ficou sem estoque em ${x.dias} dos ${x.obs} dias registrados, e nesses dias não havia como vender. A previsão atual não corrige isso; a venda que deixou de acontecer não é conhecida.</div>` : ''; })()
     + row('Tratamento de picos', cortou ? `aplicado (média bruta ${n2(bruta)} → ${n2(base)})` : 'sem efeito neste SKU')
     + row('Tendência (30d × 30d anteriores)', r.vol >= 4 ? `${ecSigned(r.tendPct)} · ${ecEsc(r.tend)}` : na('sem volume'))
     + row('Fator de tendência', r.vol >= 6 ? n2(tf) : '1 ' + na('(menos de 6 un em 60d)'))
@@ -3637,6 +3673,7 @@ function ecComo() {
     <div class="ec-memo-sec"><h4>Universos</h4><table class="t ec-t"><tbody>${U.map(([l, n, d]) => `<tr><td>${l}</td><td class="r mono"><b>${ecInt(n)}</b></td><td class="ec-muted" style="font-size:11px">${d}</td></tr>`).join('')}</tbody></table></div>
     <div class="ec-memo-sec"><h4>Indicadores</h4><div class="ec-table-wrap"><table class="t ec-t" style="min-width:680px"><thead><tr><th>Indicador</th><th>Numerador</th><th>Denominador</th><th>Período</th><th>Exclusões</th></tr></thead><tbody>${I.map(x => `<tr>${x.map((c, i) => `<td style="white-space:normal;font-size:12px${i ? ';color:var(--text2)' : ''}">${ecEsc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>
     <div class="ec-memo-sec"><h4>Confiabilidade</h4><div style="font-size:12px;line-height:1.7;color:var(--text2)">Cada ressalva soma pontos: grave 3 (sem custo, kit sem composição), média 2 (divergência Full, trânsito sem previsão, menos de 5 dias com venda), leve 1 (custo com última compra há mais de ${EC_CONF_CUSTO_DIAS} dias, sem preço de compra, sem fornecedor, lead time padrão, frete estimado, imposto padrão, menos de ${EC_CONF_HIST_DIAS} dias com venda em 90).<br><b>Baixa</b>: alguma ressalva grave ou 5+ pontos · <b>Média</b>: 3 ou 4 pontos · <b>Alta</b>: até 2 pontos. Nenhuma sugestão é ocultada ou bloqueada por confiança.</div></div>
+    <div class="ec-memo-sec"><h4>Histórico de estoque e ruptura</h4><div style="font-size:12px;line-height:1.7;color:var(--text2)">A cada carga do módulo o estoque do dia (Matriz e Full) de cada SKU é gravado neste navegador, por até 180 dias. ${EC.stk && EC.stk.n ? `Há <b>${EC.stk.n}</b> dia${EC.stk.n > 1 ? 's' : ''} registrado${EC.stk.n > 1 ? 's' : ''}, desde ${ecFmtDate(EC.stk.first)}.` : 'Ainda não há dias registrados.'} Dia em que o painel não foi aberto fica sem registro e não conta como ruptura. O aviso de demanda subestimada aparece com pelo menos ${EC_STK_MIN_OBS} dias registrados e ${ecPct(EC_STK_MIN_PCT)} deles sem estoque. Não existe registro anterior ao início da gravação.</div></div>
     <div class="ec-memo-sec"><div class="ec-muted" style="font-size:12px">Clique em qualquer SKU para ver a memória de cálculo com os valores dele.</div></div>
   </div>`;
   el.style.display = 'flex';
@@ -3765,6 +3802,7 @@ const EC_FILTERS = {
   aumentar: { label: 'Aumentar próxima compra', fn: r => r.ajustePct != null && r.ajustePct >= 0.2, hidden: true },
   reduzir: { label: 'Reduzir próxima compra', fn: r => r.rec === EC_REC.REDUZIR || (r.ajustePct != null && r.ajustePct <= -0.2), hidden: true },
   margembaixa: { label: 'Alto giro + margem baixa', fn: r => r.giro === 'ALTO' && r.margemPct != null && r.margemPct < 0.15, hidden: true },
+  censurada: { label: 'Demanda possivelmente subestimada', fn: r => { const x = ecRupt(r); return !!(x && x.aviso); }, hidden: true },
   confbaixa: { label: 'Confiança baixa', fn: r => r.relevante && ecConf(r).nivel === 'baixa' },
   confmedia: { label: 'Confiança média', fn: r => r.relevante && ecConf(r).nivel === 'média', hidden: true },
   margemboa: { label: 'Alto giro + boa margem', fn: r => r.giro === 'ALTO' && r.margemPct != null && r.margemPct >= 0.25, hidden: true },
@@ -4202,7 +4240,7 @@ function ecExportCSV() {
     ['Lead time', r => r.lt], ['Estoque segurança', r => r.ss], ['Estoque projetado', r => Math.round(r.projetado)], ['Última venda', r => r.ultimaVenda || ''], ['Dias sem venda', r => r.diasSemVenda],
     ['Risco ruptura', r => r.risco], ['Excesso un', r => r.excessoUn], ['Excesso R$', r => r.excessoR.toFixed(2)], ['Compra sugerida', r => r.sugCompra], ['Valor sugerido a preço de compra', r => (r.sugCompra * r.precoCompra).toFixed(2)], ['Valor sugerido a custo', r => (r.sugCompra * r.custo).toFixed(2)], ['Comprar até', r => r.comprarAte || ''], ['Envio Full', r => r.envioFull], ['Recomendação', r => r.rec],
     ['Última compra', r => r.compra?.ultData || ''], ['Qtd última compra', r => r.compra?.ultQtd || ''], ['Último custo', r => r.compra?.ultCusto || ''], ['Fornecedor (cadastro)', r => r.fornecedor], ['Referência fornecedor', r => r.refForn], ['Origem fornecedor', r => r.fornFonte], ['Fornecedor do último pedido', r => r.fornUltPedido],
-    ['Origem custo', r => r.custoFonte], ['Motivo do bloqueio', r => r.bloqueado ? ecBloqMotivo(r) : ''], ['Confiança do dado', r => ecConf(r).nivel], ['Ressalvas', r => ecConf(r).motivos.map(m => m.txt).join(' | ')]];
+    ['Origem custo', r => r.custoFonte], ['Motivo do bloqueio', r => r.bloqueado ? ecBloqMotivo(r) : ''], ['Dias de estoque registrados (90d)', r => { const x = ecRupt(r); return x ? x.obs : ''; }], ['Dias sem estoque (registrados)', r => { const x = ecRupt(r); return x ? x.dias : ''; }], ['Confiança do dado', r => ecConf(r).nivel], ['Ressalvas', r => ecConf(r).motivos.map(m => m.txt).join(' | ')]];
   (EC.bling?.depositos || []).forEach(d => cols.splice(7, 0, ['Dep. ' + d.nome, r => r.deps[d.id] ? r.deps[d.id][1] : 0]));
   const esc = v => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const csv = '﻿' + cols.map(c => c[0]).join(';') + '\n' + rs.map(r => cols.map(c => esc(typeof c[1](r) === 'number' ? String(c[1](r)).replace('.', ',') : c[1](r))).join(';')).join('\n');
@@ -4416,13 +4454,14 @@ const CC_DB = 'ml_intel_cc', CC_STORE = 'days', CC_MAX_DIAS = 180;
 function ccDb() {
   if (CC._db) return CC._db;
   CC._db = new Promise((res, rej) => {
-    const r = indexedDB.open(CC_DB, 4);
+    const r = indexedDB.open(CC_DB, 5);
     r.onupgradeneeded = () => { const db = r.result;
       if (!db.objectStoreNames.contains(CC_STORE)) db.createObjectStore(CC_STORE, { keyPath: 'date' });
       if (!db.objectStoreNames.contains('buyers')) db.createObjectStore('buyers', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('bl')) db.createObjectStore('bl', { keyPath: 'date' });
       if (!db.objectStoreNames.contains('bld')) db.createObjectStore('bld', { keyPath: 'id' });
-      if (!db.objectStoreNames.contains('nf')) db.createObjectStore('nf', { keyPath: 'id' }); };
+      if (!db.objectStoreNames.contains('nf')) db.createObjectStore('nf', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('stk')) db.createObjectStore('stk', { keyPath: 'date' }); };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
   return CC._db;
