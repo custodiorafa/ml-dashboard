@@ -2950,6 +2950,7 @@ async function ecLoad(force = false) {
     ecCompute();
     EC.loadedAt = Date.now();
     try { await ecStkSync(); } catch (e) { EC.stk = null; }
+    ecBuySync();
     ecSaveSnapshot();
     ecNotify();
     ecRender();
@@ -3105,6 +3106,7 @@ function ecCompute() {
   const taxMap = ecTaxPctMap();
   let pxFrete = {}; try { const pc = JSON.parse(localStorage.getItem('px_cache_v1') || 'null'); if (pc && pc.items) Object.entries(pc.items).forEach(([id, x]) => { if (x.frete && x.frete.cur != null) pxFrete[id] = x.frete.cur; }); } catch (e) {}
 
+  const BUY = ecBuy().p;
   const rows = [];
   for (const [sku, p] of Object.entries(bySku)) {
     const s = S[sku]; const m = ML[sku]; const cp = CP['id:' + p.id] || CP['c:' + sku] || null;
@@ -3156,7 +3158,9 @@ function ecCompute() {
     else matriz = blingVirt;
     const total = matriz + full;
     const transito = cp ? cp.transito || 0 : 0;
-    const lt = Number(cfg.ltSku[sku]) || cfg.leadTime;
+    // campos de compra do Bling (MOQ, lead time, múltiplo): só participam quando preenchidos
+    const bf = BUY[p.id] || null; const ltB = bf && bf[1] > 0 ? bf[1] : 0;
+    const lt = Number(cfg.ltSku[sku]) || ltB || cfg.leadTime;
 
     // Custos, preços, margem
     const custo = p.custo > 0 ? p.custo : (cp && cp.ultCusto > 0 ? cp.ultCusto : 0);
@@ -3178,7 +3182,7 @@ function ecCompute() {
     const margemPct = margemUn != null && preco > 0 ? margemUn / preco : null;
 
     rows.push({
-      sku, id: p.id, nome: p.nome, ativo, isKit, kitFisico, formato: p.formato, blingVirt, matriz, full, total, transito, lt,
+      sku, id: p.id, nome: p.nome, ativo, isKit, kitFisico, formato: p.formato, blingVirt, matriz, full, total, transito, lt, ltFonte: Number(cfg.ltSku[sku]) ? 'manual' : ltB ? 'Bling' : 'padrão', moq: bf && bf[0] > 0 ? bf[0] : 0, mult: bf && bf[2] > 1 ? bf[2] : 0, buyLido: !!bf,
       custo, preco, tarifaUn, freteUn, freteFonte, impPct, impUn, impFonte: taxMap[sku] != null ? 'Bling' : 'padrão', margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
       v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, canc90, full90, tendPct, tend90Pct, tend, vol,
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
@@ -3235,6 +3239,9 @@ function ecCompute() {
     const alvo = rate * cfg.alvo[r.curva];
     r.alvoUn = Math.ceil(r.consumoLT + r.ss + alvo);
     r.sugCompra = rate > 0.001 ? Math.max(0, Math.ceil(r.consumoLT + r.ss + alvo - r.total - r.transito)) : 0;
+    // MOQ e múltiplo de compra (campos do Bling): sobe até o mínimo e arredonda para cima até fechar a caixa
+    r.sugBruta = r.sugCompra;
+    if (r.sugCompra > 0) { if (r.moq > 0 && r.sugCompra < r.moq) r.sugCompra = r.moq; if (r.mult > 1) r.sugCompra = Math.ceil(r.sugCompra / r.mult) * r.mult; }
     const diasAteComprar = rate > 0.001 ? (r.total + r.transito - r.ss) / rate - r.lt : Infinity;
     r.comprarAte = rate > 0.001 && isFinite(diasAteComprar) ? ecAddDays(ecDay(), Math.max(0, Math.floor(diasAteComprar))) : null;
     r.diasAteComprar = diasAteComprar;
@@ -3269,7 +3276,7 @@ function ecCompute() {
 
     // kits: estoque vem dos componentes — a decisão de compra é nos componentes
     if (r.isKit) {
-      r.semGiro = false; r.semGiroFaixa = ''; r.excessoUn = 0; r.excessoR = 0; r.sugCompra = 0; r.ajustePct = null;
+      r.semGiro = false; r.semGiroFaixa = ''; r.excessoUn = 0; r.excessoR = 0; r.sugCompra = 0; r.sugBruta = 0; r.ajustePct = null;
       r.rec = (r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO) ? EC_REC.KIT : EC_REC.ADEQUADO;
       r.bloqueado = false;
     }
@@ -3486,7 +3493,7 @@ function ecConf(r) {
     }
     if (!(r.precoCompra > 0)) add(1, 'Sem preço de compra do fornecedor');
     if (!r.fornecedor) add(1, 'Sem fornecedor no cadastro');
-    if (!cfg.ltSku[r.sku]) add(1, `Lead time padrão (${cfg.leadTime}d), não informado para este SKU`);
+    if ((r.ltFonte || 'padrão') === 'padrão') add(1, `Lead time padrão (${cfg.leadTime}d), não informado para este SKU`);
     if (r.transito > 0 && !(r.compra && r.compra.prevChegada)) add(2, 'Compra em trânsito sem previsão de chegada');
   }
   if (r.preco > 0 && r.freteFonte !== 'pedidos') add(1, r.freteFonte === '—' ? 'Frete sem fonte (considerado zero na margem)' : `Frete estimado (${r.freteFonte}), não o real dos pedidos`);
@@ -3562,6 +3569,73 @@ function ecStkNote() {
   return `<div class="ec-muted" style="padding:0 18px 10px;font-size:12px">Histórico diário de estoque: <b>${k.n}</b> dia${k.n > 1 ? 's' : ''} registrado${k.n > 1 ? 's' : ''} desde ${ecFmtDate(k.first)} (grava a cada vez que o módulo é carregado). ${k.n < EC_STK_MIN_OBS ? `O aviso de demanda subestimada por ruptura começa com ${EC_STK_MIN_OBS} dias registrados.` : n ? `<button class="ec-link" style="color:var(--orange)" onclick="ecOpenFilter('censurada')">${ecInt(n)} SKU${n > 1 ? 's' : ''} com demanda possivelmente subestimada por ruptura →</button>` : 'Nenhum SKU com ruptura relevante no período registrado.'}</div>`;
 }
 
+// ───────── Campos de compra do Bling: MOQ · Lead time (dias) · Múltiplo de compra ─────────
+// Campos customizados do produto. A API só devolve o id do campo e só quando preenchido, por isso os 3 ids são
+// identificados uma vez (⚙ Configurações) e guardados em ec_cfg_v1.ccIds. Valores lidos ficam em ec_buy_v1.
+// Campo vazio ou zero = não participa do cálculo.
+const EC_BUY_KEY = 'ec_buy_v1';
+function ecBuy() {
+  if (EC._buy && EC._buy.seller === state.sellerId) return EC._buy;
+  let b = null; try { b = JSON.parse(localStorage.getItem(EC_BUY_KEY) || 'null'); } catch (e) {}
+  EC._buy = b && b.seller === state.sellerId && b.p ? b : { seller: state.sellerId, p: {} };
+  return EC._buy;
+}
+function ecBuySave() { try { localStorage.setItem(EC_BUY_KEY, JSON.stringify(ecBuy())); } catch (e) {} }
+function ecBuyParse(cc, ids) {
+  const v = [0, 0, 0]; (cc || []).forEach(c => { const n = parseInt(String(c.valor).replace(/[^\d-]/g, ''), 10); if (!(n > 0)) return;
+    if (c.idCampoCustomizado === ids.moq) v[0] = n; else if (c.idCampoCustomizado === ids.lt) v[1] = n; else if (c.idCampoCustomizado === ids.mult) v[2] = n; });
+  if (v[0] === 111 && v[1] === 222 && v[2] === 333) return [0, 0, 0]; // valores de teste da identificação: ignorar
+  return v;
+}
+const ecBuyNa = r => !ecCfg().ccIds ? 'campos ainda não identificados (⚙)' : !r.buyLido ? 'ainda não lido do Bling' : 'não preenchido — não aplicado';
+// leitura em segundo plano: 1 produto por vez; quem tem compra sugerida ou risco é relido todo dia, os demais a cada 7 dias
+async function ecBuySync(force) {
+  const ids = ecCfg().ccIds; if (!ids || EC.buyBusy || state.isDemo || !EC.rows.length) return;
+  EC.buyBusy = true;
+  try {
+    const B = ecBuy(); const now = Date.now();
+    const urg = r => r.sugCompra > 0 || r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO;
+    const todo = EC.rows.filter(r => !r.isKit && r.relevante && (force || !B.p[r.id] || now - B.p[r.id][3] > (urg(r) ? 864e5 : 7 * 864e5))).sort((x, y) => urg(y) - urg(x) || x.prio - y.prio);
+    let changed = 0, done = 0, fail = 0; EC.buyProg = { done: 0, tot: todo.length };
+    for (const r of todo) {
+      if (fail > 10) break;
+      try {
+        const x = (await ccBlRaw('/produtos/' + r.id)).data; if (!x || !x.id) throw new Error('produto não lido');
+        const v = ecBuyParse(x.camposCustomizados, ids); const o = B.p[r.id] || [0, 0, 0];
+        if (o[0] !== v[0] || o[1] !== v[1] || o[2] !== v[2]) changed++;
+        B.p[r.id] = [v[0], v[1], v[2], Date.now()]; fail = 0;
+      } catch (e) { fail++; await sleep(1500); }
+      EC.buyProg.done = ++done; if (done % 25 === 0) ecBuySave();
+      await sleep(400);
+    }
+    ecBuySave(); EC.buyProg = null;
+    // releitura sem mudança de valor ainda precisa marcar os SKUs como lidos na primeira passada
+    if ((changed || todo.length) && !EC.loading) { ecCompute(); ecRender(); if (changed) showToast(`Campos de compra do Bling: ${changed} produto${changed > 1 ? 's' : ''} atualizado${changed > 1 ? 's' : ''}`, 'ok'); }
+  } finally { EC.buyBusy = false; }
+}
+// identifica os ids: num produto de teste, preencher MOQ = 111, Lead time = 222 e Múltiplo de compra = 333
+async function ecBuyDetect() {
+  const sku = normSku((document.getElementById('ec-buy-sku').value || '').trim()); const out = document.getElementById('ec-buy-msg');
+  const r = EC.rows.find(x => x.sku === sku); if (!r) { out.textContent = 'SKU não encontrado no cadastro lido do Bling.'; return; }
+  out.textContent = 'Lendo o produto no Bling…';
+  try {
+    const x = (await ccBlRaw('/produtos/' + r.id)).data; const f = n => { const c = (x.camposCustomizados || []).find(c => parseInt(c.valor, 10) === n); return c ? c.idCampoCustomizado : null; };
+    const ids = { moq: f(111), lt: f(222), mult: f(333) }; const falta = [['MOQ = 111', ids.moq], ['Lead time (dias) = 222', ids.lt], ['Múltiplo de compra = 333', ids.mult]].filter(a => !a[1]).map(a => a[0]);
+    if (falta.length) { out.textContent = 'Não encontrei: ' + falta.join(', ') + '. Confira se salvou o produto com esses valores.'; return; }
+    ecCfg().ccIds = ids; ecSaveCfg(); const B = ecBuy(); delete B.p[r.id]; ecBuySave();
+    out.innerHTML = '<span class="c-green">Campos identificados.</span> Agora volte ao Bling e coloque os valores reais nesse produto (ou apague os de teste). A leitura dos produtos começou em segundo plano.';
+    ecBuySync(true);
+  } catch (e) { out.textContent = 'Erro ao ler o produto: ' + e.message; }
+}
+function ecBuyCfgHtml() {
+  const ids = ecCfg().ccIds; const B = ecBuy().p; const lidos = Object.keys(B).length; const pre = Object.values(B).filter(v => v[0] || v[1] || v[2]).length;
+  return `<div class="ec-subhead">Campos de compra do Bling — MOQ · Lead time (dias) · Múltiplo de compra</div>
+    <div class="ec-muted" style="font-size:12px;line-height:1.6;margin-bottom:8px">${ids ? `<span class="c-green">Campos identificados.</span> ${ecInt(lidos)} produtos lidos, ${ecInt(pre)} com algum campo preenchido${EC.buyProg ? ` · lendo ${EC.buyProg.done}/${EC.buyProg.tot}` : ''}. Campo vazio não entra no cálculo. Produtos com compra sugerida ou em risco são relidos todo dia; os demais, a cada 7 dias.`
+      : 'Ainda não identificados. O Bling só informa o número interno de cada campo, então é preciso mostrar ao painel qual é qual, uma única vez: em <b>um produto</b> qualquer, preencha <b>MOQ = 111</b>, <b>Lead time (dias) = 222</b> e <b>Múltiplo de compra = 333</b>, salve, digite o SKU abaixo e clique em Identificar. Depois troque pelos valores reais.'}</div>
+    <div class="ec-tools" style="justify-content:flex-start"><input id="ec-buy-sku" type="text" placeholder="SKU do produto de teste" style="max-width:220px"><button class="btn-sm" onclick="ecBuyDetect()">${ids ? 'Identificar de novo' : 'Identificar campos'}</button>${ids ? '<button class="btn-sm" onclick="ecBuySync(true);ecCloseCfg();showToast(\'Relendo os campos de compra em segundo plano\',\'ok\')">Reler agora</button>' : ''}</div>
+    <div id="ec-buy-msg" class="ec-muted" style="font-size:12px;margin-top:6px"></div>`;
+}
+
 // ───────── Memória de cálculo por SKU ─────────
 function ecMemoClose() { const m = document.getElementById('ec-memo'); if (m) m.style.display = 'none'; }
 function ecMemo(sku) {
@@ -3601,7 +3675,7 @@ function ecMemo(sku) {
   // reposição
   const alvoDias = cfg.alvo[r.curva]; const alvoUn = r.rate * alvoDias; const brutoSug = r.consumoLT + r.ss + alvoUn - r.total - r.transito;
   const rupt = dem && isFinite(r.cob) ? ecAddDays(ecDay(), Math.floor(r.cob)) : null;
-  const repos = row('Lead time usado', `${r.lt} dias · ${cfg.ltSku[r.sku] ? 'manual para este SKU' : 'padrão do módulo'}`)
+  const repos = row('Lead time usado', `${r.lt} dias · ${r.ltFonte === 'manual' ? 'manual para este SKU' : r.ltFonte === 'Bling' ? 'campo "Lead time (dias)" do Bling' : 'padrão do módulo'}`)
     + row('Consumo no lead time', dem ? `${n2(r.rate)} × ${r.lt} = ${n1(r.consumoLT)} un` : '—')
     + row('Estoque de segurança', dem ? `${ecInt(r.ss)} un` : '—')
     + (dem ? `<div class="ec-memo-f">segurança = z (curva ${r.curva}: ${cfg.z[r.curva]}) × desvio-padrão diário (${n2(r.sd)}) × √lead time (${r.lt})<br>= ${n2(cfg.z[r.curva] * r.sd * Math.sqrt(r.lt))} → arredonda para cima = <b>${ecInt(r.ss)} un</b></div>` : '')
@@ -3612,8 +3686,11 @@ function ecMemo(sku) {
     + row('Data limite para comprar', r.comprarAte && r.sugCompra > 0 ? (r.diasAteComprar <= 0 ? '<span class="c-red">hoje</span>' : ecFmtDate(r.comprarAte)) : '—');
   const compra = r.isKit ? `<div class="ec-memo-f">Kit virtual: compra sugerida sempre zero. Veja os componentes.</div>`
     : !dem ? `<div class="ec-memo-f">Sem demanda prevista: compra sugerida = 0.</div>`
-    : `<div class="ec-memo-f">compra = consumo no lead time + segurança + alvo − estoque − trânsito<br>= ${n1(r.consumoLT)} + ${ecInt(r.ss)} + ${n1(alvoUn)} (${n2(r.rate)} × ${alvoDias}d) − ${ecInt(r.total)} − ${ecInt(r.transito)}<br>= ${n1(brutoSug)} → ${brutoSug <= 0 ? 'não precisa comprar' : 'arredonda para cima'} = <b>${ecInt(r.sugCompra)} un</b></div>`
-      + row('Pedido mínimo, MOQ e múltiplo de embalagem', na('não informado — nenhum ajuste aplicado'))
+    : `<div class="ec-memo-f">compra = consumo no lead time + segurança + alvo − estoque − trânsito<br>= ${n1(r.consumoLT)} + ${ecInt(r.ss)} + ${n1(alvoUn)} (${n2(r.rate)} × ${alvoDias}d) − ${ecInt(r.total)} − ${ecInt(r.transito)}<br>= ${n1(brutoSug)} → ${brutoSug <= 0 ? 'não precisa comprar' : 'arredonda para cima'} = <b>${ecInt(r.sugBruta != null ? r.sugBruta : r.sugCompra)} un</b></div>`
+      + row('MOQ (Bling)', r.moq ? ecInt(r.moq) + ' un' : na(ecBuyNa(r)))
+      + row('Múltiplo de compra (Bling)', r.mult ? 'de ' + ecInt(r.mult) + ' em ' + ecInt(r.mult) : na(ecBuyNa(r)))
+      + (r.sugBruta != null && r.sugCompra !== r.sugBruta ? `<div class="ec-memo-f">ajuste de compra: ${ecInt(r.sugBruta)} un${r.moq > r.sugBruta ? ` → MOQ ${ecInt(r.moq)}` : ''}${r.mult ? ` → múltiplo de ${ecInt(r.mult)}` : ''} = <b>${ecInt(r.sugCompra)} un</b></div>` : '')
+      + row('Pedido mínimo do fornecedor (R$)', na('não informado'))
       + (r.sugCompra > 0 ? row('Valor a custo', ecMoney2(r.sugCompra * r.custo)) + row('Valor a preço de compra', r.precoCompra ? ecMoney2(r.sugCompra * r.precoCompra) : na('sem preço de compra')) : '')
       + (r.compra && r.compra.ultQtd ? row('Última compra', `${ecInt(r.compra.ultQtd)} un${r.compra.ultData ? ' em ' + ecFmtDate(String(r.compra.ultData).slice(0, 10)) : ''}`) : row('Última compra', na('sem registro')));
   // custo e margem
@@ -3737,7 +3814,7 @@ function ecRenderCesta() {
         ${ecStat('Em trânsito', ecInt(f.transito) + ' un', f.semPrev ? `<span class="c-orange">${f.semPrev} sem previsão de chegada</span>` : 'destes SKUs')}
         ${ecStat('Margem projetada', ecMoney(f.margem), f.semMargem ? `${f.semMargem} SKU${f.semMargem > 1 ? 's' : ''} sem margem calculada` : 'das unidades sugeridas')}
       </div>
-      ${open ? `<div style="padding:0 18px 6px;font-size:12px;color:var(--text2)">Pedido mínimo: ${na} · MOQ e múltiplo de embalagem: ${na} · Condição de pagamento: ${na} · Frete de entrada: ${na} <span title="Esses dados não existem no Bling nem no Mercado Livre. Entram na próxima etapa, por cadastro manual do fornecedor.">ⓘ</span></div>
+      ${open ? `<div style="padding:0 18px 6px;font-size:12px;color:var(--text2)">Pedido mínimo: ${na} · MOQ preenchido em ${f.itens.filter(r => r.moq).length} e múltiplo de compra em ${f.itens.filter(r => r.mult).length} de ${f.itens.length} SKUs (campos do Bling) · Condição de pagamento: ${na} · Frete de entrada: ${na} <span title="Esses dados não existem no Bling nem no Mercado Livre. Entram na próxima etapa, por cadastro manual do fornecedor.">ⓘ</span></div>
       <div class="ec-table-wrap" style="margin:0 18px 14px"><table class="t ec-t" style="min-width:1020px"><thead><tr><th>Produto</th><th>Curva</th><th>Recomendação</th><th class="r">Estoque</th><th class="r">Trânsito</th><th class="r">Cobertura</th><th class="r">Qtd sugerida</th><th class="r">Preço compra</th><th class="r">Valor compra</th><th class="r">Valor a custo</th><th>Comprar até</th><th>Confiança</th></tr></thead><tbody>${f.itens.map(item).join('')}</tbody></table></div>` : ''}
     </div>`; };
   EC._cesta = fs;
@@ -3760,8 +3837,8 @@ function ecCestaAll(v) { EC.view.cestaOpen = {}; if (v) (EC._cesta || []).forEac
 async function ecExportCesta() {
   if (!(await ccLoadXlsx())) return;
   const n2 = v => v == null || !isFinite(v) ? '' : +v.toFixed(2); const fs = ecCesta();
-  const forn = fs.map(f => ({ 'Fornecedor': f.nome, 'Decisão': f.dec[0], 'Motivo': f.dec[2], 'SKUs': f.itens.length, 'Unidades': f.qtd, 'SKUs comprar agora': f.agora, 'Valor a preço de compra': n2(f.vCompra), 'SKUs sem preço de compra': f.semPreco, 'Valor a custo': n2(f.vCusto), 'Comprar até': f.ate || '', 'Cobertura antes (dias)': f.cobAntes == null ? '' : Math.round(f.cobAntes), 'Cobertura depois (dias)': f.cobDepois == null ? '' : Math.round(f.cobDepois), 'Em trânsito (un)': f.transito, 'Margem projetada': n2(f.margem), 'SKUs confiança baixa': f.baixa, 'Pedido mínimo': 'não informado', 'MOQ / embalagem': 'não informado', 'Condição de pagamento': 'não informado', 'Frete de entrada': 'não informado' }));
-  const itens = []; fs.forEach(f => f.itens.forEach(r => { const c = ecConf(r); itens.push({ 'Fornecedor': f.nome, 'Referência fornecedor': r.refForn || '', 'SKU': r.sku, 'Produto': r.nome, 'Curva': r.curva, 'Recomendação': r.rec, 'Risco': r.risco, 'Estoque total': r.total, 'Em trânsito': r.transito, 'Previsão de chegada': (r.compra && r.compra.prevChegada) || '', 'Demanda diária': n2(r.rate), 'Cobertura atual (dias)': isFinite(r.cob) ? Math.round(r.cob) : '', 'Cobertura após (dias)': r.rate > 0 ? Math.round((r.total + r.transito + r.sugCompra) / r.rate) : '', 'Lead time': r.lt, 'Qtd sugerida': r.sugCompra, 'Preço de compra': r.precoCompra > 0 ? n2(r.precoCompra) : '', 'Origem preço': r.precoCompraFonte || '', 'Valor a preço de compra': r.precoCompra > 0 ? n2(r.sugCompra * r.precoCompra) : '', 'Custo unitário': r.custo > 0 ? n2(r.custo) : '', 'Valor a custo': r.custo > 0 ? n2(r.sugCompra * r.custo) : '', 'Comprar até': r.comprarAte || '', 'Margem unitária projetada': n2(r.margemUn), 'Confiança': c.nivel, 'Ressalvas': c.motivos.map(m => m.txt).join(' | ') }); }));
+  const forn = fs.map(f => ({ 'Fornecedor': f.nome, 'Decisão': f.dec[0], 'Motivo': f.dec[2], 'SKUs': f.itens.length, 'Unidades': f.qtd, 'SKUs comprar agora': f.agora, 'Valor a preço de compra': n2(f.vCompra), 'SKUs sem preço de compra': f.semPreco, 'Valor a custo': n2(f.vCusto), 'Comprar até': f.ate || '', 'Cobertura antes (dias)': f.cobAntes == null ? '' : Math.round(f.cobAntes), 'Cobertura depois (dias)': f.cobDepois == null ? '' : Math.round(f.cobDepois), 'Em trânsito (un)': f.transito, 'Margem projetada': n2(f.margem), 'SKUs confiança baixa': f.baixa, 'Pedido mínimo': 'não informado', 'SKUs com MOQ': f.itens.filter(r => r.moq).length, 'SKUs com múltiplo de compra': f.itens.filter(r => r.mult).length, 'Condição de pagamento': 'não informado', 'Frete de entrada': 'não informado' }));
+  const itens = []; fs.forEach(f => f.itens.forEach(r => { const c = ecConf(r); itens.push({ 'Fornecedor': f.nome, 'Referência fornecedor': r.refForn || '', 'SKU': r.sku, 'Produto': r.nome, 'Curva': r.curva, 'Recomendação': r.rec, 'Risco': r.risco, 'Estoque total': r.total, 'Em trânsito': r.transito, 'Previsão de chegada': (r.compra && r.compra.prevChegada) || '', 'Demanda diária': n2(r.rate), 'Cobertura atual (dias)': isFinite(r.cob) ? Math.round(r.cob) : '', 'Cobertura após (dias)': r.rate > 0 ? Math.round((r.total + r.transito + r.sugCompra) / r.rate) : '', 'Lead time': r.lt, 'Origem lead time': r.ltFonte, 'Qtd calculada': r.sugBruta, 'MOQ': r.moq || '', 'Múltiplo de compra': r.mult || '', 'Qtd sugerida': r.sugCompra, 'Preço de compra': r.precoCompra > 0 ? n2(r.precoCompra) : '', 'Origem preço': r.precoCompraFonte || '', 'Valor a preço de compra': r.precoCompra > 0 ? n2(r.sugCompra * r.precoCompra) : '', 'Custo unitário': r.custo > 0 ? n2(r.custo) : '', 'Valor a custo': r.custo > 0 ? n2(r.sugCompra * r.custo) : '', 'Comprar até': r.comprarAte || '', 'Margem unitária projetada': n2(r.margemUn), 'Confiança': c.nivel, 'Ressalvas': c.motivos.map(m => m.txt).join(' | ') }); }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(forn), 'Fornecedores'); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itens), 'Itens');
   XLSX.writeFile(wb, `cesta_compra_fornecedor_${ecDay()}.xlsx`);
@@ -4172,13 +4249,13 @@ const EC_COLS = [
   ['rate', 'Média mensal', r => (r.v90 / 3).toLocaleString('pt-BR', { maximumFractionDigits: 1 })],
   ['tendPct', 'Tendência %', r => r.vol >= 4 ? ecSigned(r.tendPct) : '—'], ['tend', 'Tendência', r => r.vol >= 4 ? ecEsc(r.tend) : '<span class="ec-muted">sem volume</span>', 's'],
   ['cob', 'Cobertura', r => r.rate > 0.001 ? `${ecDays(r.cob)}<div class="ec-sub">${(r.cob / 30).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} m · M ${ecDays(r.cobMatriz)} · F ${r.temFull ? ecDays(r.cobFull) : '—'}</div>` : '—'],
-  ['lt', 'Lead time', r => `<button class="ec-lt" onclick="ecEditLT('${ecEsc(r.sku)}')" title="Editar lead time deste SKU">${r.lt}d${ecCfg().ltSku[r.sku] ? '*' : ''}</button>`],
+  ['lt', 'Lead time', r => `<button class="ec-lt" onclick="ecEditLT('${ecEsc(r.sku)}')" title="Editar lead time deste SKU">${r.lt}d${ecCfg().ltSku[r.sku] ? '*' : ''}</button>${r.ltFonte === 'Bling' ? '<div class="ec-sub">Bling</div>' : ''}`],
   ['projetado', 'Projetado na reposição', r => r.rate > 0.001 ? `<span class="${r.projetado <= 0 ? 'c-red' : ''}">${ecInt(r.projetado)}</span><div class="ec-sub">consumo LT ${ecInt(r.consumoLT)}</div>` : '—'],
   ['ultimaVenda', 'Última venda', r => r.ultimaVenda ? ecFmtDate(r.ultimaVenda) : '&gt;180d', 's'],
   ['diasSemVenda', 'Dias sem venda', r => r.diasSemVenda > 180 ? '180+' : r.diasSemVenda],
   ['risco', 'Risco ruptura', r => ecPill(ecRiskIcon(r.risco) + ' ' + r.risco, ecRiskTone(r.risco)) + (r.rupturaAntes ? '<div class="ec-sub c-red">rompe antes da reposição</div>' : ''), 's'],
   ['excessoUn', 'Excesso', r => r.excessoUn ? `${ecInt(r.excessoUn)} un<div class="ec-sub">${ecMoneyK(r.excessoR)}</div>` : '—'],
-  ['sugCompra', 'Compra sugerida', r => r.sugCompra ? `<b>${ecInt(r.sugCompra)}</b>${r.comprarAte ? `<div class="ec-sub">até ${r.diasAteComprar <= 0 ? 'hoje' : ecFmtDate(r.comprarAte)}</div>` : ''}` : '—'],
+  ['sugCompra', 'Compra sugerida', r => r.sugCompra ? `<b>${ecInt(r.sugCompra)}</b>${r.sugBruta != null && r.sugBruta !== r.sugCompra ? `<div class="ec-sub">cálculo ${ecInt(r.sugBruta)} · ${r.mult ? 'cx ' + ecInt(r.mult) : 'MOQ ' + ecInt(r.moq)}</div>` : ''}${r.comprarAte ? `<div class="ec-sub">até ${r.diasAteComprar <= 0 ? 'hoje' : ecFmtDate(r.comprarAte)}</div>` : ''}` : '—'],
   ['envioFull', 'Envio Full', r => r.envioFull ? `<b>${ecInt(r.envioFull)}</b><div class="ec-sub">→ ${ecDays(r.cobFullApos)}</div>` : (r.fullStatus === 'EXCESSIVO' ? '<span class="ec-sub">excesso</span>' : '—')],
   ['rec', 'Recomendação', r => ecPill(r.rec, ecRecTone(r.rec)) + (r.ajustePct != null && Math.abs(r.ajustePct) >= 0.2 ? `<div class="ec-sub">${ecSigned(r.ajustePct)} vs última compra</div>` : '') + (r.bloqueado ? `<div class="ec-sub">${ecEsc(ecBloqMotivo(r))}</div>` : ''), 's'],
   ['conf', 'Confiança do dado', r => { const c = ecConf(r); return `<button class="ec-link" onclick="ecMemo('${ecEsc(r.sku)}')" title="${ecEsc(c.motivos.map(m => m.txt).join(' · ') || 'sem ressalvas')}">${ecPill(c.nivel, c.tone)}</button>${c.motivos.length ? `<div class="ec-sub">${c.motivos.length} ressalva${c.motivos.length > 1 ? 's' : ''}</div>` : ''}`; }, 's'],
@@ -4240,7 +4317,7 @@ function ecExportCSV() {
     ['Lead time', r => r.lt], ['Estoque segurança', r => r.ss], ['Estoque projetado', r => Math.round(r.projetado)], ['Última venda', r => r.ultimaVenda || ''], ['Dias sem venda', r => r.diasSemVenda],
     ['Risco ruptura', r => r.risco], ['Excesso un', r => r.excessoUn], ['Excesso R$', r => r.excessoR.toFixed(2)], ['Compra sugerida', r => r.sugCompra], ['Valor sugerido a preço de compra', r => (r.sugCompra * r.precoCompra).toFixed(2)], ['Valor sugerido a custo', r => (r.sugCompra * r.custo).toFixed(2)], ['Comprar até', r => r.comprarAte || ''], ['Envio Full', r => r.envioFull], ['Recomendação', r => r.rec],
     ['Última compra', r => r.compra?.ultData || ''], ['Qtd última compra', r => r.compra?.ultQtd || ''], ['Último custo', r => r.compra?.ultCusto || ''], ['Fornecedor (cadastro)', r => r.fornecedor], ['Referência fornecedor', r => r.refForn], ['Origem fornecedor', r => r.fornFonte], ['Fornecedor do último pedido', r => r.fornUltPedido],
-    ['Origem custo', r => r.custoFonte], ['Motivo do bloqueio', r => r.bloqueado ? ecBloqMotivo(r) : ''], ['Dias de estoque registrados (90d)', r => { const x = ecRupt(r); return x ? x.obs : ''; }], ['Dias sem estoque (registrados)', r => { const x = ecRupt(r); return x ? x.dias : ''; }], ['Confiança do dado', r => ecConf(r).nivel], ['Ressalvas', r => ecConf(r).motivos.map(m => m.txt).join(' | ')]];
+    ['Origem lead time', r => r.ltFonte], ['MOQ', r => r.moq || ''], ['Múltiplo de compra', r => r.mult || ''], ['Compra calculada antes do ajuste', r => r.sugBruta], ['Origem custo', r => r.custoFonte], ['Motivo do bloqueio', r => r.bloqueado ? ecBloqMotivo(r) : ''], ['Dias de estoque registrados (90d)', r => { const x = ecRupt(r); return x ? x.obs : ''; }], ['Dias sem estoque (registrados)', r => { const x = ecRupt(r); return x ? x.dias : ''; }], ['Confiança do dado', r => ecConf(r).nivel], ['Ressalvas', r => ecConf(r).motivos.map(m => m.txt).join(' | ')]];
   (EC.bling?.depositos || []).forEach(d => cols.splice(7, 0, ['Dep. ' + d.nome, r => r.deps[d.id] ? r.deps[d.id][1] : 0]));
   const esc = v => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const csv = '﻿' + cols.map(c => c[0]).join(';') + '\n' + rs.map(r => cols.map(c => esc(typeof c[1](r) === 'number' ? String(c[1](r)).replace('.', ',') : c[1](r))).join(';')).join('\n');
@@ -4279,6 +4356,7 @@ function ecOpenCfg() {
         <div class="ec-subhead" style="margin-top:12px">Curva ABC (receita 90d acumulada)</div>
         ${inp('ec-abcA', Math.round(c.abc.A * 100), 'Corte A até', '%')}${inp('ec-abcB', Math.round(c.abc.B * 100), 'Corte B até', '%')}</div>
     </div>
+    <div class="card-body" style="padding-top:0">${ecBuyCfgHtml()}</div>
     <div class="ec-modal-foot"><button class="btn-sm" onclick="ecResetCfg()">Restaurar padrão</button><button class="btn-sm btn-primary" onclick="ecApplyCfg()">Salvar e recalcular</button></div>
   </div>`;
   m.style.display = 'flex';
@@ -4305,7 +4383,7 @@ function ecApplyCfg() {
   ecSaveCfg(); ecCloseCfg();
   if (blingMudou || !EC.bling) ecLoad(true); else { ecCompute(); ecRender(); }
 }
-function ecResetCfg() { const lt = ecCfg().ltSku; EC.cfg = { ...JSON.parse(JSON.stringify(EC_DEFAULT_CFG)), ltSku: lt }; ecSaveCfg(); ecOpenCfg(); }
+function ecResetCfg() { const lt = ecCfg().ltSku, cc = ecCfg().ccIds; EC.cfg = { ...JSON.parse(JSON.stringify(EC_DEFAULT_CFG)), ltSku: lt }; if (cc) EC.cfg.ccIds = cc; ecSaveCfg(); ecOpenCfg(); }
 
 // ───────── Notificações (sem repetição diária) ─────────
 // Guarda o último nível notificado por SKU/tipo. Notifica de novo só se piorar, mudar de faixa ou voltar após resolvido.
