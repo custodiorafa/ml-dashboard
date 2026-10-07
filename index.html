@@ -4505,18 +4505,51 @@ function ecEstrutura() {
   return m;
 }
 
+/* ─── Índice vivo de anúncios por SKU ──────────────────────────────────────
+   Por que não usar r.mlIds: o casamento gravado na linha é um retrato feito no
+   momento em que o Estoque & Compras carregou. Se o catálogo do ML ainda
+   estava entrando, a linha nasce "sem anúncio" e nunca se corrige sozinha.
+   Isso não é teórico: duas leituras seguidas deram 270 e 186 SKUs sem anúncio,
+   e cobertura de 52,8% contra 75,8% — com o MESMO catálogo de 613 anúncios.
+   Como a XP de quem cuida de anúncio sai daqui, a conciliação monta o índice
+   na hora de desenhar, sobre state.items como ele está agora. O cache é
+   invalidado pelo tamanho do catálogo. */
+function ecIndiceAnuncios() {
+  const n = (state.items || []).length;
+  if (EC._ixAnun && EC._ixAnunN === n) return EC._ixAnun;
+  const m = new Map();
+  (state.items || []).forEach(it => {
+    mlItemSkus(it).forEach(sku => {
+      const k = normSku(sku); if (!k) return;
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(it.id);
+    });
+  });
+  EC._ixAnun = m; EC._ixAnunN = n;
+  return m;
+}
+/* Anúncios próprios deste produto, pelo índice vivo. */
+function ecAnunciosProprios(r) { return ecIndiceAnuncios().get(normSku(r.sku || '')) || []; }
+
+/* O catálogo do ML terminou de entrar? Se não, nenhum número desta tela é
+   confiável e a tela diz isso em vez de mostrar porcentagem. */
+function ecCatalogoCompleto() {
+  const n = (state.items || []).length, t = state.totalItemCount;
+  return { n: n, total: t, ok: !!n && (!t || n >= t) };
+}
+
 /* Kits ATIVOS que consomem este produto. Kit inativo não cobre ninguém. */
 function ecKitsDe(r) {
   return (ecEstrutura().get(String(r.id)) || []).filter(k => k.ativo);
 }
-function ecKitsAnunciados(r) { return ecKitsDe(r).filter(k => (k.mlIds || []).length); }
+function ecKitsAnunciados(r) { return ecKitsDe(r).filter(k => ecAnunciosProprios(k).length); }
 
 /* Linhas do Bling ativas, com saldo, sem nenhum anúncio PRÓPRIO casado por SKU.
    Kits virtuais ficam de fora como linha: o estoque deles é derivado dos
    componentes, então "sem anúncio" ali não significa dinheiro parado. */
 function ecSemAnuncio() {
   return (EC.rows || []).filter(r =>
-    r.ativo && !r.isKit && r.total > 0 && !(r.mlIds || []).length
+    r.ativo && !r.isKit && r.total > 0 && !ecAnunciosProprios(r).length
   ).sort((a, b) => (b.valorCusto || 0) - (a.valorCusto || 0));
 }
 
@@ -4530,7 +4563,7 @@ function ecSemAnuncio() {
                cadastro. É esta lista que vira tarefa. */
 function ecClassCadastro(r) {
   const kits = ecKitsDe(r);
-  if (kits.length) return kits.some(k => (k.mlIds || []).length) ? 'kitok' : 'kitsem';
+  if (kits.length) return kits.some(k => ecAnunciosProprios(k).length) ? 'kitok' : 'kitsem';
   return (r.v90 || 0) > 0 ? 'vende' : 'buraco';
 }
 function ecSemAnuncioPor(classe) { return ecSemAnuncio().filter(r => ecClassCadastro(r) === classe); }
@@ -4547,7 +4580,7 @@ function ecCoberturaCadastro() {
   const univ = (EC.rows || []).filter(r => r.ativo && !r.isKit && r.total > 0);
   let vendavel = 0;
   univ.forEach(r => {
-    if ((r.mlIds || []).length) { vendavel++; return; }
+    if (ecAnunciosProprios(r).length) { vendavel++; return; }
     if (ecKitsAnunciados(r).length) vendavel++;
   });
   return { universo: univ.length, vendavel: vendavel,
@@ -4630,7 +4663,17 @@ function ecBaixaCsv(nome, cabecalho, linhas) {
    render próprio: não depende do depósito Full e não mexe em nada do que já
    existe na conciliação do Full. */
 function ecRenderCadastro(el) {
-  const v = EC.view; const a = ecCadastroAgg();
+  const v = EC.view;
+  const catPre = ecCatalogoCompleto();
+  if (!catPre.ok) {
+    el.innerHTML = `
+    <div class="card ec-sec">
+      <div class="card-head"><span class="card-title">🧾 Conciliação de cadastro — Bling × anúncios do Mercado Livre</span></div>
+      <div class="ec-muted" style="padding:16px 18px 20px">O catálogo do Mercado Livre ainda está entrando (${ecInt(catPre.n)}${catPre.total ? ' de ' + ecInt(catPre.total) : ''} anúncios). Enquanto não terminar, qualquer SKU ainda não lido apareceria aqui como <b>sem anúncio</b> — e o número sairia errado para baixo. A tela abre sozinha quando o carregamento fechar; se não abrir, recarregue a página.</div>
+    </div>`;
+    return;
+  }
+  const a = ecCadastroAgg();
   const q = (v.cadQ || '').trim().toUpperCase();
   const aba = v.cadAba || 'buraco';
   const verSku = aba === 'semsku';
