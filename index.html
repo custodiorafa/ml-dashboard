@@ -4484,13 +4484,74 @@ function ecConcAcao(r) {
      principal e faz a pessoa perder a confiança nela na primeira conferência.
    ───────────────────────────────────────────────────────────────────────── */
 
-/* Linhas do Bling ativas, com saldo, sem nenhum anúncio casado por SKU.
-   Kits virtuais ficam de fora: o estoque deles é derivado dos componentes,
-   então "sem anúncio" ali não significa dinheiro parado. */
+/* ─── Estrutura: quem é componente de kit ──────────────────────────────────
+   Produto que a Titanium só vende dentro de kit não tem anúncio próprio, e
+   isso está CORRETO — não é buraco de cadastro. O que define é a estrutura do
+   kit no Bling: comp = { t:'V'|'F', c:[[id do componente, qtd], …] }.
+   Montamos o índice reverso (componente -> kits que o consomem) uma vez por
+   carga e guardamos em EC._estrut, invalidado por EC.loadedAt. */
+function ecEstrutura() {
+  if (EC._estrut && EC._estrutEm === EC.loadedAt) return EC._estrut;
+  const m = new Map();
+  (EC.rows || []).forEach(k => {
+    const c = k.comp && k.comp.c; if (!c) return;
+    c.forEach(par => {
+      const id = String(par[0]);
+      if (!m.has(id)) m.set(id, []);
+      m.get(id).push(k);
+    });
+  });
+  EC._estrut = m; EC._estrutEm = EC.loadedAt;
+  return m;
+}
+
+/* Kits ATIVOS que consomem este produto. Kit inativo não cobre ninguém. */
+function ecKitsDe(r) {
+  return (ecEstrutura().get(String(r.id)) || []).filter(k => k.ativo);
+}
+function ecKitsAnunciados(r) { return ecKitsDe(r).filter(k => (k.mlIds || []).length); }
+
+/* Linhas do Bling ativas, com saldo, sem nenhum anúncio PRÓPRIO casado por SKU.
+   Kits virtuais ficam de fora como linha: o estoque deles é derivado dos
+   componentes, então "sem anúncio" ali não significa dinheiro parado. */
 function ecSemAnuncio() {
   return (EC.rows || []).filter(r =>
     r.ativo && !r.isKit && r.total > 0 && !(r.mlIds || []).length
   ).sort((a, b) => (b.valorCusto || 0) - (a.valorCusto || 0));
+}
+
+/* A classificação que decide se é problema ou não:
+   · kitok   — só é vendido em kit, e o kit ESTÁ anunciado. Correto, não é falha.
+   · kitsem  — é componente de kit, mas nenhum kit dele está anunciado. Não vende
+               nem avulso nem em kit: buraco, só que o conserto é anunciar o kit.
+   · vende   — avulso sem anúncio, mas com venda em 90d: sai por outro canal
+               (atacado, balcão, Shopee). Não é estoque parado.
+   · buraco  — avulso, sem anúncio e sem giro. Dinheiro parado por falta de
+               cadastro. É esta lista que vira tarefa. */
+function ecClassCadastro(r) {
+  const kits = ecKitsDe(r);
+  if (kits.length) return kits.some(k => (k.mlIds || []).length) ? 'kitok' : 'kitsem';
+  return (r.v90 || 0) > 0 ? 'vende' : 'buraco';
+}
+function ecSemAnuncioPor(classe) { return ecSemAnuncio().filter(r => ecClassCadastro(r) === classe); }
+
+function ecSomaCusto(l) { return l.reduce((s, r) => s + (r.valorCusto || 0), 0); }
+function ecSomaUn(l) { return l.reduce((s, r) => s + (r.total || 0), 0); }
+
+/* Cobertura de cadastro: do que está ativo e com saldo no Bling, quanto está
+   de fato vendável no ML — com anúncio próprio OU coberto por um kit anunciado.
+   É este o denominador honesto para "venda do estoque elegível": cobrar venda
+   de um SKU que não está anunciado em lugar nenhum pune quem cuida de anúncio
+   por uma falha de cadastro. */
+function ecCoberturaCadastro() {
+  const univ = (EC.rows || []).filter(r => r.ativo && !r.isKit && r.total > 0);
+  let vendavel = 0;
+  univ.forEach(r => {
+    if ((r.mlIds || []).length) { vendavel++; return; }
+    if (ecKitsAnunciados(r).length) vendavel++;
+  });
+  return { universo: univ.length, vendavel: vendavel,
+           pct: univ.length ? (vendavel / univ.length) * 100 : null };
 }
 
 /* O outro lado: anúncios do ML sem SKU preenchido. Não são "sem cadastro no
@@ -4511,23 +4572,34 @@ function ecAnunciosSemSku() {
 
 /* Totais para os cartões do topo. */
 function ecCadastroAgg() {
-  const sa = ecSemAnuncio(), ss = ecAnunciosSemSku();
-  return {
-    nSemAnuncio: sa.length,
-    unSemAnuncio: sa.reduce((s, r) => s + (r.total || 0), 0),
-    valorSemAnuncio: sa.reduce((s, r) => s + (r.valorCusto || 0), 0),
-    nSemSku: ss.length,
-    unSemSku: ss.reduce((s, r) => s + r.qtd, 0)
-  };
+  const ss = ecAnunciosSemSku();
+  const g = { kitok: [], kitsem: [], vende: [], buraco: [] };
+  ecSemAnuncio().forEach(r => g[ecClassCadastro(r)].push(r));
+  const a = { nSemSku: ss.length, unSemSku: ss.reduce((s, r) => s + r.qtd, 0),
+              cob: ecCoberturaCadastro(), g: g };
+  ['kitok', 'kitsem', 'vende', 'buraco'].forEach(k => {
+    a['n_' + k] = g[k].length; a['un_' + k] = ecSomaUn(g[k]); a['v_' + k] = ecSomaCusto(g[k]);
+  });
+  a.nFalta = g.kitsem.length + g.buraco.length;
+  a.vFalta = a.v_kitsem + a.v_buraco;
+  return a;
 }
 
 function ecExportSemAnuncio() {
+  const ROT = { kitok: 'vendido em kit anunciado', kitsem: 'componente de kit sem anuncio',
+                vende: 'vende fora do ML', buraco: 'parado por falta de anuncio' };
   const H = ['SKU', 'Descrição', 'Estoque total', 'Matriz', 'Full', 'Custo unit.',
-             'Valor a custo', 'Fornecedor', 'Vendas 90d', 'Última venda'];
-  const linhas = ecSemAnuncio().map(r => [
-    r.sku, r.nome, r.total, r.matriz, r.fullBling || 0, r.custo || '',
-    r.valorCusto || '', r.fornecedor || '', r.v90 != null ? r.v90 : '', r.ultimaVenda || ''
-  ]);
+             'Valor a custo', 'Fornecedor', 'Vendas 90d', 'Última venda',
+             'Classificação', 'Kits que consomem', 'Kits anunciados'];
+  const linhas = ecSemAnuncio().map(r => {
+    const kits = ecKitsDe(r);
+    return [
+      r.sku, r.nome, r.total, r.matriz, r.fullBling || 0, r.custo || '',
+      r.valorCusto || '', r.fornecedor || '', r.v90 != null ? r.v90 : '', r.ultimaVenda || '',
+      ROT[ecClassCadastro(r)] || '', kits.map(k => k.sku).join(' / '),
+      ecKitsAnunciados(r).map(k => k.sku).join(' / ')
+    ];
+  });
   ecBaixaCsv('bling-sem-anuncio-ml', H, linhas);
 }
 
@@ -4560,25 +4632,41 @@ function ecBaixaCsv(nome, cabecalho, linhas) {
 function ecRenderCadastro(el) {
   const v = EC.view; const a = ecCadastroAgg();
   const q = (v.cadQ || '').trim().toUpperCase();
-  const verSku = v.cadAba === 'semsku';
+  const aba = v.cadAba || 'buraco';
+  const verSku = aba === 'semsku';
+  const fq = r => !q || r.sku.includes(q) || (r.nome || '').toUpperCase().includes(q);
 
-  const sa = ecSemAnuncio().filter(r => !q || r.sku.includes(q) || (r.nome || '').toUpperCase().includes(q));
   const ss = ecAnunciosSemSku().filter(r => !q || String(r.id).includes(q) || r.title.toUpperCase().includes(q));
+  const lista = verSku ? ss : (a.g[aba] || []).filter(fq);
 
   const chips = Object.entries(EC_CONC_F).map(([k, [l, f]]) =>
     `<button class="ec-chip ${k === v.concF ? 'active' : ''}" onclick="ecConcSet('${k}')">${l} <span>${EC.rows.filter(r => !r.isKit && f(r)).length}</span></button>`).join('');
 
-  const linhasSA = sa.slice(0, 300).map(r => `<tr>
+  const VAZIO = {
+    buraco: 'Nenhum produto avulso está parado por falta de anúncio. Cadastro em dia.',
+    kitsem: 'Todo componente de kit tem pelo menos um kit anunciado.',
+    kitok: 'Nenhum produto é vendido exclusivamente dentro de kit anunciado.',
+    vende: 'Nenhum produto sem anúncio está vendendo por outro canal.'
+  };
+
+  const linhasSA = lista.slice(0, 300).map(r => {
+    const kits = ecKitsDe(r), kAn = ecKitsAnunciados(r);
+    const estr = !kits.length ? '<span class="ec-sub">avulso</span>'
+      : kAn.length
+        ? `<span class="ec-desc" style="max-width:200px" title="${ecEsc(kAn.map(k => k.sku + ' — ' + k.nome).join(' | '))}">em ${kAn.length === 1 ? 'kit' : kAn.length + ' kits'} anunciado${kAn.length > 1 ? 's' : ''}: ${ecEsc(kAn.map(k => k.sku).join(', '))}</span>`
+        : `<span class="ec-desc" style="max-width:200px" title="${ecEsc(kits.map(k => k.sku + ' — ' + k.nome).join(' | '))}">kit sem anúncio: ${ecEsc(kits.map(k => k.sku).join(', '))}</span>`;
+    return `<tr>
     <td class="mono">${ecEsc(r.sku)}</td>
     <td><span class="ec-desc" title="${ecEsc(r.nome)}">${ecEsc(r.nome)}</span></td>
     <td class="r mono">${ecInt(r.total)}</td>
     <td class="r mono">${ecInt(r.matriz)}</td>
-    <td class="r mono">${r.fullBling ? ecInt(r.fullBling) : '—'}</td>
     <td class="r mono">${r.custo ? ecMoney(r.custo) : '—'}</td>
     <td class="r mono"><b>${r.valorCusto ? ecMoney(r.valorCusto) : '—'}</b></td>
-    <td><span class="ec-desc" style="max-width:180px" title="${ecEsc(r.fornecedor || '')}">${ecEsc(r.fornecedor || '—')}</span></td>
-    <td class="ec-sub">${r.ultimaVenda ? 'última venda ' + ecEsc(r.ultimaVenda) : 'nunca vendeu'}</td>
-  </tr>`).join('') || `<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text2)">Nenhum produto ativo com saldo está sem anúncio. Cadastro em dia.</td></tr>`;
+    <td>${estr}</td>
+    <td><span class="ec-desc" style="max-width:170px" title="${ecEsc(r.fornecedor || '')}">${ecEsc(r.fornecedor || '—')}</span></td>
+    <td class="r mono">${r.v90 > 0 ? ecInt(r.v90) : '—'}</td>
+    <td class="ec-sub">${r.ultimaVenda ? ecEsc(r.ultimaVenda) : 'nunca vendeu'}</td>
+  </tr>`; }).join('') || `<tr><td colspan="10" style="padding:24px;text-align:center;color:var(--text2)">${VAZIO[aba] || 'Nada nesta lista.'}</td></tr>`;
 
   const linhasSS = ss.slice(0, 300).map(r => `<tr>
     <td class="mono">${ecEsc(r.id)}</td>
@@ -4588,15 +4676,19 @@ function ecRenderCadastro(el) {
     <td class="r mono">${ecMoney(r.preco)}</td>
   </tr>`).join('') || `<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text2)">Todos os anúncios têm SKU preenchido.</td></tr>`;
 
+  const cob = a.cob;
+  const ab = (k, rot, n) => `<button class="ec-chip ${aba === k ? 'active' : ''}" onclick="ecCadAba('${k}')">${rot} <span>${n}</span></button>`;
+
   el.innerHTML = `
   <div class="card ec-sec">
     <div class="card-head"><span class="card-title">🧾 Conciliação de cadastro — Bling × anúncios do Mercado Livre</span></div>
     <div class="ec-strip">
-      ${ecStat('Ativos sem anúncio', ecInt(a.nSemAnuncio), ecInt(a.unSemAnuncio) + ' un paradas')}
-      ${ecStat('Parado a custo', ecMoneyK(a.valorSemAnuncio), 'não vende porque não está anunciado')}
+      ${ecStat('Cobertura de cadastro', cob.pct === null ? 'N.D.' : cob.pct.toFixed(1) + '%', ecInt(cob.vendavel) + ' de ' + ecInt(cob.universo) + ' ativos com saldo estão vendáveis no ML')}
+      ${ecStat('Falta cadastro', ecInt(a.nFalta), ecMoneyK(a.vFalta) + ' a custo · nem avulso nem em kit anunciado')}
+      ${ecStat('Vendido só em kit', ecInt(a.n_kitok), ecMoneyK(a.v_kitok) + ' a custo · correto, não é falha')}
       ${ecStat('Anúncios sem SKU', ecInt(a.nSemSku), 'impossível conciliar — preencher o SKU')}
     </div>
-    <div class="ec-muted" style="padding:0 18px 12px">Universo: produtos com situação <b>Ativo</b> no Bling e saldo maior que zero, casados com os anúncios por SKU. Kits virtuais ficam de fora porque o estoque deles vem dos componentes. Anúncio sem SKU <b>não</b> entra como "sem anúncio": vai para a segunda lista, porque dali não dá para afirmar nada.</div>
+    <div class="ec-muted" style="padding:0 18px 12px">Universo: produtos com situação <b>Ativo</b> no Bling e saldo maior que zero, casados com os anúncios por SKU. Quem é vendido <b>só dentro de kit</b> não tem anúncio próprio de propósito: a estrutura do kit no Bling é lida e, se o kit está anunciado, o componente conta como vendável e sai da lista de falhas. Sobram duas falhas reais: avulso sem anúncio e sem giro, e componente cujo kit também não está anunciado. Quem está sem anúncio mas vendeu nos últimos 90 dias sai por outro canal (atacado, balcão, Shopee) e fica numa lista separada — não é estoque parado. Anúncio sem SKU <b>não</b> entra como "sem anúncio": dali não dá para afirmar nada, e o conserto é preencher o SKU.</div>
   </div>
   <div class="card">
     <div class="ec-toolbar">
@@ -4608,15 +4700,18 @@ function ecRenderCadastro(el) {
       </div>
     </div>
     <div class="ec-chips" style="padding:0 18px 10px">
-      <button class="ec-chip ${verSku ? '' : 'active'}" onclick="ecCadAba('semanuncio')">Ativo no Bling sem anúncio <span>${sa.length}</span></button>
-      <button class="ec-chip ${verSku ? 'active' : ''}" onclick="ecCadAba('semsku')">Anúncios sem SKU <span>${ss.length}</span></button>
+      ${ab('buraco', 'Avulso parado por falta de anúncio', a.n_buraco)}
+      ${ab('kitsem', 'Componente sem kit anunciado', a.n_kitsem)}
+      ${ab('vende', 'Vende fora do ML', a.n_vende)}
+      ${ab('kitok', 'Só em kit anunciado (OK)', a.n_kitok)}
+      ${ab('semsku', 'Anúncios sem SKU', a.nSemSku)}
     </div>
-    <div class="ec-table-wrap"><table class="t ec-table" style="min-width:${verSku ? 900 : 1200}px"><thead><tr>
+    <div class="ec-table-wrap"><table class="t ec-table" style="min-width:${verSku ? 900 : 1340}px"><thead><tr>
       ${verSku
         ? '<th>Anúncio</th><th>Título</th><th>Situação</th><th class="r">Estoque</th><th class="r">Preço</th>'
-        : '<th>SKU</th><th>Descrição</th><th class="r">Estoque total</th><th class="r">Matriz</th><th class="r">Full</th><th class="r">Custo unit.</th><th class="r">Valor a custo</th><th>Fornecedor</th><th>Giro</th>'}
+        : '<th>SKU</th><th>Descrição</th><th class="r">Estoque total</th><th class="r">Matriz</th><th class="r">Custo unit.</th><th class="r">Valor a custo</th><th>Estrutura</th><th>Fornecedor</th><th class="r">Vendas 90d</th><th>Última venda</th>'}
     </tr></thead><tbody>${verSku ? linhasSS : linhasSA}</tbody></table></div>
-    <div class="ec-pager"><span class="ec-muted">${ecInt(verSku ? ss.length : sa.length)} ${verSku ? 'anúncios' : 'SKUs'}${(verSku ? ss.length : sa.length) > 300 ? ' (mostrando 300 — exporte o CSV para ver todos)' : ''}</span></div>
+    <div class="ec-pager"><span class="ec-muted">${ecInt(lista.length)} ${verSku ? 'anúncios' : 'SKUs'}${lista.length > 300 ? ' (mostrando 300 — exporte o CSV para ver todos)' : ''}</span></div>
   </div>`;
 
   const qi = document.getElementById('ec-cadq');
