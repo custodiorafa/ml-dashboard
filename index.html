@@ -7302,6 +7302,8 @@ function pvPendencias(ocs, hoje) {
     if (o.status_ocorrencia === 'opened' && !c.responsabilidade)
       acoes.push('Reclamação aberta sem responsabilidade definida');
     if (!c.responsabilidade) acoes.push('Responsabilidade não classificada');
+    /* Cancelamento sem reclamação não tem devolução para conferir: cobrar
+       conferência física aqui encheria a fila de tarefa impossível. */
     if (c.responsabilidade === 'Titanium' && !c.causa_raiz) acoes.push('Causa da Titanium sem causa raiz');
     if (!c.tarifa_recuperada || c.tarifa_recuperada === 'Pendente')
       acoes.push('Tarifa sem conciliação no Billing');
@@ -7677,6 +7679,8 @@ function pvBarraTopo(A, pend, alertas) {
       'Última sincronização ML: <b>' + (m.ml ? new Date(m.ml).toLocaleString('pt-BR') : 'nunca') + '</b> · ' +
       'Billing: <b>' + (m.billing ? new Date(m.billing).toLocaleString('pt-BR') : 'não conciliado') + '</b> · ' +
       'Bling: <b>' + (typeof EC !== 'undefined' && EC.loadedAt ? new Date(EC.loadedAt).toLocaleString('pt-BR') : 'não carregado') + '</b> · ' +
+      (m.cancelamentosVarridos != null ? 'cancelados varridos: <b>' + ecInt(m.cancelamentosVarridos) + '</b>' +
+        (m.cancelamentosTruncado ? ' <span style="color:#e5a23d">(acima de 1.000 — a busca de pedidos não pagina além disso, a taxa de cancelamento sai subestimada)</span>' : '') + ' · ' : '') +
       (e.aguardandoValidacao ? '<b>' + e.aguardandoValidacao + '</b> aguardando validação' : 'tudo validado') +
     '</div></div>';
 }
@@ -7975,7 +7979,7 @@ function pvExportar() {
     'tarifa_ml_original', 'tarifa_estornada', 'bonificacao_ml', 'perda_liquida', 'perda_minima',
     'valor_recuperavel', 'responsabilidade', 'causa_raiz', 'responsavel_interno', 'situacao_fisica',
     'tarifa_recuperada', 'classificacao', 'pendencias_do_calculo', 'leitura_incompleta',
-    'recurso_do_claim', 'atualizado_por', 'data_ultima_atualizacao'];
+    'recurso_do_claim', 'origem', 'atualizado_por', 'data_ultima_atualizacao'];
   var linhas = ocs.map(function (o) {
     var c = o.classificacao || {}, p = o._perda || {};
     return [o.id_ocorrencia, o.order_id, o.claim_id, o.return_id, o.shipment_id, o.payment_id, o.item_id, o.sku,
@@ -7986,7 +7990,8 @@ function pvExportar() {
       p.valor == null ? 'N.D.' : p.valor, p.piso, p.recuperavel == null ? 'N.D.' : p.recuperavel,
       c.responsabilidade, c.causa_raiz, c.responsavel_interno, c.situacao_fisica,
       c.tarifa_recuperada, c.classificacao, (p.faltam || []).join(' / '),
-      (o.incompleto || []).join(' / '), o.recurso_do_claim, c.atualizado_por, o.data_ultima_atualizacao];
+      (o.incompleto || []).join(' / '), o.recurso_do_claim,
+      o.origem || 'reclamação do Mercado Livre', c.atualizado_por, o.data_ultima_atualizacao];
   });
   ecBaixaCsv('posvenda-ml', H, linhas);
 }
