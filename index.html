@@ -754,6 +754,18 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .pr-cand { border-style:dashed; }
 @media (max-width:1200px) { .pr-kpis { grid-template-columns:repeat(4,1fr); } .pr-ops { grid-template-columns:repeat(2,1fr); } }
 @media (max-width:700px) { .pr-kpis { grid-template-columns:repeat(2,1fr); } .pr-ops { grid-template-columns:1fr; } }
+
+/* ─── Pós-Venda ML ─────────────────────────────────────────────────────── */
+.pv-drawer-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:900}
+.pv-drawer-pane{position:fixed;top:0;right:0;bottom:0;width:min(760px,96vw);overflow:auto;
+  background:var(--bg1);border-left:1px solid var(--bd);z-index:901;box-shadow:-8px 0 32px rgba(0,0,0,.35)}
+.pv-timeline{display:flex;flex-direction:column;gap:0;border-left:2px solid var(--bd);padding-left:14px;margin-left:6px}
+.pv-step{position:relative;padding:5px 0;font-size:12px;display:flex;justify-content:space-between;gap:10px}
+.pv-step::before{content:'';position:absolute;left:-21px;top:11px;width:9px;height:9px;border-radius:50%;
+  background:var(--bg2);border:2px solid var(--bd)}
+.pv-step.ok::before{background:#C8792B;border-color:#C8792B}
+.pv-step.pend span,.pv-step.pend em{color:var(--text2)}
+.pv-step em{font-style:normal;font-variant-numeric:tabular-nums;color:var(--text2)}
 </style>
 </head>
 <body>
@@ -904,6 +916,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
     <div class="tab" onclick="goTab(this,'pricing');pxOpen()">💰 Precificação</div>
     <div class="tab" onclick="goTab(this,'demand')">📈 Demanda & Trends</div>
     <div class="tab" onclick="goTab(this,'compras');ecOpen()">🧭 Estoque &amp; Compras</div>
+    <div class="tab" onclick="goTab(this,'posvenda');pvOpen()">↩️ Pós-Venda</div>
     <div class="tab" onclick="goTab(this,'promo');prOpen()">🏷 Promoções &amp; Ofertas</div>
     <div class="tab" onclick="goTab(this,'competitors')">👁 Concorrentes</div>
     <div class="tab" onclick="goTab(this,'alerts')">🔔 Alertas <span class="tab-count red" id="alert-badge">0</span></div>
@@ -1261,6 +1274,17 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 
     <!-- ═══ COMPETITORS ═══ -->
     <!-- ═══ ESTOQUE & COMPRAS ═══ -->
+    <div class="page" id="page-posvenda">
+      <div class="page-header" style="flex-wrap:wrap;gap:12px">
+        <div>
+          <div class="page-title">Pós-Venda <span>ML</span></div>
+          <div class="page-meta">Devoluções, cancelamentos e reclamações — Mercado Livre + Bling</div>
+        </div>
+      </div>
+      <div id="pv-corpo"></div>
+      <div id="pv-drawer" style="display:none"></div>
+    </div>
+
     <div class="page" id="page-compras">
       <div class="page-header" style="flex-wrap:wrap;gap:12px">
         <div>
@@ -7024,6 +7048,940 @@ async function loadPeriodKpis(p){
   set('pk-visits', tv.toLocaleString('pt-BR'), '<span class="neutral">' + Math.round(tv/days).toLocaleString('pt-BR') + ' por dia</span>');
   set('pk-conv', conv.toFixed(2).replace('.',',') + '%', '<span class="neutral">' + nPed.toLocaleString('pt-BR') + ' pedidos ÷ ' + tv.toLocaleString('pt-BR') + ' visitas</span>');
 }
+
+/* ═══ MÓDULO PÓS-VENDA ML ═══ */
+/* ═══════════════════════════════════════════════════════════════════════════
+   PÓS-VENDA ML — motor de cálculo
+   Funções puras. Tudo que vira número na tela passa por aqui, para poder
+   ser testado sem navegador.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+var PV_TIPOS = ['Cancelamento', 'Reclamação', 'Devolução', 'Troca', 'Mediação', 'Full', 'Atraso', 'Outro'];
+var PV_RESP = ['Cliente', 'Mercado Livre', 'Transportadora', 'Titanium', 'Fornecedor', 'Não identificado'];
+var PV_CAUSA = ['Cadastro/anúncio', 'Aplicação incorreta', 'Produto defeituoso', 'Produto incompatível',
+  'Produto errado', 'Quantidade errada', 'Falta de produto', 'Embalagem', 'Etiqueta', 'Estoque',
+  'Expedição', 'Recebimento', 'Qualidade', 'Outro'];
+var PV_PESSOAS = ['Lucas', 'Renato', 'Kauan', 'William', 'Fornecedor', 'Gestão', 'Não atribuído'];
+var PV_FISICA = ['Não retornou', 'Retornou apto', 'Retornou avariado', 'Retornou incompleto',
+  'Retornou produto diferente', 'Perda total', 'Aguardando conferência'];
+
+/* Quais causas internas pertencem a quem — usado pela camada do Titanium XP.
+   A lista vem da seção 16 do escopo, não de dedução minha. */
+var PV_CAUSA_DONO = {
+  'Cadastro/anúncio': 'Lucas', 'Aplicação incorreta': 'Lucas', 'Produto incompatível': 'Lucas',
+  'Embalagem': 'Kauan', 'Etiqueta': 'Kauan', 'Expedição': 'Kauan',
+  'Produto errado': 'Kauan', 'Quantidade errada': 'Kauan',
+  'Estoque': 'William', 'Recebimento': 'William', 'Falta de produto': 'William',
+  'Produto defeituoso': 'Fornecedor', 'Qualidade': 'Fornecedor',
+};
+
+/* Cuidado: Number(null) é 0 e Number('') é 0 em JavaScript. Sem esta guarda,
+   "campo ausente" vira "zero reais" — e um custo ausente lido como zero é o
+   erro que faz o painel dizer que não houve prejuízo quando ninguém conferiu. */
+function pvNum(v) {
+  if (v === null || v === undefined || v === '') return null;
+  var n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function pvDia(iso) { return iso ? String(iso).slice(0, 10) : null; }
+function pvDias(iso, ref) {
+  if (!iso) return null;
+  var a = new Date(iso).getTime(), b = (ref ? new Date(ref) : new Date()).getTime();
+  if (!Number.isFinite(a)) return null;
+  return Math.floor((b - a) / 86400000);
+}
+
+/* ─── Perda financeira (seção 7) ───────────────────────────────────────────
+   A regra que importa: reembolsar o cliente NÃO é perder o produto. Se a peça
+   voltou apta, o custo dela é recuperável e não entra como prejuízo. Só a
+   conferência física diz isso, e enquanto ela não acontece o número é N.D. —
+   nunca zero, nunca o valor cheio.
+
+   Devolve sempre:
+     valor      — perda líquida, ou null quando falta informação
+     piso       — o que já é perda certa hoje (serve para priorizar)
+     recuperavel— custo que volta para o estoque
+     faltam     — o que impede fechar o número, em português
+   ───────────────────────────────────────────────────────────────────────── */
+function pvPerda(o, custoUnitario) {
+  var c = o.classificacao || {};
+  var faltam = [];
+
+  var qtd = pvNum(o.quantidade_devolvida) || pvNum(o.quantidade) || 1;
+  var custoProduto = pvNum(custoUnitario) != null ? pvNum(custoUnitario) * qtd : null;
+
+  /* 1. Produto: perdido, recuperado, ou ainda não se sabe. */
+  var perdaProduto = null, recuperavel = null;
+  var f = c.situacao_fisica || null;
+  if (!f) { faltam.push('conferência física do produto'); }
+  else if (f === 'Retornou apto') { perdaProduto = 0; recuperavel = custoProduto; }
+  else if (f === 'Perda total' || f === 'Não retornou' || f === 'Retornou produto diferente') {
+    perdaProduto = custoProduto; recuperavel = 0;
+    if (custoProduto == null) faltam.push('custo do produto (sem SKU no Bling)');
+  } else if (f === 'Aguardando conferência') { faltam.push('conferência física do produto'); }
+  else {
+    /* avariado ou incompleto: só uma pessoa sabe quanto ainda vale */
+    var rec = pvNum(c.valor_recuperavel_estoque);
+    if (rec == null) faltam.push('valor recuperável do item avariado/incompleto');
+    else if (custoProduto == null) faltam.push('custo do produto (sem SKU no Bling)');
+    else { recuperavel = rec; perdaProduto = custoProduto - rec; }
+  }
+
+  /* 2. Frete reverso: vem da API, é custo certo. */
+  var frete = pvNum(o.custo_frete_reverso);
+  if (frete == null) faltam.push('custo do frete reverso');
+
+  /* 3. Tarifa: só o Billing diz se voltou. Não inferir pelo status da
+        devolução — é exatamente o que a seção 8 proíbe. */
+  var tarifaOrig = pvNum(o.tarifa_ml_original);
+  var tarifaPerdida = null;
+  var tr = c.tarifa_recuperada || null;
+  if (tr === 'Sim') tarifaPerdida = 0;
+  else if (tr === 'Não') tarifaPerdida = tarifaOrig;
+  else if (tr === 'Não aplicável') tarifaPerdida = 0;
+  else if (tr === 'Parcial') {
+    var nr = pvNum(c.valor_nao_recuperado);
+    if (nr == null) faltam.push('valor da tarifa não recuperada');
+    else tarifaPerdida = nr;
+  } else faltam.push('conciliação da tarifa no Billing');
+  if (tarifaPerdida != null && tarifaOrig == null && tr === 'Não') {
+    tarifaPerdida = null; faltam.push('tarifa original do pedido');
+  }
+
+  var outros = pvNum(c.outros_custos) || 0;
+  var bonificacao = pvNum(o.bonificacao_ml) || 0;
+
+  /* Piso: a parte que já é perda certa, mesmo com pendências. */
+  var piso = (frete || 0) + outros - bonificacao
+           + (perdaProduto || 0) + (tarifaPerdida || 0);
+
+  var completo = faltam.length === 0;
+  return {
+    valor: completo ? (perdaProduto + frete + tarifaPerdida + outros - bonificacao) : null,
+    piso: piso,
+    recuperavel: recuperavel,
+    perdaProduto: perdaProduto,
+    frete: frete,
+    tarifaPerdida: tarifaPerdida,
+    faltam: faltam,
+  };
+}
+
+/* ─── Consolidação por pedido (seções 3 e 20) ──────────────────────────────
+   Um pedido pode ter reclamação, devolução e cancelamento. São três eventos,
+   UMA perda. Preserva cada ocorrência, mas soma dinheiro uma vez por pedido,
+   pegando a ocorrência de maior piso — a que carrega o custo real. */
+function pvConsolidar(ocs) {
+  var porPedido = {};
+  ocs.forEach(function (o) {
+    var k = o.grupo_order_id || o.id_ocorrencia;
+    (porPedido[k] = porPedido[k] || []).push(o);
+  });
+  return Object.keys(porPedido).map(function (k) {
+    var g = porPedido[k];
+    var principal = g.slice().sort(function (a, b) {
+      return (b._perda && b._perda.piso || 0) - (a._perda && a._perda.piso || 0);
+    })[0];
+    return { order_id: k, ocorrencias: g, principal: principal, eventos: g.length };
+  });
+}
+
+/* ─── Agregados dos cartões (seções 9 e 10) ────────────────────────────── */
+function pvAgg(ocs, base) {
+  base = base || {};
+  var grupos = pvConsolidar(ocs);
+  var A = {
+    ocorrencias: ocs.length,
+    pedidosAfetados: grupos.length,
+    cancelamentos: 0, reclamacoes: 0, devolucoes: 0, mediacoes: 0,
+    abertas: 0,
+    valorAfetado: 0, valorReembolsado: 0, freteReverso: 0,
+    tarifaOriginal: 0, tarifaNaoRecuperada: 0, bonificacoes: 0,
+    perdaFechada: 0, perdaPiso: 0, recuperavel: 0,
+    semPerdaFechada: 0,
+  };
+  ocs.forEach(function (o) {
+    var t = o.tipo_ocorrencia;
+    if (t === 'Cancelamento') A.cancelamentos++;
+    else if (t === 'Devolução') A.devolucoes++;
+    else if (t === 'Mediação') A.mediacoes++;
+    else A.reclamacoes++;
+    if (o.status_ocorrencia === 'opened') A.abertas++;
+    A.tarifaOriginal += pvNum(o.tarifa_ml_original) || 0;
+  });
+  /* Dinheiro só uma vez por pedido. */
+  grupos.forEach(function (g) {
+    var o = g.principal, p = o._perda || {};
+    A.valorAfetado += pvNum(o.valor_venda) || 0;
+    A.valorReembolsado += pvNum(o.valor_reembolsado) || 0;
+    A.freteReverso += pvNum(o.custo_frete_reverso) || 0;
+    A.bonificacoes += pvNum(o.bonificacao_ml) || 0;
+    A.perdaPiso += p.piso || 0;
+    A.recuperavel += p.recuperavel || 0;
+    if (p.tarifaPerdida != null) A.tarifaNaoRecuperada += p.tarifaPerdida;
+    if (p.valor != null) A.perdaFechada += p.valor; else A.semPerdaFechada++;
+  });
+
+  /* Taxas. Denominador ausente vira null, não zero — uma taxa inventada é
+     pior que taxa nenhuma, porque vira meta. */
+  var pedidos = pvNum(base.pedidosTotais), pagos = pvNum(base.pedidosPagos);
+  A.taxaCancelamento = pedidos ? A.cancelamentos / pedidos : null;
+  A.taxaReclamacao = pagos ? (A.reclamacoes + A.mediacoes + A.devolucoes) / pagos : null;
+  A.taxaDevolucao = pagos ? A.devolucoes / pagos : null;
+
+  var classificadas = ocs.filter(function (o) { return o.classificacao && o.classificacao.responsabilidade; });
+  var titanium = classificadas.filter(function (o) { return o.classificacao.responsabilidade === 'Titanium'; });
+  A.classificadas = classificadas.length;
+  A.taxaResponsabilidadeTitanium = classificadas.length ? titanium.length / classificadas.length : null;
+  A.custoMedioOcorrencia = grupos.length ? A.perdaPiso / grupos.length : null;
+  var fat = pvNum(base.faturamento);
+  A.impactoFaturamento = fat ? A.perdaPiso / fat : null;
+  A.pedidosTotais = pedidos; A.pedidosPagos = pagos; A.faturamento = fat;
+  return A;
+}
+
+/* ─── Pareto (seção 11) ──────────────────────────────────────────────────── */
+function pvPareto(ocs, campo, peso) {
+  var m = {};
+  ocs.forEach(function (o) {
+    var k = (campo === 'motivo') ? (o.motivo_ml || o.reason_id || 'Sem motivo informado')
+      : (campo === 'responsabilidade') ? ((o.classificacao && o.classificacao.responsabilidade) || 'Não classificada')
+      : (campo === 'causa') ? ((o.classificacao && o.classificacao.causa_raiz) || 'Sem causa')
+      : (o[campo] || '—');
+    var v = peso ? ((o._perda && o._perda.piso) || 0) : 1;
+    m[k] = (m[k] || 0) + v;
+  });
+  var tot = Object.values(m).reduce(function (s, x) { return s + x; }, 0);
+  var l = Object.keys(m).map(function (k) { return { chave: k, valor: m[k] }; })
+    .sort(function (a, b) { return b.valor - a.valor; });
+  var ac = 0;
+  l.forEach(function (r) { r.pct = tot ? r.valor / tot : 0; ac += r.pct; r.acumulado = ac; });
+  return { total: tot, linhas: l };
+}
+
+/* ─── Reincidência por SKU (seção 15) ────────────────────────────────────── */
+function pvReincidencia(ocs, vendasPorSku, hoje) {
+  var m = {};
+  ocs.forEach(function (o) {
+    if (!o.sku) return;
+    var r = m[o.sku] || (m[o.sku] = { sku: o.sku, descricao: o.descricao, n: 0, d30: 0, d60: 0, d90: 0,
+      devolucoes: 0, cancelamentos: 0, reclamacoes: 0, perda: 0, motivos: {} });
+    r.n++;
+    var d = pvDias(o.data_ocorrencia, hoje);
+    if (d != null) { if (d <= 30) r.d30++; if (d <= 60) r.d60++; if (d <= 90) r.d90++; }
+    if (o.tipo_ocorrencia === 'Devolução') r.devolucoes++;
+    else if (o.tipo_ocorrencia === 'Cancelamento') r.cancelamentos++;
+    else r.reclamacoes++;
+    r.perda += (o._perda && o._perda.piso) || 0;
+    var mo = o.motivo_ml || o.reason_id || 'Sem motivo';
+    r.motivos[mo] = (r.motivos[mo] || 0) + 1;
+  });
+  return Object.values(m).map(function (r) {
+    var vendas = vendasPorSku && pvNum(vendasPorSku[r.sku]);
+    r.vendas = vendas;
+    r.taxa = vendas ? r.n / vendas : null;
+    var top = Object.keys(r.motivos).sort(function (a, b) { return r.motivos[b] - r.motivos[a]; })[0];
+    r.motivoPrincipal = top || null;
+    r.motivoPrincipalN = top ? r.motivos[top] : 0;
+    /* Problema estrutural = o MESMO motivo repetindo. Três ocorrências por
+       três motivos diferentes é azar; três pelo mesmo motivo é o produto. */
+    r.estrutural = r.motivoPrincipalN >= 3;
+    return r;
+  }).sort(function (a, b) { return b.n - a.n || b.perda - a.perda; });
+}
+
+/* ─── Fila de pendências (seção 13) ──────────────────────────────────────── */
+function pvPendencias(ocs, hoje) {
+  var out = [];
+  ocs.forEach(function (o) {
+    var c = o.classificacao || {};
+    var acoes = [];
+    if (o.status_devolucao && /delivered|closed/.test(String(o.status_devolucao)) &&
+        (!c.situacao_fisica || c.situacao_fisica === 'Aguardando conferência'))
+      acoes.push('Devolução recebida sem conferência');
+    if (o.status_ocorrencia === 'opened' && !c.responsabilidade)
+      acoes.push('Reclamação aberta sem responsabilidade definida');
+    if (!c.responsabilidade) acoes.push('Responsabilidade não classificada');
+    if (c.responsabilidade === 'Titanium' && !c.causa_raiz) acoes.push('Causa da Titanium sem causa raiz');
+    if (!c.tarifa_recuperada || c.tarifa_recuperada === 'Pendente')
+      acoes.push('Tarifa sem conciliação no Billing');
+    if (c.classificacao && c.classificacao !== 'Validada' && c.responsabilidade)
+      acoes.push('Classificação aguardando validação');
+    if (o.status_ocorrencia === 'opened' && !o.resolucao) acoes.push('Sem resolução final');
+    if (c.incoerencia) acoes.push('Incoerência: ' + c.incoerencia);
+    if (!acoes.length) return;
+    out.push({
+      id: o.id_ocorrencia, order_id: o.order_id, sku: o.sku, descricao: o.descricao,
+      valorEmRisco: (o._perda && o._perda.piso) || pvNum(o.valor_venda) || 0,
+      diasAberto: pvDias(o.data_ocorrencia, hoje),
+      acoes: acoes, responsavel: c.responsavel_interno || null,
+    });
+  });
+  return out.sort(function (a, b) { return b.valorEmRisco - a.valorEmRisco; });
+}
+
+/* ─── Alertas (seção 14) ─────────────────────────────────────────────────── */
+function pvAlertas(ocs, reinc, agg, metaCusto, hoje) {
+  var A = [];
+  var alto = ocs.filter(function (o) { return ((o._perda && o._perda.piso) || 0) >= 500; });
+  alto.forEach(function (o) {
+    A.push({ nivel: 'critico', titulo: 'Devolução de alto valor',
+      detalhe: (o.sku || o.order_id) + ' — ' + Math.round((o._perda.piso)) + ' em risco', id: o.id_ocorrencia });
+  });
+  reinc.filter(function (r) { return r.estrutural; }).forEach(function (r) {
+    A.push({ nivel: 'critico', titulo: 'SKU com possível problema estrutural',
+      detalhe: r.sku + ' — ' + r.motivoPrincipalN + 'x o mesmo motivo: ' + r.motivoPrincipal, sku: r.sku });
+  });
+  ocs.forEach(function (o) {
+    var c = o.classificacao || {};
+    if (o.status_devolucao && /delivered/.test(String(o.status_devolucao)) &&
+        (!c.situacao_fisica || c.situacao_fisica === 'Aguardando conferência'))
+      A.push({ nivel: 'critico', titulo: 'Devolução recebida sem conferência',
+        detalhe: (o.sku || '') + ' — pedido ' + o.order_id, id: o.id_ocorrencia });
+    var d = pvDias(o.data_ocorrencia, hoje);
+    if (o.status_ocorrencia === 'opened' && d != null && d >= 7)
+      A.push({ nivel: 'atencao', titulo: 'Reclamação aberta há muito tempo',
+        detalhe: d + ' dias — pedido ' + o.order_id, id: o.id_ocorrencia });
+  });
+  if (metaCusto != null && agg.impactoFaturamento != null && agg.impactoFaturamento > metaCusto)
+    A.push({ nivel: 'critico', titulo: 'Custo de pós-venda acima da meta',
+      detalhe: (agg.impactoFaturamento * 100).toFixed(2) + '% do faturamento (meta ' + (metaCusto * 100).toFixed(2) + '%)' });
+  return A;
+}
+
+/* ─── Camada do Titanium XP (seção 16) ──────────────────────────────────────
+   Só passa o que foi VALIDADO por uma pessoa, é da Titanium, tem causa raiz e
+   cai dentro da competência. Tudo o mais fica de fora — a seção 5 é explícita:
+   reason_id não condena ninguém. */
+function pvEventosXP(ocs, competencia) {
+  return ocs.filter(function (o) {
+    var c = o.classificacao;
+    if (!c || c.classificacao !== 'Validada') return false;
+    if (c.responsabilidade !== 'Titanium') return false;
+    if (!c.causa_raiz) return false;
+    if (competencia && String(o.data_ocorrencia || '').slice(0, 7) !== competencia) return false;
+    return true;
+  }).map(function (o) {
+    var c = o.classificacao;
+    return {
+      id_ocorrencia: o.id_ocorrencia, competencia: String(o.data_ocorrencia || '').slice(0, 7),
+      sku: o.sku, causa_raiz: c.causa_raiz,
+      /* Responsável validado manda. O dono sugerido pela causa é só
+         conferência — nunca substitui a pessoa que validou. */
+      responsavel: c.responsavel_interno || null,
+      responsavelSugerido: PV_CAUSA_DONO[c.causa_raiz] || null,
+      divergeDoSugerido: !!(c.responsavel_interno && PV_CAUSA_DONO[c.causa_raiz]
+        && c.responsavel_interno !== PV_CAUSA_DONO[c.causa_raiz]),
+      perda: (o._perda && o._perda.valor), perdaPiso: (o._perda && o._perda.piso),
+      validado_por: c.atualizado_por || null, validado_em: c.atualizado_em || null,
+    };
+  });
+}
+
+/* Anexa o cálculo de perda a cada ocorrência, com o custo vindo do Bling. */
+function pvPreparar(ocs, custoPorSku) {
+  ocs.forEach(function (o) {
+    var custo = o.sku && custoPorSku ? custoPorSku[o.sku] : null;
+    o._perda = pvPerda(o, custo);
+  });
+  return ocs;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PÓS-VENDA ML — camada de tela
+   Depende de: _motor.js (cálculo), ecEsc/ecInt/ecMoney/ecMoneyK/ecStat,
+   mlGet, blingCfg, EC.rows (para custo do Bling), state.items.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+var PV = {
+  cfg: null,                 // { url, key }
+  oc: [], meta: {}, estado: null,
+  loading: false, erro: null,
+  base: {},                  // pedidosTotais / pedidosPagos / faturamento do período
+  view: { periodo: '30d', de: null, ate: null, aba: 'exec', q: '',
+          f: {}, drawer: null, drill: null },
+};
+
+/* ─── Configuração ───────────────────────────────────────────────────────── */
+function pvCfg() {
+  if (PV.cfg) return PV.cfg;
+  try { PV.cfg = JSON.parse(localStorage.getItem('pv_cfg') || '{}'); } catch (e) { PV.cfg = {}; }
+  return PV.cfg;
+}
+function pvSalvarCfg(url, key) {
+  PV.cfg = { url: String(url || '').replace(/\/+$/, ''), key: key || '' };
+  try { localStorage.setItem('pv_cfg', JSON.stringify(PV.cfg)); } catch (e) {}
+}
+async function pvApi(rota, opts) {
+  var c = pvCfg();
+  if (!c.url) throw new Error('Worker de pós-venda não configurado');
+  opts = opts || {};
+  var h = { 'X-Dash-Key': c.key || '' };
+  if (opts.token) h.Authorization = 'Bearer ' + opts.token;
+  if (opts.body) h['Content-Type'] = 'application/json';
+  var r = await fetchWithTimeout(c.url + rota, {
+    method: opts.method || 'GET', headers: h,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  }, opts.ms || 60000);
+  var j = await r.json().catch(function () { return null; });
+  if (!r.ok || (j && j.erro)) throw new Error((j && j.erro) || ('HTTP ' + r.status));
+  return j;
+}
+
+/* ─── Custo por SKU, vindo do Bling ──────────────────────────────────────── */
+function pvCustoPorSku() {
+  var m = {};
+  (typeof EC !== 'undefined' && EC.rows || []).forEach(function (r) {
+    if (r.sku && r.custo != null) m[r.sku] = r.custo;
+  });
+  return m;
+}
+function pvVendasPorSku() {
+  var m = {};
+  (typeof EC !== 'undefined' && EC.rows || []).forEach(function (r) {
+    if (r.sku && r.v90 != null) m[r.sku] = r.v90;
+  });
+  return m;
+}
+
+/* ─── Período ────────────────────────────────────────────────────────────── */
+var PV_PERIODOS = [
+  ['hoje', 'Hoje'], ['ontem', 'Ontem'], ['7d', '7 dias'], ['30d', '30 dias'],
+  ['mes', 'Mês atual'], ['mesant', 'Mês anterior'], ['90d', '90 dias'], ['custom', 'Personalizado'],
+];
+function pvJanela() {
+  var v = PV.view, hoje = new Date(), d0 = new Date(hoje), d1 = new Date(hoje);
+  function iso(d) { return d.toISOString().slice(0, 10); }
+  switch (v.periodo) {
+    case 'hoje': break;
+    case 'ontem': d0.setDate(d0.getDate() - 1); d1.setDate(d1.getDate() - 1); break;
+    case '7d': d0.setDate(d0.getDate() - 6); break;
+    case '30d': d0.setDate(d0.getDate() - 29); break;
+    case '90d': d0.setDate(d0.getDate() - 89); break;
+    case 'mes': d0 = new Date(hoje.getFullYear(), hoje.getMonth(), 1); break;
+    case 'mesant':
+      d0 = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+      d1 = new Date(hoje.getFullYear(), hoje.getMonth(), 0); break;
+    case 'custom': return { de: v.de, ate: v.ate };
+  }
+  return { de: iso(d0), ate: iso(d1) };
+}
+
+/* ─── Filtros ────────────────────────────────────────────────────────────── */
+function pvFiltrar(ocs) {
+  var v = PV.view, f = v.f || {}, j = pvJanela();
+  var q = (v.q || '').trim().toUpperCase();
+  return ocs.filter(function (o) {
+    var d = (o.data_ocorrencia || '').slice(0, 10);
+    if (j.de && d && d < j.de) return false;
+    if (j.ate && d && d > j.ate) return false;
+    var c = o.classificacao || {};
+    if (f.tipo && o.tipo_ocorrencia !== f.tipo) return false;
+    if (f.motivo && (o.motivo_ml || o.reason_id) !== f.motivo) return false;
+    if (f.responsabilidade && c.responsabilidade !== f.responsabilidade) return false;
+    if (f.responsavel && c.responsavel_interno !== f.responsavel) return false;
+    if (f.status === 'aberta' && o.status_ocorrencia !== 'opened') return false;
+    if (f.status === 'resolvida' && o.status_ocorrencia === 'opened') return false;
+    if (f.retorno === 'retornou' && !/Retornou/.test(c.situacao_fisica || '')) return false;
+    if (f.retorno === 'nao' && c.situacao_fisica !== 'Não retornou') return false;
+    if (f.full && !o.fulfillment) return false;
+    if (f.sku && o.sku !== f.sku) return false;
+    if (f.causa && c.causa_raiz !== f.causa) return false;
+    if (q && !((o.sku || '').toUpperCase().includes(q) ||
+               (o.descricao || '').toUpperCase().includes(q) ||
+               String(o.order_id || '').includes(q) ||
+               String(o.claim_id || '').includes(q))) return false;
+    return true;
+  });
+}
+
+/* ─── Carga e sincronização ──────────────────────────────────────────────── */
+async function pvCarregar() {
+  PV.loading = true; PV.erro = null; pvRender();
+  try {
+    var r = await pvApi('/pv/ocorrencias');
+    PV.oc = r.ocorrencias || []; PV.meta = r.meta || {};
+    pvPreparar(PV.oc, pvCustoPorSku());
+    PV.estado = await pvApi('/pv/estado');
+    await pvBaseDoPeriodo();
+  } catch (e) { PV.erro = e.message; }
+  PV.loading = false; pvRender();
+}
+
+/* Denominador das taxas: pedidos do período, direto de Orders. Sem isto, a
+   taxa de devolução não existe — e taxa inventada vira meta. */
+async function pvBaseDoPeriodo() {
+  var j = pvJanela();
+  if (!j.de || !j.ate) { PV.base = {}; return; }
+  var sid = state.sellerId;
+  if (!sid) { PV.base = {}; return; }
+  var de = j.de + 'T00:00:00.000-03:00', ate = j.ate + 'T23:59:59.000-03:00';
+  var q = '/orders/search?seller=' + sid +
+          '&order.date_created.from=' + encodeURIComponent(de) +
+          '&order.date_created.to=' + encodeURIComponent(ate);
+  var tot = await mlGet(q + '&limit=1');
+  var pagos = await mlGet(q + '&order.status=paid&limit=1');
+
+  /* Faturamento do período: soma dos pedidos pagos. Precisa paginar, então
+     só vai até 1.000 pedidos; acima disso o número fica N.D. em vez de sair
+     truncado com cara de exato. */
+  var fat = null, totalPagos = pagos && pagos.paging ? pagos.paging.total : null;
+  if (totalPagos != null && totalPagos <= 1000) {
+    fat = 0;
+    for (var off = 0; off < totalPagos; off += 50) {
+      var pag = await mlGet(q + '&order.status=paid&limit=50&offset=' + off);
+      if (!pag || !pag.results) { fat = null; break; }
+      pag.results.forEach(function (o) { fat += Number(o.total_amount) || 0; });
+    }
+  }
+  PV.base = {
+    pedidosTotais: tot && tot.paging ? tot.paging.total : null,
+    pedidosPagos: totalPagos,
+    faturamento: fat,
+  };
+}
+
+async function pvSincronizar(dias) {
+  if (!state.token) { alert('Conecte a conta do Mercado Livre antes de sincronizar.'); return; }
+  var btn = document.getElementById('pv-sync-btn');
+  var total = 0, feitas = 0, volta = 0, primeiro = true;
+  PV.erro = null;
+  try {
+    while (true) {
+      var r = await pvApi('/pv/sync?dias=' + (dias || 90) + (primeiro ? '&reiniciar=1' : ''),
+                          { method: 'POST', token: state.token, ms: 120000 });
+      primeiro = false;
+      total = r.total; feitas = r.processadas;
+      if (btn) btn.textContent = 'Sincronizando ' + feitas + '/' + total + '…';
+      if (r.fim) break;
+      if (++volta > 200) throw new Error('sincronização longa demais — pare e tente janela menor');
+    }
+    await pvCarregar();
+  } catch (e) {
+    PV.erro = 'Sincronização interrompida em ' + feitas + '/' + total + ': ' + e.message;
+    pvRender();
+  }
+  if (btn) btn.textContent = '↻ Sincronizar';
+}
+
+/* ─── Classificação ──────────────────────────────────────────────────────── */
+async function pvClassificar(id, campos) {
+  var quem = pvQuem();
+  if (!quem) return;
+  var o = PV.oc.find(function (x) { return x.id_ocorrencia === id; });
+  var rev = o && o.classificacao ? o.classificacao.rev : 0;
+  try {
+    var r = await pvApi('/pv/classificar', { method: 'POST',
+      body: Object.assign({ id_ocorrencia: id, usuario: quem, rev: rev }, campos) });
+    if (o) { o.classificacao = r.atual; o._perda = pvPerda(o, pvCustoPorSku()[o.sku]); }
+    pvRender();
+  } catch (e) { alert('Não foi possível salvar: ' + e.message); }
+}
+function pvQuem() {
+  var q = null;
+  try { q = localStorage.getItem('pv_quem'); } catch (e) {}
+  if (!q) {
+    q = prompt('Quem está classificando? (seu nome — fica no histórico)');
+    if (!q) return null;
+    try { localStorage.setItem('pv_quem', q); } catch (e) {}
+  }
+  return q;
+}
+
+/* ─── Render ─────────────────────────────────────────────────────────────── */
+function pvOpen() { if (!PV.oc.length && !PV.loading) pvCarregar(); else pvRender(); }
+function pvAba(k) { PV.view.aba = k; pvRender(); }
+function pvPeriodo(k) { PV.view.periodo = k; pvBaseDoPeriodo().then(pvRender); }
+function pvSetF(campo, valor) { PV.view.f[campo] = valor || null; pvRender(); }
+function pvLimparF() { PV.view.f = {}; PV.view.q = ''; pvRender(); }
+
+/* Drill-down: todo número leva à lista que o compõe (seção 22). */
+function pvDrill(tipo, valor) {
+  PV.view.drill = { tipo: tipo, valor: valor };
+  PV.view.aba = 'tabela';
+  if (tipo === 'tipo') PV.view.f.tipo = valor;
+  else if (tipo === 'motivo') PV.view.f.motivo = valor;
+  else if (tipo === 'responsabilidade') PV.view.f.responsabilidade = valor;
+  else if (tipo === 'causa') PV.view.f.causa = valor;
+  else if (tipo === 'sku') PV.view.f.sku = valor;
+  else if (tipo === 'abertas') PV.view.f.status = 'aberta';
+  pvRender();
+}
+
+function pvPct(v, casas) { return v == null ? 'N.D.' : (v * 100).toFixed(casas == null ? 1 : casas) + '%'; }
+
+function pvRender() {
+  var el = document.getElementById('pv-corpo');
+  if (!el) return;
+  var c = pvCfg();
+  if (!c.url) return (el.innerHTML = pvTelaConfig());
+  if (PV.loading) return (el.innerHTML = '<div class="card" style="padding:40px;text-align:center;color:var(--text2)">Carregando ocorrências…</div>');
+
+  var todas = PV.oc, ocs = pvFiltrar(todas);
+  var A = pvAgg(ocs, PV.base);
+  var reinc = pvReincidencia(ocs, pvVendasPorSku());
+  var pend = pvPendencias(ocs);
+  var alertas = pvAlertas(ocs, reinc, A, null);
+
+  var html = pvBarraTopo(A, pend, alertas) + pvFiltros(todas);
+  if (PV.erro) html += '<div class="card" style="padding:14px 18px;color:#e5484d">' + ecEsc(PV.erro) + '</div>';
+  if (!todas.length) html += '<div class="card" style="padding:40px;text-align:center;color:var(--text2)">Nenhuma ocorrência sincronizada ainda. Use <b>Sincronizar</b> para trazer os últimos 90 dias do Mercado Livre.</div>';
+  else if (PV.view.aba === 'exec') html += pvExecutiva(A, ocs, reinc, pend);
+  else if (PV.view.aba === 'tabela') html += pvTabela(ocs);
+  else if (PV.view.aba === 'pendencias') html += pvTelaPendencias(pend);
+  else if (PV.view.aba === 'skus') html += pvTelaSkus(reinc);
+  else if (PV.view.aba === 'alertas') html += pvTelaAlertas(alertas);
+  else if (PV.view.aba === 'xp') html += pvTelaXP(ocs);
+  el.innerHTML = html;
+
+  var qi = document.getElementById('pv-q');
+  if (qi) qi.addEventListener('input', function () {
+    PV.view.q = qi.value; clearTimeout(PV._q);
+    PV._q = setTimeout(function () {
+      pvRender();
+      var n = document.getElementById('pv-q'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
+    }, 250);
+  });
+}
+
+function pvTelaConfig() {
+  return '<div class="card" style="padding:26px;max-width:640px">' +
+    '<div class="card-title" style="margin-bottom:6px">Conectar o Worker de pós-venda</div>' +
+    '<div class="ec-muted" style="margin-bottom:16px">O módulo guarda as ocorrências e a classificação do time num Worker próprio. Informe o endereço e a chave de acesso.</div>' +
+    '<label class="ec-f"><span>URL do Worker</span><input type="text" id="pv-url" placeholder="https://posvenda-ml.SEU-USUARIO.workers.dev" value="' + ecEsc(pvCfg().url || '') + '"></label>' +
+    '<label class="ec-f"><span>Chave (X-Dash-Key)</span><input type="password" id="pv-key" placeholder="a mesma do segredo DASH_KEY" value=""></label>' +
+    '<button class="btn-sm" style="margin-top:12px" onclick="pvSalvarCfg(document.getElementById(\'pv-url\').value, document.getElementById(\'pv-key\').value); pvCarregar()">Conectar</button>' +
+    '</div>';
+}
+
+function pvBarraTopo(A, pend, alertas) {
+  var m = PV.meta || {}, e = PV.estado || {};
+  var crit = alertas.filter(function (a) { return a.nivel === 'critico'; }).length;
+  return '<div class="card ec-sec"><div class="ec-toolbar">' +
+    '<div class="ec-chips">' +
+      ['exec:Visão executiva', 'tabela:Ocorrências', 'pendencias:Exige ação', 'skus:SKUs', 'alertas:Alertas', 'xp:Titanium XP']
+      .map(function (p) { var k = p.split(':')[0], r = p.split(':')[1];
+        var n = k === 'pendencias' ? pend.length : k === 'alertas' ? crit : null;
+        return '<button class="ec-chip ' + (PV.view.aba === k ? 'active' : '') + '" onclick="pvAba(\'' + k + '\')">' + r +
+               (n ? ' <span>' + n + '</span>' : '') + '</button>'; }).join('') +
+    '</div><div class="ec-tools">' +
+      '<button class="btn-sm" id="pv-sync-btn" onclick="pvSincronizar(90)">↻ Sincronizar</button>' +
+    '</div></div>' +
+    '<div class="ec-muted" style="padding:0 18px 12px">' +
+      'Última sincronização ML: <b>' + (m.ml ? new Date(m.ml).toLocaleString('pt-BR') : 'nunca') + '</b> · ' +
+      'Billing: <b>' + (m.billing ? new Date(m.billing).toLocaleString('pt-BR') : 'não conciliado') + '</b> · ' +
+      'Bling: <b>' + (typeof EC !== 'undefined' && EC.loadedAt ? new Date(EC.loadedAt).toLocaleString('pt-BR') : 'não carregado') + '</b> · ' +
+      (e.aguardandoValidacao ? '<b>' + e.aguardandoValidacao + '</b> aguardando validação' : 'tudo validado') +
+    '</div></div>';
+}
+
+function pvFiltros(todas) {
+  var v = PV.view;
+  var motivos = [...new Set(todas.map(function (o) { return o.motivo_ml || o.reason_id; }).filter(Boolean))].sort();
+  var sel = function (id, campo, lista, rot) {
+    return '<select class="btn-sm" onchange="pvSetF(\'' + campo + '\', this.value)">' +
+      '<option value="">' + rot + '</option>' +
+      lista.map(function (x) { return '<option value="' + ecEsc(x) + '"' + (v.f[campo] === x ? ' selected' : '') + '>' + ecEsc(x) + '</option>'; }).join('') +
+      '</select>';
+  };
+  return '<div class="card"><div class="ec-toolbar">' +
+    '<div class="ec-chips">' + PV_PERIODOS.map(function (p) {
+      return '<button class="ec-chip ' + (v.periodo === p[0] ? 'active' : '') + '" onclick="pvPeriodo(\'' + p[0] + '\')">' + p[1] + '</button>'; }).join('') +
+    '</div></div><div class="ec-toolbar" style="padding-top:0"><div class="ec-tools" style="flex-wrap:wrap">' +
+      '<input id="pv-q" type="text" placeholder="SKU, produto, pedido ou claim…" value="' + ecEsc(v.q || '') + '">' +
+      sel('t', 'tipo', PV_TIPOS, 'Tipo') +
+      sel('m', 'motivo', motivos, 'Motivo') +
+      sel('r', 'responsabilidade', PV_RESP, 'Responsabilidade') +
+      sel('p', 'responsavel', PV_PESSOAS, 'Responsável') +
+      sel('c', 'causa', PV_CAUSA, 'Causa raiz') +
+      '<select class="btn-sm" onchange="pvSetF(\'status\', this.value)"><option value="">Situação</option>' +
+        '<option value="aberta"' + (v.f.status === 'aberta' ? ' selected' : '') + '>Aberta</option>' +
+        '<option value="resolvida"' + (v.f.status === 'resolvida' ? ' selected' : '') + '>Resolvida</option></select>' +
+      '<select class="btn-sm" onchange="pvSetF(\'retorno\', this.value)"><option value="">Retorno</option>' +
+        '<option value="retornou"' + (v.f.retorno === 'retornou' ? ' selected' : '') + '>Retornou</option>' +
+        '<option value="nao"' + (v.f.retorno === 'nao' ? ' selected' : '') + '>Não retornou</option></select>' +
+      '<button class="btn-sm" onclick="pvLimparF()">Limpar</button>' +
+      '<button class="btn-sm" onclick="pvExportar()">⬇ CSV</button>' +
+    '</div></div></div>';
+}
+
+/* ─── Tela executiva: as quatro perguntas (seção 21) ─────────────────────── */
+function pvExecutiva(A, ocs, reinc, pend) {
+  var pm = pvPareto(ocs, 'motivo', true);
+  var pr = pvPareto(ocs, 'responsabilidade', true);
+  var pc = pvPareto(ocs, 'causa', true);
+  var topSku = reinc.slice(0, 5);
+  var incerto = A.semPerdaFechada;
+
+  function barra(linhas, onclick, max) {
+    if (!linhas.length) return '<div class="ec-muted" style="padding:12px 0">Sem dados classificados.</div>';
+    var topo = linhas[0].valor || 1;
+    return linhas.slice(0, max || 6).map(function (l) {
+      return '<div style="display:flex;align-items:center;gap:10px;margin:6px 0;cursor:pointer" onclick="' + onclick + '(\'' + ecEsc(String(l.chave)).replace(/'/g, "\\'") + '\')">' +
+        '<div style="flex:0 0 42%;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + ecEsc(l.chave) + '">' + ecEsc(l.chave) + '</div>' +
+        '<div style="flex:1;height:14px;background:var(--bg2);border-radius:3px;overflow:hidden"><div style="height:100%;width:' + Math.max(2, (l.valor / topo) * 100) + '%;background:#C8792B"></div></div>' +
+        '<div class="mono" style="flex:0 0 76px;text-align:right;font-size:12px">' + ecMoney(l.valor) + '</div>' +
+        '</div>'; }).join('');
+  }
+
+  return '<div class="card ec-sec">' +
+    '<div class="card-head"><span class="card-title">1 · Quanto estamos perdendo com pós-venda?</span></div>' +
+    '<div class="ec-strip">' +
+      ecStat('Perda apurada', ecMoney(A.perdaFechada), A.ocorrencias + ' ocorrências em ' + A.pedidosAfetados + ' pedidos') +
+      ecStat('Perda mínima certa', ecMoney(A.perdaPiso), incerto ? incerto + ' ainda sem conferência ou Billing' : 'tudo conciliado') +
+      ecStat('Frete reverso', ecMoney(A.freteReverso), 'cobrado pelo ML') +
+      ecStat('Recuperável no estoque', ecMoney(A.recuperavel), 'produto voltou vendável') +
+      ecStat('% do faturamento', pvPct(A.impactoFaturamento, 2), A.faturamento ? '' : 'faturamento do período não carregado') +
+    '</div>' +
+    '<div class="ec-strip">' +
+      ecStat('Devoluções', ecInt(A.devolucoes), 'taxa ' + pvPct(A.taxaDevolucao, 2)) +
+      ecStat('Cancelamentos', ecInt(A.cancelamentos), 'taxa ' + pvPct(A.taxaCancelamento, 2)) +
+      ecStat('Reclamações e mediações', ecInt(A.reclamacoes + A.mediacoes), 'taxa ' + pvPct(A.taxaReclamacao, 2)) +
+      ecStat('Abertas agora', ecInt(A.abertas), 'clique para ver') +
+      ecStat('Custo médio', ecMoney(A.custoMedioOcorrencia), 'por pedido afetado') +
+    '</div>' +
+    (incerto ? '<div class="ec-muted" style="padding:0 18px 12px"><b>' + incerto + ' de ' + A.pedidosAfetados + ' pedidos</b> ainda não têm perda fechada: falta conferência física do produto devolvido ou a conciliação da tarifa no Billing. Até lá o painel mostra a <b>perda mínima certa</b> e não estima o resto — um número inventado aqui vira meta errada.</div>' : '') +
+    '</div>' +
+
+    '<div class="card ec-sec"><div class="card-head"><span class="card-title">2 · Por que estamos perdendo?</span></div>' +
+      '<div style="padding:4px 18px 16px;display:grid;grid-template-columns:1fr 1fr;gap:22px">' +
+        '<div><div class="ec-muted" style="margin-bottom:8px">Por motivo do Mercado Livre — em R$</div>' + barra(pm.linhas, 'pvDrillMotivo') + '</div>' +
+        '<div><div class="ec-muted" style="margin-bottom:8px">Por responsabilidade — em R$</div>' + barra(pr.linhas, 'pvDrillResp') +
+          '<div class="ec-muted" style="margin-top:10px">Causa interna</div>' + barra(pc.linhas, 'pvDrillCausa', 4) + '</div>' +
+      '</div></div>' +
+
+    '<div class="card ec-sec"><div class="card-head"><span class="card-title">3 · Quais produtos estão causando o problema?</span></div>' +
+      '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr>' +
+        '<th>SKU</th><th>Descrição</th><th class="r">Ocorrências</th><th class="r">30/60/90</th><th class="r">Taxa</th><th>Motivo principal</th><th class="r">Perda</th></tr></thead><tbody>' +
+        (topSku.length ? topSku.map(function (r) {
+          return '<tr style="cursor:pointer" onclick="pvDrill(\'sku\',\'' + ecEsc(r.sku) + '\')">' +
+            '<td class="mono">' + ecEsc(r.sku) + (r.estrutural ? ' <span class="ec-tag">estrutural</span>' : '') + '</td>' +
+            '<td><span class="ec-desc" title="' + ecEsc(r.descricao) + '">' + ecEsc(r.descricao) + '</span></td>' +
+            '<td class="r mono">' + r.n + '</td><td class="r mono">' + r.d30 + '/' + r.d60 + '/' + r.d90 + '</td>' +
+            '<td class="r mono">' + (r.taxa == null ? 'N.D.' : pvPct(r.taxa, 1)) + '</td>' +
+            '<td>' + ecEsc(r.motivoPrincipal || '—') + ' <span class="ec-sub">(' + r.motivoPrincipalN + 'x)</span></td>' +
+            '<td class="r mono">' + ecMoney(r.perda) + '</td></tr>'; }).join('')
+          : '<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text2)">Nenhum SKU com ocorrência no período.</td></tr>') +
+      '</tbody></table></div></div>' +
+
+    '<div class="card ec-sec"><div class="card-head"><span class="card-title">4 · Quem ou qual processo precisa agir?</span></div>' +
+      '<div class="ec-strip">' +
+        ecStat('Exigem ação', ecInt(pend.length), ecMoney(pend.reduce(function (s, p) { return s + p.valorEmRisco; }, 0)) + ' em risco') +
+        ecStat('Classificadas', ecInt(A.classificadas) + ' de ' + ecInt(A.ocorrencias), 'o resto não pode alimentar o XP') +
+        ecStat('Responsabilidade Titanium', pvPct(A.taxaResponsabilidadeTitanium, 1), 'sobre as classificadas') +
+      '</div>' +
+      '<div class="ec-muted" style="padding:0 18px 14px">A fila completa está na aba <b>Exige ação</b>, ordenada por valor em risco.</div>' +
+    '</div>';
+}
+function pvDrillMotivo(v) { pvDrill('motivo', v); }
+function pvDrillResp(v) { pvDrill('responsabilidade', v === 'Não classificada' ? null : v); }
+function pvDrillCausa(v) { pvDrill('causa', v === 'Sem causa' ? null : v); }
+
+/* ─── Tabela operacional (seção 12) ──────────────────────────────────────── */
+function pvTabela(ocs) {
+  var linhas = ocs.slice(0, 400).map(function (o) {
+    var c = o.classificacao || {}, p = o._perda || {};
+    return '<tr style="cursor:pointer" onclick="pvDrawer(\'' + o.id_ocorrencia + '\')">' +
+      '<td class="mono">' + ecEsc((o.data_ocorrencia || '').slice(0, 10)) + '</td>' +
+      '<td class="mono">' + ecEsc(o.order_id || '—') + '</td>' +
+      '<td class="mono">' + ecEsc(o.sku || '—') + '</td>' +
+      '<td><span class="ec-desc" title="' + ecEsc(o.descricao) + '">' + ecEsc(o.descricao || '—') + '</span></td>' +
+      '<td>' + ecEsc(o.tipo_ocorrencia) + (o.fulfillment ? ' <span class="ec-tag">Full</span>' : '') + '</td>' +
+      '<td><span class="ec-desc" style="max-width:190px" title="' + ecEsc(o.motivo_ml || o.reason_id) + '">' + ecEsc(o.motivo_ml || o.reason_id || '—') + '</span></td>' +
+      '<td>' + (o.status_ocorrencia === 'opened' ? '<span style="color:#e5a23d">aberta</span>' : 'fechada') + '</td>' +
+      '<td class="r mono">' + ecMoney(o.valor_venda) + '</td>' +
+      '<td class="r mono">' + ecMoney(o.custo_frete_reverso) + '</td>' +
+      '<td class="r mono">' + ecMoney(o.tarifa_ml_original) + '</td>' +
+      '<td class="r mono">' + (p.valor != null ? '<b>' + ecMoney(p.valor) + '</b>' : '<span class="ec-sub">' + ecMoney(p.piso) + ' mín.</span>') + '</td>' +
+      '<td>' + ecEsc(c.responsabilidade || '—') + '</td>' +
+      '<td>' + ecEsc(c.responsavel_interno || '—') + '</td>' +
+      '<td>' + ecEsc(c.classificacao || 'não classificada') + '</td></tr>';
+  }).join('') || '<tr><td colspan="14" style="padding:24px;text-align:center;color:var(--text2)">Nenhuma ocorrência com estes filtros.</td></tr>';
+
+  return '<div class="card"><div class="ec-table-wrap"><table class="t ec-table" style="min-width:1500px"><thead><tr>' +
+    '<th>Data</th><th>Pedido</th><th>SKU</th><th>Produto</th><th>Tipo</th><th>Motivo</th><th>Situação</th>' +
+    '<th class="r">Valor</th><th class="r">Frete ret.</th><th class="r">Tarifa</th><th class="r">Perda</th>' +
+    '<th>Responsabilidade</th><th>Responsável</th><th>Classificação</th></tr></thead><tbody>' + linhas + '</tbody></table></div>' +
+    '<div class="ec-pager"><span class="ec-muted">' + ecInt(ocs.length) + ' ocorrências' + (ocs.length > 400 ? ' (mostrando 400 — exporte o CSV)' : '') + '</span></div></div>';
+}
+
+/* ─── Drawer com linha do tempo e classificação ──────────────────────────── */
+function pvDrawer(id) {
+  var o = PV.oc.find(function (x) { return x.id_ocorrencia === id; });
+  if (!o) return;
+  var c = o.classificacao || {}, p = o._perda || {};
+  var cx = document.getElementById('pv-drawer');
+  if (!cx) return;
+
+  var passos = [
+    ['Venda criada', o.data_venda],
+    ['Pagamento', o.payment_id ? o.data_venda : null],
+    ['Envio', o.shipment_id ? o.data_venda : null],
+    [o.tipo_ocorrencia === 'Cancelamento' ? 'Cancelamento' : 'Reclamação aberta', o.data_ocorrencia],
+    ['Devolução criada', o.data_devolucao],
+    ['Devolução ' + (o.status_devolucao || ''), o.status_devolucao ? o.data_devolucao : null],
+    ['Conferência', c.situacao_fisica && c.situacao_fisica !== 'Aguardando conferência' ? c.atualizado_em : null],
+    ['Billing / estorno', c.tarifa_recuperada && c.tarifa_recuperada !== 'Pendente' ? c.atualizado_em : null],
+    ['Encerrada', o.status_ocorrencia === 'opened' ? null : o.data_ultima_atualizacao],
+  ];
+
+  var opc = function (campo, lista, atual) {
+    return '<select class="btn-sm" onchange="pvClassificar(\'' + id + '\',{' + campo + ':this.value||null})">' +
+      '<option value="">—</option>' +
+      lista.map(function (x) { return '<option value="' + ecEsc(x) + '"' + (atual === x ? ' selected' : '') + '>' + ecEsc(x) + '</option>'; }).join('') + '</select>';
+  };
+
+  cx.innerHTML = '<div class="pv-drawer-bg" onclick="pvFecharDrawer()"></div><div class="pv-drawer-pane">' +
+    '<div class="ec-toolbar"><span class="card-title">' + ecEsc(o.tipo_ocorrencia) + ' · pedido ' + ecEsc(o.order_id) + '</span>' +
+      '<button class="btn-sm" onclick="pvFecharDrawer()">Fechar</button></div>' +
+    '<div style="padding:0 18px 18px">' +
+      '<div class="ec-muted" style="margin-bottom:10px">' + ecEsc(o.sku || '') + ' — ' + ecEsc(o.descricao || '') + '</div>' +
+      '<div class="ec-strip">' +
+        ecStat('Valor da venda', ecMoney(o.valor_venda), '') +
+        ecStat('Reembolsado', ecMoney(o.valor_reembolsado), '') +
+        ecStat('Frete reverso', ecMoney(o.custo_frete_reverso), '') +
+        ecStat('Perda', p.valor != null ? ecMoney(p.valor) : 'N.D.', p.valor != null ? '' : ecMoney(p.piso) + ' mínimo certo') +
+      '</div>' +
+      (p.faltam && p.faltam.length ? '<div class="ec-muted" style="margin:10px 0"><b>Para fechar a perda falta:</b> ' + p.faltam.map(ecEsc).join(' · ') + '</div>' : '') +
+
+      '<div class="card-title" style="margin:18px 0 8px;font-size:13px">Linha do tempo</div>' +
+      '<div class="pv-timeline">' + passos.map(function (s) {
+        return '<div class="pv-step ' + (s[1] ? 'ok' : 'pend') + '"><span>' + ecEsc(s[0]) + '</span>' +
+          '<em>' + (s[1] ? new Date(s[1]).toLocaleString('pt-BR') : 'pendente') + '</em></div>'; }).join('') + '</div>' +
+
+      '<div class="card-title" style="margin:18px 0 8px;font-size:13px">Classificação</div>' +
+      '<div class="ec-muted" style="margin-bottom:10px">O motivo vindo do Mercado Livre <b>não</b> define culpa. Quem classifica aqui fica registrado no histórico, e só o que estiver <b>Validada</b> pode alimentar o Titanium XP.</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+        '<label class="ec-f"><span>Responsabilidade</span>' + opc('responsabilidade', PV_RESP, c.responsabilidade) + '</label>' +
+        '<label class="ec-f"><span>Causa raiz' + (c.responsabilidade === 'Titanium' ? ' (obrigatória)' : '') + '</span>' + opc('causa_raiz', PV_CAUSA, c.causa_raiz) + '</label>' +
+        '<label class="ec-f"><span>Responsável interno</span>' + opc('responsavel_interno', PV_PESSOAS, c.responsavel_interno) + '</label>' +
+        '<label class="ec-f"><span>Situação física do produto</span>' + opc('situacao_fisica', PV_FISICA, c.situacao_fisica) + '</label>' +
+        '<label class="ec-f"><span>Tarifa recuperada?</span>' + opc('tarifa_recuperada', ['Sim', 'Parcial', 'Não', 'Pendente', 'Não aplicável'], c.tarifa_recuperada) + '</label>' +
+        '<label class="ec-f"><span>Classificação</span>' + opc('classificacao', ['Automática', 'Aguardando validação', 'Validada', 'Contestada'], c.classificacao) + '</label>' +
+      '</div>' +
+      (c.incoerencia ? '<div class="ec-muted" style="color:#e5a23d;margin-top:10px">⚠ ' + ecEsc(c.incoerencia) + '</div>' : '') +
+      (c.atualizado_por ? '<div class="ec-sub" style="margin-top:10px">Última alteração por ' + ecEsc(c.atualizado_por) + ' em ' + new Date(c.atualizado_em).toLocaleString('pt-BR') + '</div>' : '') +
+      '<button class="btn-sm" style="margin-top:12px" onclick="pvVerLog(\'' + id + '\')">Ver histórico de alterações</button>' +
+      '<div id="pv-log"></div>' +
+    '</div></div>';
+  cx.style.display = 'block';
+}
+function pvFecharDrawer() { var c = document.getElementById('pv-drawer'); if (c) { c.style.display = 'none'; c.innerHTML = ''; } }
+async function pvVerLog(id) {
+  var el = document.getElementById('pv-log');
+  el.innerHTML = '<div class="ec-muted" style="margin-top:10px">Carregando…</div>';
+  try {
+    var r = await pvApi('/pv/log?id=' + encodeURIComponent(id));
+    el.innerHTML = '<table class="t ec-table" style="margin-top:10px"><thead><tr><th>Data</th><th>Campo</th><th>Antes</th><th>Depois</th><th>Quem</th></tr></thead><tbody>' +
+      (r.log.length ? r.log.slice().reverse().map(function (l) {
+        return '<tr><td class="mono">' + new Date(l.data).toLocaleString('pt-BR') + '</td><td>' + ecEsc(l.campo) +
+          '</td><td>' + ecEsc(l.de == null ? '—' : l.de) + '</td><td>' + ecEsc(l.para == null ? '—' : l.para) + '</td><td>' + ecEsc(l.usuario) + '</td></tr>'; }).join('')
+        : '<tr><td colspan="5" class="ec-muted" style="padding:12px">Nenhuma alteração registrada.</td></tr>') + '</tbody></table>';
+  } catch (e) { el.innerHTML = '<div class="ec-muted" style="color:#e5484d">' + ecEsc(e.message) + '</div>'; }
+}
+
+/* ─── Demais telas ───────────────────────────────────────────────────────── */
+function pvTelaPendencias(pend) {
+  return '<div class="card"><div class="card-head"><span class="card-title">Pós-venda que exige ação</span></div>' +
+    '<div class="ec-table-wrap"><table class="t ec-table" style="min-width:1100px"><thead><tr>' +
+    '<th>Ocorrência</th><th>Pedido</th><th>SKU</th><th class="r">Valor em risco</th><th class="r">Dias aberto</th><th>Ação necessária</th><th>Responsável</th></tr></thead><tbody>' +
+    (pend.length ? pend.slice(0, 300).map(function (p) {
+      return '<tr style="cursor:pointer" onclick="pvDrawer(\'' + p.id + '\')">' +
+        '<td class="mono">' + ecEsc(p.id) + '</td><td class="mono">' + ecEsc(p.order_id || '—') + '</td>' +
+        '<td class="mono">' + ecEsc(p.sku || '—') + '</td>' +
+        '<td class="r mono"><b>' + ecMoney(p.valorEmRisco) + '</b></td>' +
+        '<td class="r mono">' + (p.diasAberto == null ? '—' : p.diasAberto) + '</td>' +
+        '<td>' + p.acoes.map(function (a) { return '<div class="ec-sub">• ' + ecEsc(a) + '</div>'; }).join('') + '</td>' +
+        '<td>' + ecEsc(p.responsavel || '—') + '</td></tr>'; }).join('')
+      : '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text2)">Nada pendente. Todas as ocorrências do período estão classificadas e conciliadas.</td></tr>') +
+    '</tbody></table></div></div>';
+}
+
+function pvTelaSkus(reinc) {
+  return '<div class="card"><div class="card-head"><span class="card-title">Reincidência por SKU</span></div>' +
+    '<div class="ec-muted" style="padding:0 18px 10px">O alerta de <b>problema estrutural</b> aparece quando o MESMO motivo se repete três vezes ou mais no mesmo SKU. Três ocorrências por três motivos diferentes é acaso; três pelo mesmo motivo é o produto, o anúncio ou o fornecedor.</div>' +
+    '<div class="ec-table-wrap"><table class="t ec-table" style="min-width:1200px"><thead><tr>' +
+    '<th>SKU</th><th>Descrição</th><th class="r">Vendas 90d</th><th class="r">Ocorr.</th><th class="r">Dev.</th><th class="r">Canc.</th><th class="r">Recl.</th><th class="r">Taxa</th><th class="r">30/60/90</th><th>Motivo principal</th><th class="r">Perda</th></tr></thead><tbody>' +
+    (reinc.length ? reinc.slice(0, 50).map(function (r) {
+      return '<tr style="cursor:pointer" onclick="pvDrill(\'sku\',\'' + ecEsc(r.sku) + '\')">' +
+        '<td class="mono">' + ecEsc(r.sku) + (r.estrutural ? ' <span class="ec-tag">estrutural</span>' : '') + '</td>' +
+        '<td><span class="ec-desc" title="' + ecEsc(r.descricao) + '">' + ecEsc(r.descricao) + '</span></td>' +
+        '<td class="r mono">' + (r.vendas == null ? 'N.D.' : ecInt(r.vendas)) + '</td>' +
+        '<td class="r mono"><b>' + r.n + '</b></td><td class="r mono">' + r.devolucoes + '</td>' +
+        '<td class="r mono">' + r.cancelamentos + '</td><td class="r mono">' + r.reclamacoes + '</td>' +
+        '<td class="r mono">' + (r.taxa == null ? 'N.D.' : pvPct(r.taxa, 1)) + '</td>' +
+        '<td class="r mono">' + r.d30 + '/' + r.d60 + '/' + r.d90 + '</td>' +
+        '<td>' + ecEsc(r.motivoPrincipal || '—') + ' <span class="ec-sub">(' + r.motivoPrincipalN + 'x)</span></td>' +
+        '<td class="r mono">' + ecMoney(r.perda) + '</td></tr>'; }).join('')
+      : '<tr><td colspan="11" style="padding:24px;text-align:center;color:var(--text2)">Nenhum SKU com ocorrência no período.</td></tr>') +
+    '</tbody></table></div></div>';
+}
+
+function pvTelaAlertas(alertas) {
+  var g = { critico: alertas.filter(function (a) { return a.nivel === 'critico'; }),
+            atencao: alertas.filter(function (a) { return a.nivel === 'atencao'; }) };
+  var bloco = function (lista, rot, cor) {
+    return '<div class="card ec-sec"><div class="card-head"><span class="card-title" style="color:' + cor + '">' + rot + ' (' + lista.length + ')</span></div>' +
+      '<div style="padding:0 18px 16px">' + (lista.length ? lista.slice(0, 60).map(function (a) {
+        return '<div style="padding:8px 0;border-bottom:1px solid var(--bd)' + (a.id ? ';cursor:pointer' : '') + '"' +
+          (a.id ? ' onclick="pvDrawer(\'' + a.id + '\')"' : '') + '><b>' + ecEsc(a.titulo) + '</b><div class="ec-sub">' + ecEsc(a.detalhe) + '</div></div>'; }).join('')
+        : '<div class="ec-muted">Nada aqui.</div>') + '</div></div>';
+  };
+  return bloco(g.critico, 'Crítico', '#e5484d') + bloco(g.atencao, 'Atenção', '#e5a23d');
+}
+
+function pvTelaXP(ocs) {
+  var ev = pvEventosXP(ocs);
+  var porPessoa = {};
+  ev.forEach(function (e) { var k = e.responsavel || 'Não atribuído';
+    (porPessoa[k] = porPessoa[k] || []).push(e); });
+  var baselineWilliam = porPessoa['William'] || [];
+  return '<div class="card ec-sec"><div class="card-head"><span class="card-title">Eventos elegíveis para o Titanium XP</span></div>' +
+    '<div class="ec-muted" style="padding:0 18px 12px">Só entram ocorrências <b>validadas por uma pessoa</b>, com responsabilidade da Titanium e causa raiz definida. O motivo do Mercado Livre sozinho nunca atribui culpa, e nada aqui vira penalidade automática — o XP consome esta lista, não a base inteira.</div>' +
+    '<div class="ec-strip">' +
+      ecStat('Elegíveis', ecInt(ev.length), 'de ' + ecInt(ocs.length) + ' ocorrências no período') +
+      ecStat('Divergências', ecInt(ev.filter(function (e) { return e.divergeDoSugerido; }).length), 'responsável difere do dono da causa') +
+      ecStat('William (baseline)', ecInt(baselineWilliam.length), 'sem meta nesta competência — só medição') +
+    '</div></div>' +
+    '<div class="card"><div class="ec-table-wrap"><table class="t ec-table"><thead><tr>' +
+    '<th>Competência</th><th>Ocorrência</th><th>SKU</th><th>Causa raiz</th><th>Responsável</th><th>Dono da causa</th><th class="r">Perda</th><th>Validado por</th></tr></thead><tbody>' +
+    (ev.length ? ev.map(function (e) {
+      return '<tr style="cursor:pointer" onclick="pvDrawer(\'' + e.id_ocorrencia + '\')">' +
+        '<td class="mono">' + ecEsc(e.competencia) + '</td><td class="mono">' + ecEsc(e.id_ocorrencia) + '</td>' +
+        '<td class="mono">' + ecEsc(e.sku || '—') + '</td><td>' + ecEsc(e.causa_raiz) + '</td>' +
+        '<td><b>' + ecEsc(e.responsavel || 'Não atribuído') + '</b></td>' +
+        '<td>' + ecEsc(e.responsavelSugerido || '—') + (e.divergeDoSugerido ? ' <span class="ec-tag">difere</span>' : '') + '</td>' +
+        '<td class="r mono">' + (e.perda != null ? ecMoney(e.perda) : ecMoney(e.perdaPiso) + ' mín.') + '</td>' +
+        '<td>' + ecEsc(e.validado_por || '—') + '</td></tr>'; }).join('')
+      : '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text2)">Nenhuma ocorrência validada ainda. Classifique na aba Ocorrências e marque como <b>Validada</b>.</td></tr>') +
+    '</tbody></table></div></div>';
+}
+
+/* ─── Exportação ─────────────────────────────────────────────────────────── */
+function pvExportar() {
+  var ocs = pvFiltrar(PV.oc);
+  var H = ['id_ocorrencia', 'order_id', 'claim_id', 'return_id', 'shipment_id', 'payment_id', 'item_id', 'sku',
+    'descricao', 'quantidade', 'quantidade_devolvida', 'data_venda', 'data_ocorrencia', 'data_devolucao',
+    'tipo_ocorrencia', 'subtipo_ocorrencia', 'motivo_ml', 'reason_id', 'status_ocorrencia', 'status_devolucao',
+    'status_dinheiro', 'resolucao', 'valor_venda', 'valor_reembolsado', 'custo_frete_reverso',
+    'tarifa_ml_original', 'tarifa_estornada', 'bonificacao_ml', 'perda_liquida', 'perda_minima',
+    'valor_recuperavel', 'responsabilidade', 'causa_raiz', 'responsavel_interno', 'situacao_fisica',
+    'tarifa_recuperada', 'classificacao', 'pendencias_do_calculo', 'atualizado_por', 'data_ultima_atualizacao'];
+  var linhas = ocs.map(function (o) {
+    var c = o.classificacao || {}, p = o._perda || {};
+    return [o.id_ocorrencia, o.order_id, o.claim_id, o.return_id, o.shipment_id, o.payment_id, o.item_id, o.sku,
+      o.descricao, o.quantidade, o.quantidade_devolvida, o.data_venda, o.data_ocorrencia, o.data_devolucao,
+      o.tipo_ocorrencia, o.subtipo_ocorrencia, o.motivo_ml, o.reason_id, o.status_ocorrencia, o.status_devolucao,
+      o.status_dinheiro, o.resolucao, o.valor_venda, o.valor_reembolsado, o.custo_frete_reverso,
+      o.tarifa_ml_original, o.tarifa_estornada, o.bonificacao_ml,
+      p.valor == null ? 'N.D.' : p.valor, p.piso, p.recuperavel == null ? 'N.D.' : p.recuperavel,
+      c.responsabilidade, c.causa_raiz, c.responsavel_interno, c.situacao_fisica,
+      c.tarifa_recuperada, c.classificacao, (p.faltam || []).join(' / '), c.atualizado_por, o.data_ultima_atualizacao];
+  });
+  ecBaixaCsv('posvenda-ml', H, linhas);
+}
+
 </script>
 </body>
 </html>
