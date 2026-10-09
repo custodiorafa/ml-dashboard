@@ -7309,6 +7309,11 @@ function pvPendencias(ocs, hoje) {
       acoes.push('Classificação aguardando validação');
     if (o.status_ocorrencia === 'opened' && !o.resolucao) acoes.push('Sem resolução final');
     if (c.incoerencia) acoes.push('Incoerência: ' + c.incoerencia);
+    /* Leitura incompleta não é classificação pendente: é dado que o painel
+       não conseguiu ler. Entra na fila para ser ressincronizado, e nunca é
+       tratado como ausência. */
+    if (o.incompleto && o.incompleto.length)
+      acoes.push('Leitura incompleta do Mercado Livre: ' + o.incompleto.join(', ') + ' — ressincronizar');
     if (!acoes.length) return;
     out.push({
       id: o.id_ocorrencia, order_id: o.order_id, sku: o.sku, descricao: o.descricao,
@@ -7739,6 +7744,7 @@ function pvExecutiva(A, ocs, reinc, pend) {
       ecStat('Cancelamentos', ecInt(A.cancelamentos), 'taxa ' + pvPct(A.taxaCancelamento, 2)) +
       ecStat('Reclamações e mediações', ecInt(A.reclamacoes + A.mediacoes), 'taxa ' + pvPct(A.taxaReclamacao, 2)) +
       ecStat('Abertas agora', ecInt(A.abertas), 'clique para ver') +
+      ecStat('Leitura incompleta', ecInt(ocs.filter(function (o) { return o.incompleto && o.incompleto.length; }).length), 'ressincronizar — não é ausência de dado') +
       ecStat('Custo médio', ecMoney(A.custoMedioOcorrencia), 'por pedido afetado') +
     '</div>' +
     (incerto ? '<div class="ec-muted" style="padding:0 18px 12px"><b>' + incerto + ' de ' + A.pedidosAfetados + ' pedidos</b> ainda não têm perda fechada: falta conferência física do produto devolvido ou a conciliação da tarifa no Billing. Até lá o painel mostra a <b>perda mínima certa</b> e não estima o resto — um número inventado aqui vira meta errada.</div>' : '') +
@@ -7843,6 +7849,7 @@ function pvDrawer(id) {
         ecStat('Frete reverso', ecMoney(o.custo_frete_reverso), '') +
         ecStat('Perda', p.valor != null ? ecMoney(p.valor) : 'N.D.', p.valor != null ? '' : ecMoney(p.piso) + ' mínimo certo') +
       '</div>' +
+      (o.incompleto && o.incompleto.length ? '<div class="ec-muted" style="margin:10px 0;color:#e5a23d">⚠ <b>Leitura incompleta:</b> ' + o.incompleto.map(ecEsc).join(' · ') + '. Estes campos não foram lidos do Mercado Livre nesta sincronização — não os leia como "não existe". Ressincronize.</div>' : '') +
       (p.faltam && p.faltam.length ? '<div class="ec-muted" style="margin:10px 0"><b>Para fechar a perda falta:</b> ' + p.faltam.map(ecEsc).join(' · ') + '</div>' : '') +
 
       '<div class="card-title" style="margin:18px 0 8px;font-size:13px">Linha do tempo</div>' +
@@ -7967,7 +7974,8 @@ function pvExportar() {
     'status_dinheiro', 'resolucao', 'valor_venda', 'valor_reembolsado', 'custo_frete_reverso',
     'tarifa_ml_original', 'tarifa_estornada', 'bonificacao_ml', 'perda_liquida', 'perda_minima',
     'valor_recuperavel', 'responsabilidade', 'causa_raiz', 'responsavel_interno', 'situacao_fisica',
-    'tarifa_recuperada', 'classificacao', 'pendencias_do_calculo', 'atualizado_por', 'data_ultima_atualizacao'];
+    'tarifa_recuperada', 'classificacao', 'pendencias_do_calculo', 'leitura_incompleta',
+    'recurso_do_claim', 'atualizado_por', 'data_ultima_atualizacao'];
   var linhas = ocs.map(function (o) {
     var c = o.classificacao || {}, p = o._perda || {};
     return [o.id_ocorrencia, o.order_id, o.claim_id, o.return_id, o.shipment_id, o.payment_id, o.item_id, o.sku,
@@ -7977,7 +7985,8 @@ function pvExportar() {
       o.tarifa_ml_original, o.tarifa_estornada, o.bonificacao_ml,
       p.valor == null ? 'N.D.' : p.valor, p.piso, p.recuperavel == null ? 'N.D.' : p.recuperavel,
       c.responsabilidade, c.causa_raiz, c.responsavel_interno, c.situacao_fisica,
-      c.tarifa_recuperada, c.classificacao, (p.faltam || []).join(' / '), c.atualizado_por, o.data_ultima_atualizacao];
+      c.tarifa_recuperada, c.classificacao, (p.faltam || []).join(' / '),
+      (o.incompleto || []).join(' / '), o.recurso_do_claim, c.atualizado_por, o.data_ultima_atualizacao];
   });
   ecBaixaCsv('posvenda-ml', H, linhas);
 }
