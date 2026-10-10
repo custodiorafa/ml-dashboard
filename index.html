@@ -917,6 +917,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
     <div class="tab" onclick="goTab(this,'demand')">📈 Demanda & Trends</div>
     <div class="tab" onclick="goTab(this,'compras');ecOpen()">🧭 Estoque &amp; Compras</div>
     <div class="tab" onclick="goTab(this,'posvenda');pvOpen()">↩️ Pós-Venda</div>
+    <div class="tab" onclick="goTab(this,'xp');xpOpen()">🏆 Titanium XP</div>
     <div class="tab" onclick="goTab(this,'promo');prOpen()">🏷 Promoções &amp; Ofertas</div>
     <div class="tab" onclick="goTab(this,'competitors')">👁 Concorrentes</div>
     <div class="tab" onclick="goTab(this,'alerts')">🔔 Alertas <span class="tab-count red" id="alert-badge">0</span></div>
@@ -1274,6 +1275,16 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 
     <!-- ═══ COMPETITORS ═══ -->
     <!-- ═══ ESTOQUE & COMPRAS ═══ -->
+    <div class="page" id="page-xp">
+      <div class="page-header" style="flex-wrap:wrap;gap:12px">
+        <div>
+          <div class="page-title">Titanium <span>XP</span></div>
+          <div class="page-meta">Régua do Manual do 4º trimestre de 2026 — apuração automática</div>
+        </div>
+      </div>
+      <div id="xp-corpo"></div>
+    </div>
+
     <div class="page" id="page-posvenda">
       <div class="page-header" style="flex-wrap:wrap;gap:12px">
         <div>
@@ -7994,6 +8005,1188 @@ function pvExportar() {
       o.origem || 'reclamação do Mercado Livre', c.atualizado_por, o.data_ultima_atualizacao];
   });
   ecBaixaCsv('posvenda-ml', H, linhas);
+}
+
+
+/* ═══ MÓDULO TITANIUM XP ═══ */
+/* ═══════════════════════════════════════════════════════════════════════════
+   TITANIUM XP — réguas do Manual do 4º trimestre de 2026
+
+   O motor anterior convertia atingimento em XP de forma LINEAR (peso ×
+   atingimento). O manual não faz isso: ele usa FAIXAS com multiplicador. A
+   diferença é grande — um indicador de peso 15 com 80% de atingimento vale
+   4,20 XP pelo manual e 12,00 XP pela conta linear. Quase o triplo.
+
+   Tudo aqui é transcrição de regra escrita, não decisão de projeto. Onde o
+   manual é ambíguo, está comentado e a escolha aparece no resultado para
+   poder ser contestada.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Régua da Meta Global — bloco de 50 XP ───────────────────────────────
+   "Abaixo de 95%: 0 XP. 95,00 a 95,99%: 50 × atingimento × 10%" … e assim
+   por diante. Acima de 103% o manual fala em "120% condicional — até 60 XP
+   no bloco global". */
+var REGUA_GLOBAL = [
+  { ate: 0.95,    mult: 0,    rotulo: 'abaixo de 95%' },
+  { ate: 0.96,    mult: 0.10, rotulo: '95% a 95,99%' },
+  { ate: 0.97,    mult: 0.15, rotulo: '96% a 96,99%' },
+  { ate: 0.98,    mult: 0.25, rotulo: '97% a 97,99%' },
+  { ate: 0.99,    mult: 0.40, rotulo: '98% a 98,99%' },
+  { ate: 1.00,    mult: 0.60, rotulo: '99% a 99,99%' },
+  { ate: 1.03,    mult: 1.00, rotulo: '100% a 102,99%' },
+  { ate: Infinity, mult: 1.00, rotulo: '103% ou mais (teto 60 XP)' },
+];
+
+/* ─── Régua dos indicadores individuais ─────────────────────────────────── */
+var REGUA_INDIVIDUAL = [
+  { ate: 0.70,    mult: 0,    rotulo: 'abaixo de 70%' },
+  { ate: 0.75,    mult: 0.10, rotulo: '70% a 74,99%' },
+  { ate: 0.80,    mult: 0.20, rotulo: '75% a 79,99%' },
+  { ate: 0.85,    mult: 0.35, rotulo: '80% a 84,99%' },
+  { ate: 0.90,    mult: 0.50, rotulo: '85% a 89,99%' },
+  { ate: 1.00,    mult: 1.00, rotulo: '90% a 99,99% (proporcional)' },
+  { ate: Infinity, mult: 1.00, rotulo: '100% ou mais' },
+];
+
+function faixaDe(regua, ating) {
+  for (var i = 0; i < regua.length; i++) if (ating < regua[i].ate) return regua[i];
+  return regua[regua.length - 1];
+}
+
+/* ─── XP do bloco global ──────────────────────────────────────────────────
+   atingimentoGlobal = MENOR entre faturamento e margem, como manda o manual
+   ("o percentual global será sempre o menor atingimento entre as duas"). */
+function xpGlobalDoManual(ating, baseXP, cfg) {
+  baseXP = baseXP == null ? 50 : baseXP;
+  if (ating === null || ating === undefined) {
+    return { xp: null, faixa: 'N.D.', motivo: 'atingimento global não apurado' };
+  }
+  var f = faixaDe(REGUA_GLOBAL, ating);
+  var xp = baseXP * ating * f.mult;
+  var teto = (cfg && cfg.tetoGlobal) || 60;
+  var limitado = false;
+  if (xp > teto) { xp = teto; limitado = true; }
+  return { xp: xp, faixa: f.rotulo, multiplicador: f.mult, atingimento: ating,
+           limitadoAoTeto: limitado };
+}
+
+/* ─── XP de um indicador individual ───────────────────────────────────────
+   O manual permite passar de 100% SÓ se a Meta Global chegou a 100%. Sem
+   isso, o atingimento é cortado em 100% antes de virar XP. */
+function xpIndicadorDoManual(ating, peso, globalAtingiu100, cfg) {
+  if (ating === null || ating === undefined || peso == null) {
+    return { xp: null, faixa: 'N.D.', motivo: ating == null ? 'indicador não apurado' : 'sem peso' };
+  }
+  var teto = (cfg && cfg.tetoSuperacao) || 1.20;
+  var cortado = false;
+  var a = ating;
+  if (a > 1 && !globalAtingiu100) { a = 1; cortado = true; }
+  if (a > teto) a = teto;
+  var f = faixaDe(REGUA_INDIVIDUAL, a);
+  return { xp: peso * a * f.mult, faixa: f.rotulo, multiplicador: f.mult,
+           atingimento: a, superacaoBloqueada: cortado };
+}
+
+/* ─── Fator Econômico Global ──────────────────────────────────────────────
+   "menor percentual de atingimento entre faturamento e margem de
+   contribuição, limitado a 100%". Converte XP técnico em XP financeiro.
+   NÃO se aplica de novo sobre o XP Global — o manual é explícito. */
+function fatorEconomico(atingFaturamento, atingMargem) {
+  if (atingFaturamento == null || atingMargem == null) return null;
+  return Math.min(atingFaturamento, atingMargem, 1);
+}
+
+/* ─── Semáforo: desconto sobre a PREMIAÇÃO, não sobre o XP ────────────────
+   Mudança em relação ao motor anterior, que descontava pontos de XP. Pelo
+   manual: amarelo tira 10% da premiação apurada POR OCORRÊNCIA; vermelho
+   zera; atestado é proporcional (5% por dia, premiação ÷ 20 × dias) e não
+   acumula com o desconto fixo do mesmo fato.
+   Ordem obrigatória: apurar XP → aplicar amarelos → verificar vermelho. */
+function aplicarSemaforo(ocorrencias, diasAtestado) {
+  var oc = ocorrencias || [];
+  var vermelhos = oc.filter(function (o) { return o.sinal === 'Vermelho'; });
+  var amarelos = oc.filter(function (o) { return o.sinal === 'Amarelo'; });
+
+  /* "Três amarelos no mês" é exemplo de situação vermelha no manual. Não
+     aplico automaticamente: o manual também diz que o vermelho depende de
+     validação da Diretoria. Sinalizo para decisão humana. */
+  var sugereVermelho = amarelos.length >= 3 && !vermelhos.length;
+
+  if (vermelhos.length) {
+    return { fator: 0, motivo: 'sinal vermelho: premiação zerada',
+             amarelos: amarelos.length, vermelhos: vermelhos.length,
+             descontoAtestado: 0, sugereVermelho: false };
+  }
+
+  var descAmarelo = Math.min(1, 0.10 * amarelos.length);
+  /* Atestado: 5% por dia. Sem dupla penalidade — um amarelo que JÁ é o
+     atestado não entra duas vezes; por isso só contam os amarelos marcados
+     como não sendo atestado. */
+  var dias = Number(diasAtestado) || 0;
+  var descAtestado = Math.min(1, dias * 0.05);
+
+  var fator = Math.max(0, 1 - descAmarelo - descAtestado);
+  return { fator: fator, amarelos: amarelos.length, vermelhos: 0,
+           descontoAmarelo: descAmarelo, descontoAtestado: descAtestado,
+           diasAtestado: dias, sugereVermelho: sugereVermelho,
+           motivo: sugereVermelho ? '3 ou mais amarelos no mês — o manual prevê vermelho, mas exige validação da Diretoria' : null };
+}
+
+/* ─── Consolidação de uma pessoa ──────────────────────────────────────────
+   Devolve as três camadas separadas, porque o manual as trata como coisas
+   distintas e a tela precisa poder mostrar cada uma:
+     · XP técnico     — o diagnóstico, não sofre o fator econômico
+     · XP financeiro  — o que vira dinheiro
+     · premiação      — já com semáforo e atestado  */
+function consolidarPessoa(entrada) {
+  var indicadores = entrada.indicadores || [];
+  var atingG = entrada.atingimentoGlobal;
+  var globalBateu100 = atingG != null && atingG >= 1;
+
+  var g = xpGlobalDoManual(atingG, entrada.baseGlobal, entrada.cfg);
+
+  var det = indicadores.map(function (i) {
+    var r = xpIndicadorDoManual(i.atingimento, i.peso, globalBateu100, entrada.cfg);
+    r.nome = i.nome; r.peso = i.peso;
+    return r;
+  });
+
+  var apurados = det.filter(function (d) { return d.xp != null; });
+  var naoApurados = det.filter(function (d) { return d.xp == null; });
+  /* Indicador não apurado NÃO vira zero — é o que o manual chama de "dado
+     ausente não deve ser estimado". O XP individual fica parcial e a tela
+     avisa. */
+  var xpIndTecnico = apurados.length ? apurados.reduce(function (s, d) { return s + d.xp; }, 0) : null;
+
+  var fe = fatorEconomico(entrada.atingimentoFaturamento, entrada.atingimentoMargem);
+  var xpIndFinanceiro = (xpIndTecnico == null || fe == null) ? null : xpIndTecnico * fe;
+
+  var xpTecnico = (g.xp == null || xpIndTecnico == null) ? null : g.xp + xpIndTecnico;
+  var xpFinal = (g.xp == null || xpIndFinanceiro == null) ? null : g.xp + xpIndFinanceiro;
+
+  var teto = (entrada.cfg && entrada.cfg.xpMax) || 120;
+  var limitado = false;
+  if (xpFinal != null && xpFinal > teto) { xpFinal = teto; limitado = true; }
+
+  var sem = aplicarSemaforo(entrada.ocorrencias, entrada.diasAtestado);
+  var premiacao = null;
+  if (entrada.valorBase != null && xpFinal != null) {
+    premiacao = entrada.valorBase * (xpFinal / 100) * sem.fator;
+  }
+
+  return {
+    global: g,
+    indicadores: det,
+    naoApurados: naoApurados.map(function (d) { return d.nome; }),
+    xpIndividualTecnico: xpIndTecnico,
+    fatorEconomico: fe,
+    xpIndividualFinanceiro: xpIndFinanceiro,
+    xpTecnico: xpTecnico,
+    xpFinal: xpFinal,
+    limitadoAoTeto: limitado,
+    semaforo: sem,
+    premiacao: premiacao,
+    /* A premiação depende do valor-base, que é informação interna e não vai
+       para o painel compartilhado. Quando não houver valor-base, o resultado
+       fica nulo de propósito. */
+    premiacaoIndisponivel: entrada.valorBase == null,
+  };
+}
+
+/* Soma dos pesos: o manual fixa 50 XP individuais. */
+function conferirPesos(indicadores, base) {
+  base = base == null ? 50 : base;
+  var soma = (indicadores || []).reduce(function (s, i) { return s + (Number(i.peso) || 0); }, 0);
+  return { soma: soma, esperado: base, ok: Math.abs(soma - base) < 0.01,
+           aviso: Math.abs(soma - base) < 0.01 ? null
+                : 'os pesos somam ' + soma + ' XP, não ' + base };
+}
+
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TITANIUM XP — registro de fontes
+
+   A regra que dá nome à coisa: a fonte mede, a meta avalia. São separadas de
+   propósito.
+
+   Uma fonte devolve SEMPRE quantidade e base — nunca uma porcentagem pronta.
+   Quem transforma isso em taxa é o motor, e quem julga se a taxa é boa é a
+   meta. Por isso mudar a meta de 30% para 35% não toca na medição: a
+   quantidade e a base já apuradas continuam valendo, e só o atingimento é
+   recalculado.
+
+   Consequências práticas, todas intencionais:
+   · trocar meta, peso ou direção nunca obriga a reapurar;
+   · uma competência fechada continua auditável, porque guarda a fonte, a
+     versão dela, a data, a quantidade e a base;
+   · fonte sem integração devolve null, e null vira N.D. na tela — nunca zero.
+
+   VERSÃO DA FONTE: se a regra de medição mudar, a versão sobe. Apurações
+   antigas guardam a versão com que foram feitas, para ninguém comparar dois
+   meses medidos com réguas diferentes sem perceber.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+var XP_FONTES = {};
+
+function fonte(id, def) { def.id = id; XP_FONTES[id] = def; return def; }
+
+/* ─── helpers de janela ──────────────────────────────────────────────────── */
+function compIso(nome) {
+  var M = { janeiro:'01', fevereiro:'02', 'março':'03', marco:'03', abril:'04', maio:'05',
+            junho:'06', julho:'07', agosto:'08', setembro:'09', outubro:'10',
+            novembro:'11', dezembro:'12' };
+  var p = String(nome || '').toLowerCase().split('/');
+  var m = M[p[0] && p[0].trim()];
+  return (m && p[1]) ? p[1].trim() + '-' + m : null;
+}
+function janelaDaCompetencia(nomeComp, hoje) {
+  var iso = compIso(nomeComp);
+  if (!iso) return null;
+  var ano = +iso.slice(0, 4), mes = +iso.slice(5, 7);
+  var ini = new Date(Date.UTC(ano, mes - 1, 1));
+  var fim = new Date(Date.UTC(ano, mes, 0));
+  var ref = hoje ? new Date(hoje) : new Date();
+  /* Mês corrente: a janela vai só até hoje. Apurar o mês inteiro antes de ele
+     acabar compararia 10 dias de venda com a meta de 30. */
+  var parcial = ref < fim;
+  if (parcial && ref > ini) fim = ref;
+  return { de: ini.toISOString().slice(0, 10), ate: fim.toISOString().slice(0, 10),
+           parcial: parcial, diasDecorridos: Math.floor((fim - ini) / 86400000) + 1,
+           diasNoMes: new Date(Date.UTC(ano, mes, 0)).getUTCDate() };
+}
+
+/* ─── EMPRESA ────────────────────────────────────────────────────────────── */
+
+fonte('faturamento_ml', {
+  nome: 'Faturamento no Mercado Livre',
+  descricao: 'Soma dos pedidos pagos no período. Pagina a busca de pedidos — testado até offset 8.090, sem teto prático.',
+  escopo: 'empresa', unidade: 'R$', direcao: 'Maior é melhor', acumulativo: true,
+  versao: 1, custo: 'alto (≈54 chamadas por mês)',
+  base: 'não se aplica — o valor já é o total',
+  apurar: function (ctx) {
+    var r = ctx.pedidos;              // { pagos: [...], totais, pagosN, cancelados }
+    if (!r || !r.pagos) return null;
+    var soma = r.pagos.reduce(function (s, o) { return s + (Number(o.total_amount) || 0); }, 0);
+    return { quantidade: soma, base: null, detalhe: r.pagosN + ' pedidos pagos' };
+  },
+});
+
+fonte('pedidos_pagos', {
+  nome: 'Pedidos pagos',
+  descricao: 'Contagem de pedidos pagos no período.',
+  escopo: 'empresa', unidade: 'Unidades', direcao: 'Maior é melhor', acumulativo: true,
+  versao: 1, custo: 'baixo (1 chamada)',
+  apurar: function (ctx) {
+    if (!ctx.pedidos || ctx.pedidos.pagosN == null) return null;
+    return { quantidade: ctx.pedidos.pagosN, base: null };
+  },
+});
+
+fonte('conversao_conta', {
+  nome: 'Conversão da conta',
+  descricao: 'Pedidos pagos sobre visitas da conta. Visitas vêm numa única chamada no nível do vendedor.',
+  escopo: 'empresa', unidade: '%', direcao: 'Maior é melhor', acumulativo: false,
+  versao: 1, custo: 'baixo (2 chamadas)',
+  apurar: function (ctx) {
+    if (!ctx.pedidos || ctx.pedidos.pagosN == null || ctx.visitas == null) return null;
+    if (!ctx.visitas) return null;    // sem visitas não há taxa, e zero não é resposta
+    return { quantidade: ctx.pedidos.pagosN, base: ctx.visitas,
+             detalhe: ctx.pedidos.pagosN + ' pagos de ' + ctx.visitas + ' visitas' };
+  },
+});
+
+fonte('taxa_cancelamento', {
+  nome: 'Taxa de cancelamento',
+  descricao: 'Pedidos cancelados sobre pedidos totais. Conta TODOS os cancelados, inclusive os sem reclamação.',
+  escopo: 'empresa', unidade: '%', direcao: 'Menor é melhor', acumulativo: false,
+  versao: 1, custo: 'baixo (2 chamadas)',
+  apurar: function (ctx) {
+    var p = ctx.pedidos;
+    if (!p || p.canceladosN == null || !p.totaisN) return null;
+    return { quantidade: p.canceladosN, base: p.totaisN };
+  },
+});
+
+/* ─── PÓS-VENDA (base já sincronizada no Worker) ─────────────────────────── */
+
+fonte('taxa_devolucao', {
+  nome: 'Taxa de devolução',
+  descricao: 'Devoluções sobre pedidos pagos, a partir da base de pós-venda.',
+  escopo: 'empresa', unidade: '%', direcao: 'Menor é melhor', acumulativo: false,
+  versao: 1, custo: 'zero (base já sincronizada)',
+  apurar: function (ctx) {
+    if (!ctx.posvenda || !ctx.pedidos || !ctx.pedidos.pagosN) return null;
+    var n = ctx.posvenda.filter(function (o) { return o.tipo_ocorrencia === 'Devolução'; }).length;
+    return { quantidade: n, base: ctx.pedidos.pagosN };
+  },
+});
+
+fonte('taxa_reclamacao', {
+  nome: 'Taxa de reclamação',
+  descricao: 'Reclamações e mediações sobre pedidos pagos.',
+  escopo: 'empresa', unidade: '%', direcao: 'Menor é melhor', acumulativo: false,
+  versao: 1, custo: 'zero',
+  apurar: function (ctx) {
+    if (!ctx.posvenda || !ctx.pedidos || !ctx.pedidos.pagosN) return null;
+    var n = ctx.posvenda.filter(function (o) {
+      return o.tipo_ocorrencia === 'Reclamação' || o.tipo_ocorrencia === 'Mediação'; }).length;
+    return { quantidade: n, base: ctx.pedidos.pagosN };
+  },
+});
+
+/* Causa raiz VALIDADA por uma pessoa. O motivo do Mercado Livre sozinho nunca
+   atribui culpa — é a regra da seção 5 do escopo, e ela vive aqui também. */
+function porCausaValidada(causas) {
+  return function (ctx) {
+    if (!ctx.posvenda || !ctx.pedidos || !ctx.pedidos.pagosN) return null;
+    var n = ctx.posvenda.filter(function (o) {
+      var c = o.classificacao;
+      return c && c.classificacao === 'Validada' && c.responsabilidade === 'Titanium'
+          && causas.indexOf(c.causa_raiz) >= 0;
+    }).length;
+    return { quantidade: n, base: ctx.pedidos.pagosN };
+  };
+}
+
+fonte('erros_expedicao', {
+  nome: 'Erros de expedição (validados)',
+  descricao: 'Ocorrências validadas com causa de expedição, embalagem, etiqueta, produto ou quantidade errada, sobre pedidos pagos. Só entra o que uma pessoa validou.',
+  escopo: 'pessoa', unidade: '%', direcao: 'Menor é melhor', acumulativo: false,
+  versao: 1, custo: 'zero',
+  apurar: porCausaValidada(['Expedição', 'Embalagem', 'Etiqueta', 'Produto errado', 'Quantidade errada']),
+});
+
+fonte('falhas_cadastro', {
+  nome: 'Falhas de cadastro e anúncio (validadas)',
+  descricao: 'Ocorrências validadas com causa de cadastro/anúncio, aplicação incorreta ou produto incompatível, sobre pedidos pagos.',
+  escopo: 'pessoa', unidade: '%', direcao: 'Menor é melhor', acumulativo: false,
+  versao: 1, custo: 'zero',
+  apurar: porCausaValidada(['Cadastro/anúncio', 'Aplicação incorreta', 'Produto incompatível']),
+});
+
+fonte('falhas_estoque', {
+  nome: 'Falhas de estoque e recebimento (validadas)',
+  descricao: 'Ocorrências validadas com causa de estoque, recebimento ou falta de produto, sobre pedidos pagos.',
+  escopo: 'pessoa', unidade: '%', direcao: 'Menor é melhor', acumulativo: false,
+  versao: 1, custo: 'zero',
+  apurar: porCausaValidada(['Estoque', 'Recebimento', 'Falta de produto']),
+});
+
+/* ─── CADASTRO E ESTOQUE (Bling + anúncios) ──────────────────────────────── */
+
+fonte('cobertura_cadastro', {
+  nome: 'Cobertura de cadastro',
+  descricao: 'Produtos ativos com saldo que estão vendáveis no ML — com anúncio próprio ou cobertos por kit anunciado — sobre o total de ativos com saldo.',
+  escopo: 'pessoa', unidade: '%', direcao: 'Maior é melhor', acumulativo: false,
+  versao: 1, custo: 'zero (usa o Estoque & Compras já carregado)',
+  apurar: function (ctx) {
+    var c = ctx.cobertura;
+    if (!c || !c.universo) return null;
+    return { quantidade: c.vendavel, base: c.universo };
+  },
+});
+
+fonte('divergencia_full', {
+  nome: 'Divergência do Full',
+  descricao: 'SKUs cujo saldo do Full no Bling não bate com o físico no ML, sobre os SKUs conciliados. Kits ficam de fora: o estoque deles vem do componente.',
+  escopo: 'pessoa', unidade: '%', direcao: 'Menor é melhor', acumulativo: false,
+  versao: 1, custo: 'zero',
+  ressalva: 'Enquanto o depósito Full não for inventariado no Bling, a linha de base não é confiável — serve para medir, não para cobrar meta.',
+  apurar: function (ctx) {
+    var c = ctx.conciliacaoFull;
+    if (!c || !c.skus) return null;
+    return { quantidade: c.divergentes, base: c.skus };
+  },
+});
+
+/* ─── LUCAS: ativação, primeira venda e portfólio (adendo de outubro) ─────
+   O manual exige base elegível CONGELADA no início da competência. Quando a
+   base congelada não existir, a fonte usa a base atual e marca a ressalva —
+   em vez de recusar a apuração ou fingir que a base é a do dia 1. */
+
+fonte('ativacao_skus', {
+  nome: 'Ativação de SKUs elegíveis não anunciados',
+  descricao: 'SKUs com estoque positivo que passaram a ter anúncio ativo no mês, sobre a base elegível congelada no início da competência.',
+  escopo: 'pessoa', unidade: '%', direcao: 'Maior é melhor', acumulativo: true,
+  versao: 1, custo: 'zero',
+  ressalva: 'Exige base elegível congelada no início do mês. Sem ela, o denominador é a base de hoje e a comparação fica frouxa.',
+  apurar: function (ctx) {
+    var b = ctx.baseElegivel;
+    if (!b || !b.semAnuncioNoInicio) return null;
+    if (ctx.ativadosNoMes == null) return null;
+    return { quantidade: ctx.ativadosNoMes, base: b.semAnuncioNoInicio,
+             detalhe: ctx.ativadosNoMes + ' ativados de ' + b.semAnuncioNoInicio + ' elegíveis' +
+                      (b.congelada ? '' : ' (base NÃO congelada)') };
+  },
+});
+
+fonte('primeira_venda', {
+  nome: 'Primeira venda de SKUs sem histórico',
+  descricao: 'SKUs elegíveis sem nenhuma venda anterior que realizaram a primeira venda válida no mês, sobre a base de SKUs sem histórico.',
+  escopo: 'pessoa', unidade: '%', direcao: 'Maior é melhor', acumulativo: true,
+  versao: 1, custo: 'zero',
+  ressalva: 'Exige base congelada: um SKU que vendeu entra no numerador e sairia do denominador se a base fosse recalculada no fim do mês.',
+  apurar: function (ctx) {
+    var b = ctx.baseElegivel;
+    if (!b || !b.semHistorico || ctx.primeirasVendas == null) return null;
+    return { quantidade: ctx.primeirasVendas, base: b.semHistorico };
+  },
+});
+
+fonte('portfolio_produtivo', {
+  nome: 'Portfólio produtivo',
+  descricao: 'SKUs distintos com venda válida no mês, sobre os SKUs com anúncio ativo. Repetir venda do mesmo SKU não aumenta a variedade.',
+  escopo: 'pessoa', unidade: '%', direcao: 'Maior é melhor', acumulativo: false,
+  versao: 1, custo: 'zero',
+  apurar: function (ctx) {
+    if (ctx.skusComVenda == null || !ctx.skusAnunciados) return null;
+    return { quantidade: ctx.skusComVenda, base: ctx.skusAnunciados };
+  },
+});
+
+/* ─── KAUAN: envios atrasados pela métrica oficial do ML ──────────────────
+   O prazo de postagem NÃO vem no endpoint de envios — conferi 14 envios e
+   nenhum expõe handling limit. A fonte oficial é a reputação do vendedor,
+   que publica a taxa de atraso. Preço disso: a janela é de 60 dias
+   corridos, não o mês da competência. A ressalva vai junto. */
+fonte('envios_atrasados', {
+  nome: 'Envios atrasados (métrica oficial do ML)',
+  descricao: 'Taxa de atraso de preparação publicada pelo Mercado Livre na reputação do vendedor.',
+  escopo: 'pessoa', unidade: '%', direcao: 'Menor é melhor', acumulativo: false,
+  versao: 1, custo: 'baixo (1 chamada)',
+  ressalva: 'A janela da reputação é de 60 dias corridos, não o mês da competência. Comparar com meta mensal é aproximação — o prazo de postagem por envio não é exposto pela API.',
+  apurar: function (ctx) {
+    var m = ctx.reputacao;
+    if (!m || !m.delayed_handling_time || m.delayed_handling_time.value == null) return null;
+    var d = m.delayed_handling_time;
+    var total = m.sales && m.sales.completed;
+    if (!total) return null;
+    return { quantidade: d.value, base: total,
+             detalhe: d.value + ' atrasos em ' + total + ' vendas · janela ' + d.period };
+  },
+});
+
+/* ─── RENATO: substituições para os indicadores sem fonte ─────────────────
+   Conversão paga Shopee e SKUs com pedido pago na Shopee não têm integração.
+   Estas duas cobrem o escopo dele (Bling e cadastro) e são automáticas. */
+
+fonte('qualidade_cadastro_bling', {
+  nome: 'Qualidade do cadastro no Bling',
+  descricao: 'SKUs ativos com saldo que têm custo e fornecedor preenchidos, sobre o total de ativos com saldo. Cadastro incompleto é o que derruba a confiança da margem.',
+  escopo: 'pessoa', unidade: '%', direcao: 'Maior é melhor', acumulativo: false,
+  versao: 1, custo: 'zero',
+  apurar: function (ctx) {
+    var c = ctx.cadastroBling;
+    if (!c || !c.universo) return null;
+    return { quantidade: c.completos, base: c.universo };
+  },
+});
+
+fonte('saldos_e_custos', {
+  nome: 'Saldos negativos e custos zerados',
+  descricao: 'Dois dos quatro controles do Bling Seguro, medidos direto: SKUs com saldo negativo e SKUs ativos com saldo e sem custo. Quanto menos, melhor.',
+  escopo: 'pessoa', unidade: 'Unidades', direcao: 'Menor é melhor', acumulativo: false,
+  versao: 1, custo: 'zero',
+  apurar: function (ctx) {
+    var c = ctx.cadastroBling;
+    if (!c || c.negativos == null || c.semCusto == null) return null;
+    return { quantidade: c.negativos + c.semCusto, base: null,
+             detalhe: c.negativos + ' saldos negativos e ' + c.semCusto + ' sem custo' };
+  },
+});
+
+fonte('margem_contribuicao', {
+  nome: 'Margem de contribuição',
+  descricao: 'Soma da margem unitária do painel multiplicada pela quantidade vendida de cada SKU no período.',
+  escopo: 'empresa', unidade: 'R$', direcao: 'Maior é melhor', acumulativo: true,
+  versao: 1, custo: 'zero extra (usa os pedidos já lidos)',
+  ressalva: 'A margem unitária usa custo reconstruído quando o custo da venda não foi congelado. O número é bom para acompanhar, e merece conferência antes de virar meta de premiação.',
+  apurar: function (ctx) {
+    if (ctx.margemPeriodo == null) return null;
+    return { quantidade: ctx.margemPeriodo, base: null, detalhe: ctx.margemDetalhe || null };
+  },
+});
+
+/* ─── SEM FONTE ──────────────────────────────────────────────────────────── */
+
+fonte('aguardando_integracao', {
+  nome: 'Fonte aguardando integração',
+  descricao: 'Indicador declarado, mas sem origem automática ainda. Devolve N.D. de propósito — é melhor a tela dizer que não sabe do que mostrar zero.',
+  escopo: 'pessoa', unidade: null, direcao: null, acumulativo: false,
+  versao: 1, custo: 'zero',
+  apurar: function () { return null; },
+});
+
+fonte('manual', {
+  nome: 'Lançamento manual',
+  descricao: 'Quantidade e base digitadas por uma pessoa. O motor trata igual às automáticas — a diferença aparece na etiqueta de origem.',
+  escopo: 'pessoa', unidade: null, direcao: null, acumulativo: false,
+  versao: 1, custo: 'zero',
+  apurar: function (ctx, lanc) {
+    var q = lanc && lanc.quantidade, b = lanc && lanc.base;
+    if (q == null || b == null) return null;
+    return { quantidade: q, base: b };
+  },
+});
+
+/* ═══ apuração ═══════════════════════════════════════════════════════════════
+   Percorre os lançamentos de uma competência, chama a fonte de cada um e
+   grava quantidade/base. NÃO toca em meta, peso nem direção — essa é a
+   garantia de que mexer na meta não reapura nada. */
+function xpApurar(competencia, ctx, hoje) {
+  var jan = janelaDaCompetencia(competencia.nome, hoje);
+  var saida = { competencia: competencia.nome, janela: jan, em: new Date().toISOString(),
+                apurados: 0, semFonte: 0, naoApurados: [], erros: [] };
+
+  (competencia.lancamentos || []).forEach(function (l) {
+    if (l.tipo === 'Conformidade') return;
+    /* Valor fechado no encerramento não se mexe mais. */
+    if (l.final != null) return;
+
+    var f = XP_FONTES[l.fonteId || 'manual'];
+    if (!f) { saida.erros.push(l.item + ': fonte desconhecida "' + l.fonteId + '"'); return; }
+
+    var r;
+    try { r = f.apurar(ctx, l); }
+    catch (e) { saida.erros.push(l.item + ': ' + (e && e.message)); return; }
+
+    if (!r || r.quantidade == null) {
+      saida.semFonte++;
+      saida.naoApurados.push(l.item + (f.id === 'aguardando_integracao' ? ' (aguardando integração)' : ' (sem dado)'));
+      l.quantidade = null; l.base = null;
+      l.apuracao = { fonte: f.id, versao: f.versao, em: saida.em, resultado: 'N.D.' };
+      return;
+    }
+
+    l.quantidade = r.quantidade;
+    l.base = r.base;
+    l.data = jan ? jan.ate : null;
+    l.fonte = f.id === 'manual' ? 'manual' : 'automatica';
+    /* O carimbo é o que torna a competência auditável depois, mesmo que a
+       meta mude. */
+    l.apuracao = { fonte: f.id, versao: f.versao, em: saida.em,
+                   janela: jan ? jan.de + ' a ' + jan.ate : null,
+                   parcial: jan ? jan.parcial : null, detalhe: r.detalhe || null };
+    saida.apurados++;
+  });
+
+  return saida;
+}
+
+/* Conferência de coerência entre a meta e o que a fonte devolve. Roda ao
+   salvar a meta, não na apuração — o objetivo é impedir que alguém peça
+   "menor é melhor" numa fonte que mede cobertura, ou "R$" numa que devolve
+   proporção. Devolve lista de avisos; não bloqueia sozinho. */
+function xpConferirMeta(lanc) {
+  var f = XP_FONTES[lanc.fonteId || 'manual'];
+  var avisos = [];
+  if (!f) return ['fonte desconhecida: ' + lanc.fonteId];
+  if (f.unidade && lanc.unidade && f.unidade !== lanc.unidade)
+    avisos.push('a fonte "' + f.nome + '" mede em ' + f.unidade + ', e a meta está em ' + lanc.unidade);
+  if (f.direcao && lanc.direcao && f.direcao !== lanc.direcao)
+    avisos.push('a fonte sugere "' + f.direcao + '" e a meta está como "' + lanc.direcao + '"');
+  if (f.unidade === '%' && lanc.meta != null && lanc.meta > 0 && lanc.meta <= 1)
+    avisos.push('meta ' + lanc.meta + ' parece estar em proporção; nesta fonte a meta é em porcentagem (ex.: 30 para 30%)');
+  if (f.ressalva) avisos.push(f.ressalva);
+  return avisos;
+}
+
+function xpCatalogo() {
+  return Object.keys(XP_FONTES).map(function (k) {
+    var f = XP_FONTES[k];
+    return { id: k, nome: f.nome, escopo: f.escopo, unidade: f.unidade,
+             direcao: f.direcao, acumulativo: f.acumulativo, custo: f.custo,
+             versao: f.versao, descricao: f.descricao, ressalva: f.ressalva || null };
+  });
+}
+
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COLETOR — monta o contexto que as fontes consomem.
+   Roda na página, onde já existem EC.rows (Bling), state.items (anúncios) e
+   a base de pós-venda do Worker. Tudo que é caro acontece aqui, uma vez, e
+   não dentro de cada fonte.
+   ═══════════════════════════════════════════════════════════════════════════ */
+async function xpColetar(opts) {
+  var o = opts || {};
+  var jan = o.janela;                       // { de, ate } em AAAA-MM-DD
+  var ctx = { janela: jan, coletadoEm: new Date().toISOString(), falhas: [] };
+
+  /* 1. Pedidos do período — a base de quase tudo. */
+  if (o.buscarPedidos) {
+    try {
+      var p = await o.buscarPedidos(jan);
+      ctx.pedidos = p;
+    } catch (e) { ctx.falhas.push('pedidos: ' + e.message); }
+  }
+
+  /* 2. Visitas da conta: uma chamada só. */
+  if (o.buscarVisitas) {
+    try { ctx.visitas = await o.buscarVisitas(jan); }
+    catch (e) { ctx.falhas.push('visitas: ' + e.message); }
+  }
+
+  /* 3. Reputação — fonte oficial do atraso de preparação. */
+  if (o.buscarReputacao) {
+    try { ctx.reputacao = await o.buscarReputacao(); }
+    catch (e) { ctx.falhas.push('reputação: ' + e.message); }
+  }
+
+  /* 4. Pós-venda já sincronizado no Worker, recortado pela janela. */
+  if (o.posvenda) {
+    ctx.posvenda = o.posvenda.filter(function (x) {
+      var d = (x.data_ocorrencia || '').slice(0, 10);
+      return (!jan || !d) ? true : (d >= jan.de && d <= jan.ate);
+    });
+  }
+
+  /* 5. Bling e anúncios. */
+  var rows = o.rows || [];
+  var itens = o.itens || [];
+  if (rows.length) {
+    var univ = rows.filter(function (r) { return r.ativo && !r.isKit && (r.total || 0) > 0; });
+    var anunciados = {};
+    itens.forEach(function (it) {
+      (o.skusDoItem ? o.skusDoItem(it) : []).forEach(function (s) { anunciados[s] = true; });
+    });
+    var vendavel = univ.filter(function (r) {
+      if (anunciados[r.sku]) return true;
+      return !!(o.kitsAnunciados && o.kitsAnunciados(r));
+    });
+    ctx.cobertura = { universo: univ.length, vendavel: vendavel.length };
+
+    ctx.cadastroBling = {
+      universo: univ.length,
+      completos: univ.filter(function (r) { return (r.custo > 0) && r.fornecedor; }).length,
+      negativos: rows.filter(function (r) { return !r.isKit && (r.total || 0) < 0; }).length,
+      semCusto: univ.filter(function (r) { return !(r.custo > 0); }).length,
+    };
+
+    ctx.skusAnunciados = Object.keys(anunciados).length;
+  }
+  if (o.conciliacaoFull) ctx.conciliacaoFull = o.conciliacaoFull;
+
+  /* 6. Base elegível. Se o chamador não trouxer uma base CONGELADA, monta
+        uma do estado de hoje e marca que não é congelada — a fonte decide
+        se isso basta. */
+  if (o.baseCongelada) {
+    ctx.baseElegivel = Object.assign({ congelada: true }, o.baseCongelada);
+  } else if (rows.length) {
+    var u2 = rows.filter(function (r) { return r.ativo && !r.isKit && (r.total || 0) > 0; });
+    ctx.baseElegivel = {
+      congelada: false,
+      total: u2.length,
+      semAnuncioNoInicio: u2.filter(function (r) { return !(o.anunciado && o.anunciado(r)); }).length,
+      semHistorico: u2.filter(function (r) { return !r.ultimaVenda; }).length,
+    };
+  }
+
+  /* 7. Derivados dos pedidos: SKUs com venda, primeiras vendas e margem. */
+  if (ctx.pedidos && ctx.pedidos.pagos) {
+    var porSku = {};
+    ctx.pedidos.pagos.forEach(function (ped) {
+      (ped.order_items || []).forEach(function (it) {
+        var sku = it.item && (it.item.seller_sku || it.item.seller_custom_field);
+        if (!sku) return;
+        porSku[sku] = (porSku[sku] || 0) + (Number(it.quantity) || 0);
+      });
+    });
+    ctx.skusComVenda = Object.keys(porSku).length;
+    ctx.vendasPorSku = porSku;
+
+    if (ctx.baseElegivel) {
+      var semHist = {};
+      rows.forEach(function (r) { if (!r.ultimaVenda) semHist[r.sku] = true; });
+      ctx.primeirasVendas = Object.keys(porSku).filter(function (s) { return semHist[s]; }).length;
+    }
+
+    /* Margem do período: margem unitária do painel × quantidade vendida.
+       SKU sem margem conhecida NÃO entra como zero — entra na contagem do
+       que ficou de fora, para a tela poder dizer o tamanho do buraco. */
+    var mg = 0, comMargem = 0, semMargem = 0;
+    var idx = {}; rows.forEach(function (r) { idx[r.sku] = r; });
+    Object.keys(porSku).forEach(function (s) {
+      var r = idx[s];
+      if (r && r.margemUn != null) { mg += r.margemUn * porSku[s]; comMargem++; }
+      else semMargem++;
+    });
+    ctx.margemPeriodo = comMargem ? mg : null;
+    ctx.margemDetalhe = comMargem + ' SKUs com margem conhecida' +
+                        (semMargem ? ', ' + semMargem + ' sem margem (fora da soma)' : '');
+    ctx.margemSemDado = semMargem;
+  }
+
+  /* 8. Ativações do mês: anúncios que nasceram dentro da janela. */
+  if (itens.length && jan) {
+    ctx.ativadosNoMes = itens.filter(function (it) {
+      var d = (it.start_time || '').slice(0, 10);
+      return d && d >= jan.de && d <= jan.ate;
+    }).length;
+  }
+
+  return ctx;
+}
+
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TITANIUM XP — aba do painel
+   Usa _reguas.js (régua do manual), _fontes.js (medição) e o Worker do
+   pós-venda (estado e histórico).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+var XP = {
+  estado: null, rev: 0, comp: null, ctx: null,
+  loading: false, erro: null, aviso: null,
+  view: { aba: 'ranking', pessoa: null, editando: false },
+};
+
+var XP_CFG = { baseGlobal: 50, baseIndividual: 50, xpMax: 120, tetoGlobal: 60, tetoSuperacao: 1.20 };
+var XP_PESSOAS_PADRAO = ['Lucas Belo', 'Renato', 'Kauan', 'William'];
+
+function xpQuem() {
+  var q = null;
+  try { q = localStorage.getItem('pv_quem'); } catch (e) {}
+  if (!q) {
+    q = prompt('Quem está usando? (seu nome — fica no histórico)');
+    if (!q) return null;
+    try { localStorage.setItem('pv_quem', q); } catch (e) {}
+  }
+  return q;
+}
+
+async function xpApi(rota, opts) {
+  return pvApi(rota, opts);   // mesma configuração e chave do pós-venda
+}
+
+/* ─── carga ──────────────────────────────────────────────────────────────── */
+async function xpOpen() { if (!XP.estado) xpCarregar(); else xpRender(); }
+
+async function xpCarregar() {
+  XP.loading = true; XP.erro = null; xpRender();
+  try {
+    var e = await xpApi('/xp/estado');
+    XP.estado = e; XP.rev = e.rev || 0;
+    if (!XP.comp && (e.competencias || []).length)
+      XP.comp = e.competencias[e.competencias.length - 1].nome;
+    if (XP.comp) await xpMedir();
+  } catch (err) { XP.erro = err.message; }
+  XP.loading = false; xpRender();
+}
+
+function xpCompetencia() {
+  return ((XP.estado && XP.estado.competencias) || []).filter(function (c) { return c.nome === XP.comp; })[0] || null;
+}
+
+/* ─── medição: coleta o contexto e roda as fontes ────────────────────────── */
+async function xpMedir() {
+  var c = xpCompetencia();
+  if (!c) return;
+  XP.aviso = 'Medindo…'; xpRender();
+  var jan = janelaDaCompetencia(c.nome);
+  if (!jan) { XP.erro = 'competência "' + c.nome + '" não tem formato Mês/Ano'; return; }
+
+  var pv = [];
+  try { pv = (await pvApi('/pv/ocorrencias')).ocorrencias || []; } catch (e) {}
+
+  XP.ctx = await xpColetar({
+    janela: jan,
+    rows: (typeof EC !== 'undefined' && EC.rows) || [],
+    itens: (typeof state !== 'undefined' && state.items) || [],
+    posvenda: pv,
+    baseCongelada: c.baseCongelada || null,
+    conciliacaoFull: (typeof EC !== 'undefined' && EC.agg && EC.agg.conc)
+      ? { skus: EC.agg.conc.skus, divergentes: EC.agg.conc.div } : null,
+    skusDoItem: function (it) { return (typeof mlItemSkus === 'function') ? mlItemSkus(it) : []; },
+    anunciado: function (r) { return (r.mlIds || []).length > 0; },
+    kitsAnunciados: function (r) { return (typeof ecKitsAnunciados === 'function') && ecKitsAnunciados(r).length; },
+    buscarPedidos: xpBuscarPedidos,
+    buscarVisitas: xpBuscarVisitas,
+    buscarReputacao: xpBuscarReputacao,
+  });
+
+  var s = xpApurar(c, XP.ctx);
+  XP.ultimaApuracao = s;
+  XP.aviso = null;
+  xpRender();
+}
+
+/* Pedidos do período, paginados. Testado: a busca pagina sem teto prático. */
+async function xpBuscarPedidos(jan) {
+  var sid = state.sellerId;
+  var q = '/orders/search?seller=' + sid +
+          '&order.date_created.from=' + encodeURIComponent(jan.de + 'T00:00:00.000-03:00') +
+          '&order.date_created.to=' + encodeURIComponent(jan.ate + 'T23:59:59.000-03:00');
+  var tot = await mlGet(q + '&limit=1');
+  var pg1 = await mlGet(q + '&order.status=paid&limit=1');
+  var cnc = await mlGet(q + '&order.status=cancelled&limit=1');
+  var totalPagos = pg1 && pg1.paging ? pg1.paging.total : null;
+
+  var pagos = [];
+  if (totalPagos) {
+    for (var off = 0; off < totalPagos; off += 50) {
+      var p = await mlGet(q + '&order.status=paid&limit=50&offset=' + off);
+      if (!p || !p.results) break;
+      pagos = pagos.concat(p.results);
+      if (off % 500 === 0) { XP.aviso = 'Lendo pedidos ' + Math.min(off + 50, totalPagos) + '/' + totalPagos + '…'; xpRender(); }
+    }
+  }
+  return { totaisN: tot && tot.paging ? tot.paging.total : null,
+           pagosN: totalPagos, canceladosN: cnc && cnc.paging ? cnc.paging.total : null,
+           pagos: pagos, lidos: pagos.length };
+}
+
+async function xpBuscarVisitas(jan) {
+  var v = await mlGet('/users/' + state.sellerId + '/items_visits?date_from=' + jan.de + '&date_to=' + jan.ate);
+  return v ? v.total_visits : null;
+}
+
+async function xpBuscarReputacao() {
+  var u = await mlGet('/users/' + state.sellerId);
+  return u && u.seller_reputation ? u.seller_reputation.metrics : null;
+}
+
+/* ─── cálculo por pessoa, com a régua do manual ──────────────────────────── */
+function xpAtingimento(l) {
+  if (l.meta == null || l.meta === '') return null;
+  var v = l.final != null ? l.final : xpValorDe(l);
+  if (v === null) return null;
+  var meta = Number(l.meta);
+  if (!isFinite(meta) || meta === 0) return null;
+  /* Limite máximo: dentro do limite vale 100%; acima, meta ÷ realizado.
+     É a regra "Meta com limite máximo" do manual. */
+  if (l.direcao === 'Menor é melhor') return v <= meta ? 1 : meta / v;
+  return v / meta;
+}
+function xpValorDe(l) {
+  if (l.quantidade == null) return null;
+  if (l.base == null) return l.quantidade;            // meta de valor ou quantidade
+  if (!l.base) return null;
+  return l.unidade === '%' ? (l.quantidade / l.base) * 100 : l.quantidade / l.base;
+}
+
+function xpCalcular() {
+  var c = xpCompetencia();
+  if (!c) return null;
+  var lanc = c.lancamentos || [];
+  var globais = lanc.filter(function (l) { return l.tipo === 'Global'; });
+  var fat = globais.filter(function (l) { return /fatur/i.test(l.item); })[0];
+  var mar = globais.filter(function (l) { return /margem|contribu/i.test(l.item); })[0];
+  var aFat = fat ? xpAtingimento(fat) : null;
+  var aMar = mar ? xpAtingimento(mar) : null;
+  var aGlobal = (aFat == null || aMar == null) ? null : Math.min(aFat, aMar);
+
+  var pessoas = (c.pessoas || XP_PESSOAS_PADRAO).map(function (nome) {
+    var meus = lanc.filter(function (l) { return l.quem === nome && l.tipo !== 'Global' && l.tipo !== 'Conformidade'; });
+    var baseline = (c.baseline || []).indexOf(nome) >= 0;
+    var r = consolidarPessoa({
+      atingimentoGlobal: aGlobal,
+      atingimentoFaturamento: aFat, atingimentoMargem: aMar,
+      baseGlobal: XP_CFG.baseGlobal, cfg: XP_CFG,
+      indicadores: meus.map(function (l) {
+        return { nome: l.item, atingimento: baseline ? null : xpAtingimento(l), peso: l.peso, _l: l };
+      }),
+      ocorrencias: lanc.filter(function (l) { return l.tipo === 'Conformidade' && l.quem === nome; }),
+      diasAtestado: (c.atestados || {})[nome] || 0,
+      valorBase: null,     // valor em reais não entra no painel
+    });
+    r.nome = nome; r.baseline = baseline; r.lancamentos = meus;
+    r.pesos = conferirPesos(meus, XP_CFG.baseIndividual);
+    return r;
+  });
+
+  return { atingFat: aFat, atingMargem: aMar, atingGlobal: aGlobal,
+           fat: fat, margem: mar, pessoas: pessoas, competencia: c };
+}
+
+/* ─── render ─────────────────────────────────────────────────────────────── */
+var xpPct = function (v, c) { return v == null ? 'N.D.' : (v * 100).toFixed(c == null ? 1 : c) + '%'; };
+var xpN2 = function (v) { return v == null ? 'N.D.' : v.toFixed(2); };
+
+function xpRender() {
+  var el = document.getElementById('xp-corpo');
+  if (!el) return;
+  if (!pvCfg().url) return (el.innerHTML = pvTelaConfig());
+  if (XP.loading) return (el.innerHTML = '<div class="card" style="padding:40px;text-align:center;color:var(--text2)">Carregando…</div>');
+
+  var comps = (XP.estado && XP.estado.competencias) || [];
+  var c = xpCompetencia();
+  var topo = xpBarra(comps, c);
+
+  if (XP.erro) topo += '<div class="card" style="padding:14px 18px;color:#e5484d">' + ecEsc(XP.erro) + '</div>';
+  if (XP.aviso) topo += '<div class="card" style="padding:12px 18px;color:var(--text2)">' + ecEsc(XP.aviso) + '</div>';
+  if (!comps.length) {
+    el.innerHTML = topo + '<div class="card" style="padding:40px;text-align:center;color:var(--text2)">' +
+      'Nenhuma competência ainda. Use <b>Criar Outubro/2026</b> para começar com os indicadores do manual.</div>';
+    return;
+  }
+  if (!c) { el.innerHTML = topo; return; }
+
+  var R = xpCalcular();
+  el.innerHTML = topo +
+    (XP.view.aba === 'ranking' ? xpTelaRanking(R)
+     : XP.view.aba === 'metas' ? xpTelaMetas(R)
+     : XP.view.aba === 'fontes' ? xpTelaFontes()
+     : xpTelaHistorico());
+}
+
+function xpBarra(comps, c) {
+  var abas = [['ranking', 'Ranking'], ['metas', 'Metas e fontes'], ['fontes', 'Catálogo de fontes'], ['historico', 'Histórico']];
+  var fech = c && c.fechamento && c.fechamento.em;
+  return '<div class="card ec-sec"><div class="ec-toolbar">' +
+    '<div class="ec-chips">' + abas.map(function (a) {
+      return '<button class="ec-chip ' + (XP.view.aba === a[0] ? 'active' : '') + '" onclick="xpAba(\'' + a[0] + '\')">' + a[1] + '</button>';
+    }).join('') + '</div>' +
+    '<div class="ec-tools">' +
+      '<select class="btn-sm" onchange="xpTrocarComp(this.value)">' +
+        comps.map(function (x) { return '<option' + (x.nome === XP.comp ? ' selected' : '') + '>' + ecEsc(x.nome) + '</option>'; }).join('') +
+      '</select>' +
+      (comps.some(function (x) { return x.nome === 'Outubro/2026'; }) ? '' :
+        '<button class="btn-sm" onclick="xpCriarOutubro()">+ Criar Outubro/2026</button>') +
+      '<button class="btn-sm" onclick="xpMedir()">↻ Medir agora</button>' +
+    '</div></div>' +
+    '<div class="ec-muted" style="padding:0 18px 12px">' +
+      (fech ? '<b style="color:#e5a23d">Competência fechada em ' + new Date(fech).toLocaleString('pt-BR') + '.</b> Alterações recusadas pelo servidor. · ' : '') +
+      'Régua do Manual do 4º trimestre. XP individual financeiro = XP técnico × menor atingimento entre faturamento e margem.' +
+      (XP.ultimaApuracao ? ' · Última medição: ' + new Date(XP.ultimaApuracao.em).toLocaleString('pt-BR') +
+        ' (' + XP.ultimaApuracao.apurados + ' apurados' + (XP.ultimaApuracao.semFonte ? ', ' + XP.ultimaApuracao.semFonte + ' sem dado' : '') + ')' : '') +
+    '</div></div>';
+}
+function xpAba(k) { XP.view.aba = k; xpRender(); }
+function xpTrocarComp(n) { XP.comp = n; xpMedir(); }
+
+function xpTelaRanking(R) {
+  if (!R) return '';
+  var jan = janelaDaCompetencia(R.competencia.nome);
+  var g = R.pessoas.length ? R.pessoas[0].global : { xp: null, faixa: 'N.D.' };
+
+  var cards = '<div class="card ec-sec"><div class="card-head"><span class="card-title">Meta Global — ' + ecEsc(R.competencia.nome) +
+    (jan && jan.parcial ? ' <span class="ec-tag">parcial até ' + jan.ate.split('-').reverse().join('/') + '</span>' : '') + '</span></div>' +
+    '<div class="ec-strip">' +
+      ecStat('Faturamento', R.fat ? xpPct(R.atingFat) : 'N.D.', R.fat ? xpValorTxt(R.fat) : 'indicador não cadastrado') +
+      ecStat('Margem de contribuição', R.margem ? xpPct(R.atingMargem) : 'N.D.', R.margem ? xpValorTxt(R.margem) : 'indicador não cadastrado') +
+      ecStat('Atingimento global', xpPct(R.atingGlobal), 'o menor dos dois') +
+      ecStat('XP Global', xpN2(g.xp), g.faixa) +
+    '</div>' +
+    (R.atingGlobal != null && R.atingGlobal < 0.95
+      ? '<div class="ec-muted" style="padding:0 18px 12px;color:#e5a23d">Abaixo de 95%: pela régua do manual o bloco global fica em 0 XP. Isso <b>não</b> zera os indicadores individuais — eles continuam sendo apurados tecnicamente.</div>' : '') +
+    '</div>';
+
+  var linhas = R.pessoas.slice().sort(function (a, b) { return (b.xpFinal || -1) - (a.xpFinal || -1); }).map(function (p, i) {
+    return '<tr style="cursor:pointer" onclick="xpPessoa(\'' + ecEsc(p.nome).replace(/'/g, "\\'") + '\')">' +
+      '<td class="r mono">' + (p.baseline ? '—' : i + 1) + '</td>' +
+      '<td><b>' + ecEsc(p.nome) + '</b>' + (p.baseline ? ' <span class="ec-tag">baseline</span>' : '') + '</td>' +
+      '<td class="r mono">' + xpN2(p.global.xp) + '</td>' +
+      '<td class="r mono">' + xpN2(p.xpIndividualTecnico) + '</td>' +
+      '<td class="r mono">' + (p.fatorEconomico == null ? 'N.D.' : xpPct(p.fatorEconomico)) + '</td>' +
+      '<td class="r mono">' + xpN2(p.xpIndividualFinanceiro) + '</td>' +
+      '<td class="r mono"><b>' + xpN2(p.xpFinal) + '</b></td>' +
+      '<td>' + (p.naoApurados.length ? '<span class="ec-sub">' + p.naoApurados.length + ' sem dado</span>' : '') +
+        (p.pesos.ok ? '' : ' <span style="color:#e5a23d">' + ecEsc(p.pesos.aviso) + '</span>') +
+        (p.semaforo.amarelos ? ' <span style="color:#e5a23d">' + p.semaforo.amarelos + ' amarelo(s)</span>' : '') + '</td></tr>';
+  }).join('');
+
+  return cards + '<div class="card"><div class="ec-table-wrap"><table class="t ec-table"><thead><tr>' +
+    '<th class="r">#</th><th>Pessoa</th><th class="r">XP Global</th><th class="r">Individual técnico</th>' +
+    '<th class="r">Fator econômico</th><th class="r">Individual financeiro</th><th class="r">XP Final</th><th>Observações</th>' +
+    '</tr></thead><tbody>' + linhas + '</tbody></table></div>' +
+    '<div class="ec-muted" style="padding:10px 18px">O <b>XP técnico</b> é o diagnóstico e não sofre o fator econômico. O <b>financeiro</b> é o que vira premiação. Valor em reais não aparece aqui.</div>' +
+    '</div>' + (XP.view.pessoa ? xpDetalhePessoa(R) : '');
+}
+function xpValorTxt(l) {
+  var v = xpValorDe(l);
+  if (v === null) return 'não apurado';
+  var fmt = l.unidade === 'R$' ? ecMoney(v) : l.unidade === '%' ? v.toFixed(2) + '%' : ecInt(v);
+  return fmt + ' de ' + (l.unidade === 'R$' ? ecMoney(l.meta) : l.meta + (l.unidade === '%' ? '%' : ''));
+}
+function xpPessoa(n) { XP.view.pessoa = XP.view.pessoa === n ? null : n; xpRender(); }
+
+function xpDetalhePessoa(R) {
+  var p = R.pessoas.filter(function (x) { return x.nome === XP.view.pessoa; })[0];
+  if (!p) return '';
+  var linhas = p.indicadores.map(function (d) {
+    var l = (p.lancamentos.filter(function (x) { return x.item === d.nome; })[0]) || {};
+    var f = XP_FONTES[l.fonteId || 'manual'];
+    return '<tr><td>' + ecEsc(d.nome) + '</td>' +
+      '<td class="ec-sub">' + ecEsc(f ? f.nome : l.fonteId || '—') + '</td>' +
+      '<td class="r mono">' + (l.quantidade != null && l.base != null ? ecInt(l.quantidade) + ' de ' + ecInt(l.base) : l.quantidade != null ? ecInt(l.quantidade) : '—') + '</td>' +
+      '<td class="r mono">' + (l.meta != null ? l.meta + (l.unidade === '%' ? '%' : '') : '—') + '</td>' +
+      '<td class="r mono">' + xpPct(d.atingimento) + '</td>' +
+      '<td class="ec-sub">' + ecEsc(d.faixa) + '</td>' +
+      '<td class="r mono">' + d.peso + '</td>' +
+      '<td class="r mono"><b>' + xpN2(d.xp) + '</b></td>' +
+      '<td class="ec-sub">' +
+        (l.apuracao && l.apuracao.detalhe ? '<div>' + ecEsc(l.apuracao.detalhe) + '</div>' : '') +
+        (f && f.ressalva ? '<div style="color:#e5a23d">⚠ ' + ecEsc(f.ressalva) + '</div>' : '') +
+      '</td></tr>';
+  }).join('');
+  return '<div class="card ec-sec"><div class="card-head"><span class="card-title">' + ecEsc(p.nome) + '</span>' +
+    '<button class="btn-sm" onclick="xpPessoa(null)">Fechar</button></div>' +
+    (p.baseline ? '<div class="ec-muted" style="padding:0 18px 10px">Em <b>baseline</b>: os indicadores são medidos, mas não geram XP individual nem penalidade nesta competência.</div>' : '') +
+    '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr>' +
+    '<th>Indicador</th><th>Fonte</th><th class="r">Apurado</th><th class="r">Meta</th><th class="r">Atingimento</th><th>Faixa da régua</th><th class="r">Peso</th><th class="r">XP</th><th>Observação</th>' +
+    '</tr></thead><tbody>' + linhas + '</tbody></table></div></div>';
+}
+
+function xpTelaFontes() {
+  var cat = xpCatalogo();
+  return '<div class="card"><div class="card-head"><span class="card-title">Catálogo de fontes</span></div>' +
+    '<div class="ec-muted" style="padding:0 18px 10px">A fonte mede; a meta avalia. Mudar meta, peso ou direção <b>não</b> reapura nada — a quantidade e a base já medidas continuam valendo.</div>' +
+    '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr>' +
+    '<th>Identificador</th><th>Mede</th><th>Escopo</th><th>Unidade</th><th>Direção</th><th>Custo</th><th>Observação</th>' +
+    '</tr></thead><tbody>' + cat.map(function (f) {
+      return '<tr><td class="mono">' + ecEsc(f.id) + '</td><td>' + ecEsc(f.nome) + '</td>' +
+        '<td>' + ecEsc(f.escopo || '—') + '</td><td>' + ecEsc(f.unidade || '—') + '</td>' +
+        '<td class="ec-sub">' + ecEsc(f.direcao || '—') + '</td><td class="ec-sub">' + ecEsc(f.custo || '') + '</td>' +
+        '<td style="white-space:normal;min-width:280px" class="ec-sub">' + ecEsc(f.descricao) +
+        (f.ressalva ? '<div style="color:#e5a23d">⚠ ' + ecEsc(f.ressalva) + '</div>' : '') + '</td></tr>';
+    }).join('') + '</tbody></table></div></div>';
+}
+
+async function xpTelaHistoricoCarregar() {
+  var el = document.getElementById('xp-log');
+  el.innerHTML = '<div class="ec-muted">Carregando…</div>';
+  try {
+    var r = await xpApi('/xp/log?comp=' + encodeURIComponent(XP.comp || ''));
+    el.innerHTML = '<table class="t ec-table"><thead><tr><th>Data</th><th>Lançamento</th><th>Campo</th><th>Antes</th><th>Depois</th><th>Quem</th></tr></thead><tbody>' +
+      (r.log.length ? r.log.slice().reverse().map(function (l) {
+        return '<tr><td class="mono">' + new Date(l.data).toLocaleString('pt-BR') + '</td><td>' + ecEsc(l.lancamento) +
+          '</td><td>' + ecEsc(l.campo) + '</td><td>' + ecEsc(l.de == null ? '—' : l.de) + '</td><td>' + ecEsc(l.para == null ? '—' : l.para) +
+          '</td><td>' + ecEsc(l.usuario) + '</td></tr>'; }).join('')
+        : '<tr><td colspan="6" class="ec-muted" style="padding:14px">Nenhuma alteração registrada.</td></tr>') + '</tbody></table>';
+  } catch (e) { el.innerHTML = '<div style="color:#e5484d">' + ecEsc(e.message) + '</div>'; }
+}
+function xpTelaHistorico() {
+  setTimeout(xpTelaHistoricoCarregar, 0);
+  return '<div class="card"><div class="card-head"><span class="card-title">Histórico de alterações</span></div>' +
+    '<div class="ec-muted" style="padding:0 18px 10px">Toda mudança de meta, peso, fonte, unidade ou direção fica registrada com autor e data. É a memória de cálculo que o manual exige.</div>' +
+    '<div id="xp-log" style="padding:0 18px 18px"></div></div>';
+}
+
+/* ─── tela de metas: onde se edita meta, peso, direção e fonte ───────────── */
+function xpTelaMetas(R) {
+  var c = R.competencia;
+  var fech = c.fechamento && c.fechamento.em;
+  var cat = xpCatalogo();
+  var opFonte = function (sel) {
+    return cat.map(function (f) { return '<option value="' + f.id + '"' + (sel === f.id ? ' selected' : '') + '>' + ecEsc(f.nome) + '</option>'; }).join('');
+  };
+  var linhas = (c.lancamentos || []).map(function (l, i) {
+    var f = XP_FONTES[l.fonteId || 'manual'];
+    var avisos = xpConferirMeta(l);
+    var dis = fech ? ' disabled' : '';
+    return '<tr>' +
+      '<td>' + ecEsc(l.quem) + (l.tipo === 'Global' ? ' <span class="ec-tag">global</span>' : '') + '</td>' +
+      '<td>' + ecEsc(l.item) + '</td>' +
+      '<td><select class="btn-sm"' + dis + ' onchange="xpSet(' + i + ',\'fonteId\',this.value)">' + opFonte(l.fonteId) + '</select></td>' +
+      '<td class="r mono">' + (l.quantidade != null ? (l.base != null ? ecInt(l.quantidade) + '/' + ecInt(l.base) : ecInt(l.quantidade)) : '<span class="ec-sub">—</span>') + '</td>' +
+      '<td class="r mono">' + (xpValorDe(l) === null ? '—' : (l.unidade === 'R$' ? ecMoney(xpValorDe(l)) : xpValorDe(l).toFixed(2) + (l.unidade === '%' ? '%' : ''))) + '</td>' +
+      '<td><input class="btn-sm" style="width:92px" type="number" step="0.01"' + dis + ' value="' + (l.meta == null ? '' : l.meta) + '" onchange="xpSet(' + i + ',\'meta\',this.value)"></td>' +
+      '<td><select class="btn-sm"' + dis + ' onchange="xpSet(' + i + ',\'unidade\',this.value)">' +
+        ['%', 'R$', 'Unidades'].map(function (u) { return '<option' + (l.unidade === u ? ' selected' : '') + '>' + u + '</option>'; }).join('') + '</select></td>' +
+      '<td><select class="btn-sm"' + dis + ' onchange="xpSet(' + i + ',\'direcao\',this.value)">' +
+        ['Maior é melhor', 'Menor é melhor'].map(function (d) { return '<option' + (l.direcao === d ? ' selected' : '') + '>' + d + '</option>'; }).join('') + '</select></td>' +
+      '<td><input class="btn-sm" style="width:64px" type="number" step="1"' + dis + ' value="' + (l.peso == null ? '' : l.peso) + '" onchange="xpSet(' + i + ',\'peso\',this.value)"></td>' +
+      '<td style="white-space:normal;min-width:240px" class="ec-sub">' +
+        (avisos.length ? avisos.map(function (a) { return '<div style="color:#e5a23d">⚠ ' + ecEsc(a) + '</div>'; }).join('') : '') +
+        ((l.apuracao && l.apuracao.detalhe) ? '<div>' + ecEsc(l.apuracao.detalhe) + '</div>' : '') +
+      '</td></tr>';
+  }).join('');
+
+  var pesos = (c.pessoas || XP_PESSOAS_PADRAO).map(function (n) {
+    var p = conferirPesos((c.lancamentos || []).filter(function (l) { return l.quem === n && l.tipo !== 'Global' && l.tipo !== 'Conformidade'; }), XP_CFG.baseIndividual);
+    return n + ': ' + p.soma + (p.ok ? '' : ' ⚠');
+  }).join(' · ');
+
+  return '<div class="card">' +
+    '<div class="ec-toolbar"><span class="card-title">Metas e fontes — ' + ecEsc(c.nome) + '</span>' +
+    '<div class="ec-tools">' +
+      (fech ? '<span class="ec-sub">competência fechada</span>'
+            : '<button class="btn-sm" onclick="xpSalvar()">Salvar alterações</button>') +
+    '</div></div>' +
+    '<div class="ec-muted" style="padding:0 18px 10px">Pesos individuais por pessoa — ' + ecEsc(pesos) + ' · devem somar ' + XP_CFG.baseIndividual + '. ' +
+      'Alterar meta ou peso <b>não</b> reapura: o apurado continua o mesmo e só o atingimento muda.</div>' +
+    '<div class="ec-table-wrap"><table class="t ec-table" style="min-width:1400px"><thead><tr>' +
+    '<th>Quem</th><th>Indicador</th><th>Fonte</th><th class="r">Apurado</th><th class="r">Realizado</th><th class="r">Meta</th><th>Unidade</th><th>Direção</th><th class="r">Peso</th><th>Avisos</th>' +
+    '</tr></thead><tbody>' + linhas + '</tbody></table></div></div>';
+}
+
+function xpSet(i, campo, valor) {
+  var c = xpCompetencia(); if (!c) return;
+  var l = c.lancamentos[i]; if (!l) return;
+  if (campo === 'meta' || campo === 'peso') l[campo] = valor === '' ? null : Number(valor);
+  else l[campo] = valor;
+  XP.view.editando = true;
+  xpRender();
+}
+
+async function xpSalvar() {
+  var quem = xpQuem(); if (!quem) return;
+  var c = xpCompetencia(); if (!c) return;
+  try {
+    var r = await xpApi('/xp/salvar', { method: 'POST', body: { competencia: c, usuario: quem, rev: XP.rev } });
+    if (r.erro) { alert(r.erro); return; }
+    XP.rev = r.rev; XP.view.editando = false;
+    XP.aviso = r.mudancas ? r.mudancas + ' alteração(ões) registrada(s) no histórico.' : 'Nada mudou.';
+    xpRender();
+  } catch (e) { alert('Não foi possível salvar: ' + e.message); }
+}
+
+/* ─── seed de Outubro/2026, conforme o Manual do 4º trimestre ─────────────
+   As metas vão VAZIAS de propósito. O manual é explícito: "definir metas
+   numéricas apenas após apurar histórico; as porcentagens discutidas
+   anteriormente eram hipóteses, não metas aprovadas". O painel mede primeiro
+   e você preenche a meta vendo o número real. */
+function xpSeedOutubro() {
+  var L = function (o) {
+    return Object.assign({ id: Math.random().toString(36).slice(2), tipo: 'Individual',
+      meta: null, unidade: '%', direcao: 'Maior é melhor', peso: null,
+      acumulativo: false, quantidade: null, base: null, final: null }, o);
+  };
+  return {
+    nome: 'Outubro/2026',
+    criadaEm: new Date().toISOString(),
+    pessoas: ['Lucas Belo', 'Renato', 'Kauan', 'William'],
+    baseline: ['William'],
+    nota: 'Metas em branco por decisão do manual: definir número só depois de apurar histórico.',
+    lancamentos: [
+      L({ item: 'Faturamento', quem: 'Empresa', tipo: 'Global', fonteId: 'faturamento_ml', unidade: 'R$', acumulativo: true }),
+      L({ item: 'Margem de contribuição', quem: 'Empresa', tipo: 'Global', fonteId: 'margem_contribuicao', unidade: 'R$', acumulativo: true }),
+
+      /* Lucas — proposta do adendo de outubro (Ads saiu do escopo dele) */
+      L({ item: 'Ativação de SKUs elegíveis não anunciados', quem: 'Lucas Belo', fonteId: 'ativacao_skus', peso: 20, acumulativo: true }),
+      L({ item: 'Primeira venda de SKUs sem histórico', quem: 'Lucas Belo', fonteId: 'primeira_venda', peso: 15, acumulativo: true }),
+      L({ item: 'Ampliação do portfólio produtivo', quem: 'Lucas Belo', fonteId: 'portfolio_produtivo', peso: 15 }),
+
+      /* Renato — Bling Seguro mantido; os dois da Shopee substituídos por
+         fontes automáticas do escopo dele, sujeito à sua aprovação */
+      L({ item: 'Bling Seguro — saldos negativos e custos zerados', quem: 'Renato', fonteId: 'saldos_e_custos', peso: 20, unidade: 'Unidades', direcao: 'Menor é melhor' }),
+      L({ item: 'Qualidade do cadastro no Bling', quem: 'Renato', fonteId: 'qualidade_cadastro_bling', peso: 15 }),
+      L({ item: 'Conversão paga Shopee', quem: 'Renato', fonteId: 'aguardando_integracao', peso: 15, direcao: 'Maior é melhor' }),
+
+      /* Kauan — os três do manual */
+      L({ item: 'Envios atrasados', quem: 'Kauan', fonteId: 'envios_atrasados', peso: 20, direcao: 'Menor é melhor' }),
+      L({ item: 'Erros de expedição', quem: 'Kauan', fonteId: 'erros_expedicao', peso: 15, direcao: 'Menor é melhor' }),
+      L({ item: 'Divergência Full', quem: 'Kauan', fonteId: 'divergencia_full', peso: 15, direcao: 'Menor é melhor' }),
+
+      /* William — baseline: mede, não pontua */
+      L({ item: 'Falhas de estoque e recebimento', quem: 'William', fonteId: 'falhas_estoque', peso: null, direcao: 'Menor é melhor' }),
+      L({ item: 'Divergência Full (acompanhamento)', quem: 'William', fonteId: 'divergencia_full', peso: null, direcao: 'Menor é melhor' }),
+    ],
+  };
+}
+
+async function xpCriarOutubro() {
+  var quem = xpQuem(); if (!quem) return;
+  var c = xpSeedOutubro();
+  try {
+    var r = await xpApi('/xp/salvar', { method: 'POST', body: { competencia: c, usuario: quem, rev: XP.rev } });
+    if (r.erro) { alert(r.erro); return; }
+    XP.rev = r.rev; XP.comp = c.nome;
+    await xpCarregar();
+  } catch (e) { alert('Não foi possível criar: ' + e.message); }
 }
 
 </script>
