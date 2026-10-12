@@ -1544,8 +1544,52 @@ function logout(){
 // ════════════════════════════════════════════
 
 // Call ML /oauth/token with refresh_token grant
+/* ─── Token do Mercado Livre: quem renova é o Worker ──────────────────────
+   O refresh token do ML é de uso único — cada renovação invalida o anterior.
+   Com o painel e o Worker renovando, um derruba o outro. Desde 12/10/2026 o
+   dono do refresh é o Worker mercado-intel; o painel só pede o access token.
+   Isso também tira appSecret e refresh do localStorage no uso normal.      */
+const MI_URL = 'https://mercado-intel.rafael-custodio.workers.dev';
+
+function miChave() {
+  try {
+    const m = JSON.parse(localStorage.getItem('mi_cfg') || '{}');
+    if (m.key) return m.key;
+  } catch (e) {}
+  /* Mesma chave do Worker de pós-venda, se já estiver configurada. */
+  try { return (JSON.parse(localStorage.getItem('pv_cfg') || '{}').key) || ''; } catch (e) { return ''; }
+}
+function miSalvarChave(k) {
+  try { localStorage.setItem('mi_cfg', JSON.stringify({ key: k || '' })); } catch (e) {}
+}
+
+/* Devolve o token do Worker, ou null quando o Worker não puder servir.
+   Null não é erro silencioso: o chamador cai no caminho antigo e avisa. */
+async function miPedirToken() {
+  const chave = miChave();
+  if (!chave) return { erro: 'sem chave' };
+  try {
+    const r = await fetchWithTimeout(MI_URL + '/mi/token', { headers: { 'x-chave': chave } }, 20000);
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.token) return { erro: (j && j.erro) || ('HTTP ' + r.status) };
+    return { token: j.token, expira: j.expira_em || (Date.now() + 5.5 * 3600 * 1000) };
+  } catch (e) { return { erro: e.message || 'rede' }; }
+}
+
 async function doRefreshToken(){
   if(state.isDemo) return false;
+
+  /* 1. Caminho novo: o Worker é o dono do refresh. */
+  const viaWorker = await miPedirToken();
+  if (viaWorker.token) {
+    state.token = viaWorker.token;
+    state.tokenExpiresAt = viaWorker.expira;
+    saveCreds(); updateTokenUI(); scheduleAutoRefresh();
+    showToast('✅ Token renovado pelo Worker. Válido por mais ~6h.', 'ok');
+    return true;
+  }
+  console.warn('[Token] Worker não serviu o token:', viaWorker.erro, '— tentando o caminho antigo.');
+
   if(!state.refreshToken || !state.appId || !state.appSecret){
     showToast('Refresh token ou credenciais do app ausentes. Reinsira o token manualmente.', 'warn');
     openModal('modal-expired');
