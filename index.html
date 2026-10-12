@@ -1734,14 +1734,13 @@ function goTab(el, page){
 // ════════════════════════════════════════════
 const BASE = 'https://api.mercadolibre.com';
 
-// Cadeia de proxies CORS — tenta um por vez até funcionar
-const WORKER = 'https://square-hill-d05c.rafael-custodio.workers.dev';
-const PROXIES = [
-  WORKER,
-  'https://corsproxy.io/?url=',
-  'https://api.allorigins.win/raw?url=',
-  'https://cors-anywhere.herokuapp.com/',
-];
+// Único caminho de saída: o Worker da própria conta.
+// Os proxies públicos (corsproxy.io, allorigins.win, cors-anywhere) foram
+// removidos em 12/10/2026: toda chamada leva o header Authorization, e mandar
+// o token de vendedor para serviço de terceiro expõe pedidos, dados de
+// comprador, estoque e publicação de anúncios. Se o Worker cair, o painel
+// falha de forma visível — é o comportamento desejado.
+const WORKER_ONLY = true;
 
 function isLocal(){ return location.protocol === 'file:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1'; }
 
@@ -1759,32 +1758,15 @@ async function fetchWithTimeout(url, options={}, ms=12000){
   }
 }
 
-// Tenta a URL direta primeiro; se CORS/network error, tenta cada proxy
 async function mlFetch(path, options={}){
-  const full = `${BASE}${path}`;
-
-  // Se não é local, tenta direto primeiro
-  if(!isLocal()){
-    try {
-      const r = await fetchWithTimeout(full, options);
-      if(r.ok || r.status === 401) return r;
-    } catch(e){ /* cai para proxy */ }
+  try {
+    const r = await fetchWithTimeout(`${WORKER}/?path=${encodeURIComponent(path)}`, options, 20000);
+    if(r.status < 500) return r;
+    throw new Error('Worker respondeu ' + r.status);
+  } catch(e){
+    setStep('Falha ao falar com o Worker da conta — nenhuma chamada foi desviada para terceiros.');
+    throw new Error('Worker indisponível: ' + e.message);
   }
-
-  // Tenta cada proxy em sequência
-  for(const proxy of PROXIES){
-    const proxyUrl = proxy === WORKER
-      ? `${WORKER}/?path=${encodeURIComponent(path)}`
-      : proxy.includes('?url=')
-        ? `${proxy}${encodeURIComponent(full)}`
-        : `${proxy}${full}`;
-    try {
-      setStep(`Conectando via proxy (${PROXIES.indexOf(proxy)+1}/${PROXIES.length})...`);
-      const r = await fetchWithTimeout(proxyUrl, options, 14000);
-      if(r.status < 500) return r; // aceita qualquer resposta não-server-error
-    } catch(e){ console.warn('Proxy falhou:', proxy, e.message); }
-  }
-  throw new Error('Todos os proxies falharam');
 }
 
 async function mlGet(path, retried=false){
