@@ -8888,6 +8888,8 @@ async function xpCriarOutubro() {
       Livre não publica isso. Demanda aqui é posição no ranking oficial.
    ═══════════════════════════════════════════════════════════════════════ */
 
+var MI_COBERTURA_MINIMA = 0.5;
+
 var MI_PESOS_PADRAO = {
   demanda: 25, crescimento: 20, competicao: 15, margem: 25, portfolio: 15,
 };
@@ -8960,20 +8962,31 @@ function miScore(l, ctx, pesos) {
     margem: mg ? mg.valor : null,
     portfolio: miCompPortfolio(l, ctx),
   };
-  var soma = 0, pesoUsado = 0, faltando = [];
+  var soma = 0, pesoUsado = 0, pesoTotal = 0, faltando = [];
   Object.keys(P).forEach(function (k) {
+    pesoTotal += P[k];
     if (comp[k] == null) { faltando.push(k); return; }
     soma += comp[k] * P[k];
     pesoUsado += P[k];
   });
-  /* Sem nenhum componente, não existe score. Devolver 0 seria dizer
-     "péssima oportunidade" sobre algo que não foi medido. */
-  if (!pesoUsado) return { score: null, parcial: true, faltando: faltando, componentes: comp };
+  var cobertura = pesoTotal ? pesoUsado / pesoTotal : 0;
+
+  /* A renormalização tem um limite, e descobri isso na prática: um produto
+     medido só pela posição ganhava 100 — nota cheia por ter sido avaliado
+     em um único quesito, e justamente os menos conhecidos subiam ao topo.
+     Abaixo de METADE do peso apurado, não há score: há desconhecimento. */
+  if (!pesoUsado || cobertura < MI_COBERTURA_MINIMA) {
+    return { score: null, parcial: true, faltando: faltando, cobertura: cobertura,
+             motivo: !pesoUsado ? 'nada foi medido'
+                    : 'medido em menos da metade dos quesitos', componentes: comp,
+             margemPct: mg ? mg.margemPct : null };
+  }
   return {
     score: Math.round((soma / pesoUsado) * 100),
     parcial: faltando.length > 0,
     faltando: faltando,
     pesoApurado: pesoUsado,
+    cobertura: cobertura,
     componentes: comp,
     margemPct: mg ? mg.margemPct : null,
   };
@@ -9007,7 +9020,10 @@ function miJustificar(l, s, tipo) {
          : d < 0 ? 'caiu ' + (-d) + ' posições em 7 dias' : 'estável há 7 dias');
   }
   var texto = tipo + ': ' + p.join('; ') + '.';
-  if (s.faltando && s.faltando.length) {
+  if (s.score == null) {
+    texto += ' Sem score: ' + (s.motivo || 'dados insuficientes') +
+             ' (faltou ' + (s.faltando || []).join(', ') + ').';
+  } else if (s.faltando && s.faltando.length) {
     texto += ' Score parcial — faltou ' + s.faltando.join(', ') + '.';
   }
   return texto;
@@ -9020,17 +9036,20 @@ function miRadar(linhas, ctx, pesos) {
     var tipo = miClassificar(l, ctx);
     return {
       linha: l, tipo: tipo, score: s.score, parcial: s.parcial,
-      faltando: s.faltando, componentes: s.componentes, margemPct: s.margemPct,
+      faltando: s.faltando, cobertura: s.cobertura, motivo: s.motivo || null,
+      componentes: s.componentes, margemPct: s.margemPct,
       justificativa: miJustificar(l, s, tipo),
     };
   });
   /* Ordena por score, mas joga o não-calculável para o fim em vez de
      tratá-lo como zero. */
   out.sort(function (a, b) {
-    if (a.score == null && b.score == null) return 0;
+    if (a.score == null && b.score == null) return (b.cobertura || 0) - (a.cobertura || 0);
     if (a.score == null) return 1;
     if (b.score == null) return -1;
-    return b.score - a.score;
+    if (b.score !== a.score) return b.score - a.score;
+    /* Empate no score: quem foi medido em mais quesitos vem antes. */
+    return (b.cobertura || 0) - (a.cobertura || 0);
   });
   return out;
 }
@@ -9044,12 +9063,6 @@ function miResumoRadar(radar) {
   });
   return r;
 }
-
-if (typeof module !== 'undefined') module.exports = {
-  MI_PESOS_PADRAO, MI_TIPO, miNorm, miCompDemanda, miCompCrescimento,
-  miCompCompeticao, miCompMargem, miCompPortfolio, miScore, miClassificar,
-  miJustificar, miRadar, miResumoRadar,
-};
 
 /* ═══════════════════════════════════════════════════════════════════════
    INTELIGÊNCIA DE MERCADO | TITANIUM — a aba
@@ -9370,7 +9383,8 @@ function miTelaRadar() {
       : o.score >= 70 ? 'var(--green)' : o.score >= 45 ? 'var(--ml-yellow)' : 'var(--text2)';
     return '<tr>' +
       '<td class="r mono"><b style="color:' + cor + '">' + (o.score == null ? 'N.D.' : o.score) + '</b>' +
-        (o.parcial && o.score != null ? '<div class="ec-sub" style="font-size:10px">parcial</div>' : '') + '</td>' +
+        (o.score == null ? '<div class="ec-sub" style="font-size:10px">' + Math.round((o.cobertura || 0) * 100) + '% medido</div>'
+         : o.parcial ? '<div class="ec-sub" style="font-size:10px">parcial</div>' : '') + '</td>' +
       '<td><span class="ec-tag">' + ecEsc(o.tipo) + '</span></td>' +
       '<td class="ec-sub">' + ecEsc(l.categoria || l.categoria_id) + '</td>' +
       '<td class="r mono">' + l.posicao + '</td>' +
