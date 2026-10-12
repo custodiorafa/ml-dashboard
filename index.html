@@ -8873,6 +8873,185 @@ async function xpCriarOutubro() {
 
 
 /* ═══════════════════════════════════════════════════════════════════════
+   RADAR DE OPORTUNIDADES — o motor
+
+   Roda no painel, e não no Worker, por um motivo: metade da conta depende
+   de dado que só existe no navegador — custo e estoque vindos do Bling e
+   os anúncios da própria conta. O Worker não vê o Bling.
+
+   Três regras que o motor não quebra:
+   1. Componente sem dado é NULL, nunca zero. Zero é uma nota ruim; nulo é
+      ausência de nota, e as duas coisas levam a decisões diferentes.
+   2. Quando falta componente, o score é recalculado só sobre os pesos
+      apurados e sai marcado como PARCIAL, com a lista do que faltou.
+   3. Nada aqui usa quantidade vendida de concorrente, porque o Mercado
+      Livre não publica isso. Demanda aqui é posição no ranking oficial.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var MI_PESOS_PADRAO = {
+  demanda: 25, crescimento: 20, competicao: 15, margem: 25, portfolio: 15,
+};
+
+var MI_TIPO = {
+  LANCAMENTO: 'Lançamento',
+  EXPANSAO: 'Expansão',
+  SUBSTITUICAO: 'Substituição',
+  TENDENCIA: 'Tendência emergente',
+  ACOMPANHAR: 'Acompanhar',
+};
+
+/* Normaliza para 0..1 com teto e piso explícitos. Fora da faixa, satura —
+   não extrapola, que é como score vira ficção. */
+function miNorm(v, bom, ruim) {
+  if (v == null || !isFinite(v)) return null;
+  if (bom === ruim) return null;
+  var x = (v - ruim) / (bom - ruim);
+  return Math.max(0, Math.min(1, x));
+}
+
+/* ─── componentes ───────────────────────────────────────────────────── */
+
+/* Demanda: posição 1 vale 1, posição 20 vale 0. É ordem publicada pelo ML,
+   não volume. */
+function miCompDemanda(l) { return miNorm(l.posicao, 1, 21); }
+
+/* Crescimento: quantas posições subiu em 7 dias. Sem o dia de comparação,
+   não existe — e isso é o caso normal na primeira semana. */
+function miCompCrescimento(l) {
+  if (l.pos_7d == null || l.posicao == null) return null;
+  return miNorm(l.pos_7d - l.posicao, 5, -5);
+}
+
+/* Atratividade competitiva: poucos vendedores é melhor. Até 3 vendedores
+   vale 1; de 40 para cima, 0. */
+function miCompCompeticao(l) { return miNorm(l.n_vendedores, 3, 40); }
+
+/* Margem potencial: só existe com custo conhecido. Para produto que a
+   Titanium não vende, não há custo — e estimar seria inventar.
+   margem = (preço mediano − custo − comissão estimada) / preço mediano */
+function miCompMargem(l, ctx) {
+  var custo = ctx && ctx.custoPorProduto ? ctx.custoPorProduto(l) : null;
+  if (custo == null || l.preco_mediano == null || !(l.preco_mediano > 0)) return null;
+  var comissao = (ctx && ctx.comissaoPct != null ? ctx.comissaoPct : 0.16);
+  var m = (l.preco_mediano * (1 - comissao) - custo) / l.preco_mediano;
+  return { valor: miNorm(m, 0.45, 0), margemPct: m };
+}
+
+/* Adequação ao portfólio: o quanto isso se parece com o que a Titanium já
+   sabe vender. Marca conhecida pesa mais que domínio conhecido. */
+function miCompPortfolio(l, ctx) {
+  if (!ctx) return null;
+  var marcas = ctx.marcasTitanium || {};
+  var dominios = ctx.dominiosTitanium || {};
+  if (l.marca && marcas[String(l.marca).toLowerCase()]) return 1;
+  if (l.dominio && dominios[l.dominio]) return 0.6;
+  if (!l.marca && !l.dominio) return null;   // ficha ainda não coletada
+  return 0.15;
+}
+
+/* ─── score ─────────────────────────────────────────────────────────── */
+function miScore(l, ctx, pesos) {
+  var P = pesos || MI_PESOS_PADRAO;
+  var mg = miCompMargem(l, ctx);
+  var comp = {
+    demanda: miCompDemanda(l),
+    crescimento: miCompCrescimento(l),
+    competicao: miCompCompeticao(l),
+    margem: mg ? mg.valor : null,
+    portfolio: miCompPortfolio(l, ctx),
+  };
+  var soma = 0, pesoUsado = 0, faltando = [];
+  Object.keys(P).forEach(function (k) {
+    if (comp[k] == null) { faltando.push(k); return; }
+    soma += comp[k] * P[k];
+    pesoUsado += P[k];
+  });
+  /* Sem nenhum componente, não existe score. Devolver 0 seria dizer
+     "péssima oportunidade" sobre algo que não foi medido. */
+  if (!pesoUsado) return { score: null, parcial: true, faltando: faltando, componentes: comp };
+  return {
+    score: Math.round((soma / pesoUsado) * 100),
+    parcial: faltando.length > 0,
+    faltando: faltando,
+    pesoApurado: pesoUsado,
+    componentes: comp,
+    margemPct: mg ? mg.margemPct : null,
+  };
+}
+
+/* ─── classificação ─────────────────────────────────────────────────── */
+function miClassificar(l, ctx) {
+  var vende = l.titanium_dentro === 1 || (ctx && ctx.vendeProduto && ctx.vendeProduto(l));
+  var cresceu = l.pos_7d != null && l.posicao != null && (l.pos_7d - l.posicao) >= 3;
+
+  if (vende) {
+    /* Já vende: a oportunidade é de posição ou de preço, não de lançamento. */
+    if (l.posicao > 10) return MI_TIPO.EXPANSAO;
+    return MI_TIPO.ACOMPANHAR;
+  }
+  if (cresceu) return MI_TIPO.TENDENCIA;
+  if (l.posicao != null && l.posicao <= 10) return MI_TIPO.LANCAMENTO;
+  return MI_TIPO.ACOMPANHAR;
+}
+
+/* ─── justificativa em português, montada só com o que foi medido ───── */
+function miJustificar(l, s, tipo) {
+  var p = [];
+  if (l.posicao != null) p.push('posição ' + l.posicao + ' no ranking oficial da categoria');
+  if (l.n_vendedores != null) p.push(l.n_vendedores + (l.n_vendedores === 1 ? ' vendedor' : ' vendedores') + ' disputando');
+  if (l.preco_mediano != null) p.push('preço mediano de R$ ' + l.preco_mediano.toFixed(2).replace('.', ','));
+  if (s.margemPct != null) p.push('margem estimada de ' + Math.round(s.margemPct * 100) + '%');
+  if (l.pos_7d != null) {
+    var d = l.pos_7d - l.posicao;
+    p.push(d > 0 ? 'subiu ' + d + ' posições em 7 dias'
+         : d < 0 ? 'caiu ' + (-d) + ' posições em 7 dias' : 'estável há 7 dias');
+  }
+  var texto = tipo + ': ' + p.join('; ') + '.';
+  if (s.faltando && s.faltando.length) {
+    texto += ' Score parcial — faltou ' + s.faltando.join(', ') + '.';
+  }
+  return texto;
+}
+
+/* ─── a lista ───────────────────────────────────────────────────────── */
+function miRadar(linhas, ctx, pesos) {
+  var out = (linhas || []).map(function (l) {
+    var s = miScore(l, ctx, pesos);
+    var tipo = miClassificar(l, ctx);
+    return {
+      linha: l, tipo: tipo, score: s.score, parcial: s.parcial,
+      faltando: s.faltando, componentes: s.componentes, margemPct: s.margemPct,
+      justificativa: miJustificar(l, s, tipo),
+    };
+  });
+  /* Ordena por score, mas joga o não-calculável para o fim em vez de
+     tratá-lo como zero. */
+  out.sort(function (a, b) {
+    if (a.score == null && b.score == null) return 0;
+    if (a.score == null) return 1;
+    if (b.score == null) return -1;
+    return b.score - a.score;
+  });
+  return out;
+}
+
+function miResumoRadar(radar) {
+  var r = { total: radar.length, parciais: 0, semScore: 0, porTipo: {} };
+  radar.forEach(function (o) {
+    if (o.score == null) r.semScore++;
+    else if (o.parcial) r.parciais++;
+    r.porTipo[o.tipo] = (r.porTipo[o.tipo] || 0) + 1;
+  });
+  return r;
+}
+
+if (typeof module !== 'undefined') module.exports = {
+  MI_PESOS_PADRAO, MI_TIPO, miNorm, miCompDemanda, miCompCrescimento,
+  miCompCompeticao, miCompMargem, miCompPortfolio, miScore, miClassificar,
+  miJustificar, miRadar, miResumoRadar,
+};
+
+/* ═══════════════════════════════════════════════════════════════════════
    INTELIGÊNCIA DE MERCADO | TITANIUM — a aba
 
    Substitui a antiga Demanda & Trends. A diferença de fundo: aquela
@@ -8885,7 +9064,58 @@ async function xpCriarOutubro() {
    mais vendidos. A tela diz "posição", não "vendas".
    ═══════════════════════════════════════════════════════════════════════ */
 
-var MI = { estado: null, view: 'visao', cat: '', dados: null, loading: false, erro: null };
+var MI = { estado: null, view: 'visao', cat: '', dados: null, loading: false, erro: null, pesos: null };
+
+/* ─── contexto do radar: o que só existe no navegador ────────────────────
+   Marcas e domínios que a Titanium já vende, o vínculo entre produto de
+   catálogo e anúncio próprio, e o custo vindo do Bling. Nada disso o
+   Worker enxerga. */
+function miCtx() {
+  var itens = (typeof state !== 'undefined' && state.items) || [];
+  var marcas = {}, dominios = {}, porCatalogo = {};
+  itens.forEach(function (i) {
+    var b = (i.attributes || []).filter(function (a) { return a.id === 'BRAND'; })[0];
+    if (b && b.value_name) marcas[String(b.value_name).toLowerCase()] = true;
+    if (i.domain_id) dominios[i.domain_id] = true;
+    if (i.catalog_product_id) porCatalogo[i.catalog_product_id] = i;
+  });
+  var custoPorSku = {};
+  ((typeof EC !== 'undefined' && EC.rows) || []).forEach(function (r) {
+    if (r.sku && r.custo != null) custoPorSku[r.sku] = r.custo;
+  });
+  return {
+    marcasTitanium: marcas,
+    dominiosTitanium: dominios,
+    comissaoPct: 0.16,
+    vendeProduto: function (l) { return !!porCatalogo[l.produto_id]; },
+    custoPorProduto: function (l) {
+      var it = porCatalogo[l.produto_id];
+      if (!it) return null;
+      var sku = it.seller_custom_field;
+      return (sku && custoPorSku[sku] != null) ? custoPorSku[sku] : null;
+    },
+    totais: { itens: itens.length, comCatalogo: Object.keys(porCatalogo).length,
+              marcas: Object.keys(marcas).length },
+  };
+}
+
+function miPesos() {
+  if (MI.pesos) return MI.pesos;
+  try { MI.pesos = JSON.parse(localStorage.getItem('mi_pesos') || 'null'); } catch (e) {}
+  if (!MI.pesos) MI.pesos = Object.assign({}, MI_PESOS_PADRAO);
+  return MI.pesos;
+}
+function miSetPeso(k, v) {
+  var p = miPesos();
+  p[k] = Math.max(0, Number(v) || 0);
+  try { localStorage.setItem('mi_pesos', JSON.stringify(p)); } catch (e) {}
+  miRender();
+}
+function miPesosPadrao() {
+  MI.pesos = Object.assign({}, MI_PESOS_PADRAO);
+  try { localStorage.setItem('mi_pesos', JSON.stringify(MI.pesos)); } catch (e) {}
+  miRender();
+}
 
 async function miApi(rota) {
   var chave = (typeof miChave === 'function') ? miChave() : '';
@@ -8911,7 +9141,7 @@ async function miCarregar() {
 async function miVer(v) {
   MI.view = v; MI.dados = null; MI.erro = null; MI.loading = true; miRender();
   try {
-    if (v === 'produtos') MI.dados = await miApi('/mi/produtos' + (MI.cat ? '?cat=' + MI.cat : ''));
+    if (v === 'produtos' || v === 'radar') MI.dados = await miApi('/mi/produtos' + (MI.cat ? '?cat=' + MI.cat : ''));
     if (v === 'marcas')   MI.dados = await miApi('/mi/marcas');
     if (v === 'visao')    MI.estado = await miApi('/mi/visao');
   } catch (e) { MI.erro = e.message; }
@@ -9094,11 +9324,101 @@ function miTelaMarcas() {
     '</tr></thead><tbody>' + linhas + '</tbody></table></div></div>';
 }
 
+/* ─── tela: radar de oportunidades ───────────────────────────────────── */
+function miTelaRadar() {
+  var L = (MI.dados && MI.dados.linhas) || [];
+  if (!L.length) return '<div class="card ec-sec"><div class="card-body">Sem posições coletadas ainda.</div></div>';
+
+  var ctx = miCtx();
+  var P = miPesos();
+  var radar = miRadar(L, ctx, P);
+  var res = miResumoRadar(radar);
+
+  var campos = [['demanda', 'Demanda'], ['crescimento', 'Crescimento'],
+                ['competicao', 'Concorrência'], ['margem', 'Margem'], ['portfolio', 'Portfólio']];
+  var somaPesos = campos.reduce(function (a, c) { return a + (P[c[0]] || 0); }, 0);
+
+  var pesosUI = '<div class="card ec-sec"><div class="card-head">' +
+    '<span class="card-title">Pesos do score</span>' +
+    '<button class="btn-sm" onclick="miPesosPadrao()">Voltar ao padrão</button></div>' +
+    '<div class="card-body" style="display:flex;flex-wrap:wrap;gap:14px">' +
+    campos.map(function (c) {
+      return '<label class="ec-f" style="min-width:140px"><span>' + c[1] + '</span>' +
+        '<input type="number" min="0" max="100" value="' + (P[c[0]] || 0) +
+        '" onchange="miSetPeso(\'' + c[0] + '\', this.value)"></label>';
+    }).join('') +
+    '</div><div class="ec-muted" style="padding:0 18px 12px;font-size:12px">' +
+    'Somam ' + somaPesos + '. Quando um componente não pode ser medido, ele sai da conta e o score é ' +
+    'recalculado só sobre os pesos restantes — por isso a marcação <b>parcial</b>.</div></div>';
+
+  var semMargem = radar.filter(function (o) { return o.faltando.indexOf('margem') >= 0; }).length;
+  var aviso = '<div class="card ec-sec" style="border-left:3px solid var(--ml-yellow)">' +
+    '<div class="card-body" style="font-size:13px;line-height:1.7">' +
+    '<b>' + ecInt(res.total) + '</b> produtos avaliados · <b>' + ecInt(res.parciais) + '</b> com score parcial · <b>' +
+    ecInt(res.semScore) + '</b> sem score calculável.<br>' +
+    'Dos avaliados, <b>' + ecInt(semMargem) + '</b> estão sem margem porque a Titanium não vende o produto — ' +
+    'sem custo de compra, estimar margem seria inventar. O cruzamento usa os <b>' +
+    ecInt(ctx.totais.comCatalogo) + '</b> anúncios seus que estão vinculados a um produto de catálogo do ML ' +
+    '(de ' + ecInt(ctx.totais.itens) + ' no total).</div></div>';
+
+  var linhas = radar.slice(0, 200).map(function (o) {
+    var l = o.linha;
+    var nome = l.nome && !/^\(/.test(l.nome) ? l.nome
+      : (l.tipo === 'USER_PRODUCT' ? '<span class="ec-sub">anúncio próprio de vendedor</span>'
+                                   : '<span class="ec-sub">ficha ainda não coletada</span>');
+    var cor = o.score == null ? 'var(--text2)'
+      : o.score >= 70 ? 'var(--green)' : o.score >= 45 ? 'var(--ml-yellow)' : 'var(--text2)';
+    return '<tr>' +
+      '<td class="r mono"><b style="color:' + cor + '">' + (o.score == null ? 'N.D.' : o.score) + '</b>' +
+        (o.parcial && o.score != null ? '<div class="ec-sub" style="font-size:10px">parcial</div>' : '') + '</td>' +
+      '<td><span class="ec-tag">' + ecEsc(o.tipo) + '</span></td>' +
+      '<td class="ec-sub">' + ecEsc(l.categoria || l.categoria_id) + '</td>' +
+      '<td class="r mono">' + l.posicao + '</td>' +
+      '<td>' + nome + '<div class="ec-sub" style="font-size:11px">' + ecEsc(o.justificativa) + '</div></td>' +
+      '<td>' + ecEsc(l.marca || '—') + '</td>' +
+      '<td class="r mono">' + (l.preco_mediano != null ? ecMoney2(l.preco_mediano) : '—') + '</td>' +
+      '<td class="r mono">' + ecInt(l.n_vendedores) + '</td>' +
+      '<td class="r mono">' + (o.margemPct != null ? Math.round(o.margemPct * 100) + '%' : '<span class="ec-sub">N.D.</span>') + '</td>' +
+      '</tr>';
+  }).join('');
+
+  var porTipo = Object.keys(res.porTipo).map(function (t) {
+    return '<span class="ec-tag" style="margin-right:6px">' + ecEsc(t) + ': ' + res.porTipo[t] + '</span>';
+  }).join('');
+
+  return pesosUI + aviso +
+    '<div class="card ec-sec"><div class="card-head">' +
+    '<span class="card-title">Oportunidades ordenadas por score</span>' +
+    '<button class="btn-sm" onclick="miExportarRadar()">Exportar CSV</button></div>' +
+    '<div class="ec-muted" style="padding:0 18px 10px;font-size:12px">' + porTipo + '</div>' +
+    '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr>' +
+    '<th class="r">Score</th><th>Tipo</th><th>Categoria</th><th class="r">Pos.</th>' +
+    '<th>Produto e justificativa</th><th>Marca</th><th class="r">Preço mediano</th>' +
+    '<th class="r">Vendedores</th><th class="r">Margem</th>' +
+    '</tr></thead><tbody>' + linhas + '</tbody></table></div></div>';
+}
+
+function miExportarRadar() {
+  var L = (MI.dados && MI.dados.linhas) || [];
+  var radar = miRadar(L, miCtx(), miPesos());
+  ecBaixaCsv('radar_oportunidades_' + ((MI.dados && MI.dados.data) || 'hoje') + '.csv',
+    ['Score', 'Parcial', 'Faltou', 'Tipo', 'Categoria', 'Posicao', 'Produto', 'Marca',
+     'Preco mediano', 'Vendedores', 'Margem %', 'Justificativa'],
+    radar.map(function (o) {
+      var l = o.linha;
+      return [o.score == null ? 'N.D.' : o.score, o.parcial ? 'sim' : 'nao', o.faltando.join(' '),
+        o.tipo, l.categoria || l.categoria_id, l.posicao, l.nome || '', l.marca || '',
+        l.preco_mediano, l.n_vendedores,
+        o.margemPct == null ? 'N.D.' : Math.round(o.margemPct * 100), o.justificativa];
+    }));
+}
+
 /* ─── render ─────────────────────────────────────────────────────────── */
 function miRender() {
   var el = document.getElementById('mi-corpo');
   if (!el) return;
-  var abas = [['visao', 'Visão estratégica'], ['produtos', 'Ranking de produtos'], ['marcas', 'Ranking de marcas']];
+  var abas = [['visao', 'Visão estratégica'], ['radar', 'Radar de oportunidades'],
+              ['produtos', 'Ranking de produtos'], ['marcas', 'Ranking de marcas']];
   var nav = '<div class="card ec-sec"><div class="ec-toolbar"><div class="ec-chips">' +
     abas.map(function (a) {
       return '<button class="ec-chip ' + (MI.view === a[0] ? 'active' : '') +
@@ -9114,6 +9434,7 @@ function miRender() {
   else if (MI.view === 'visao') corpo = miTelaVisao();
   else if (MI.view === 'produtos') corpo = miTelaProdutos();
   else if (MI.view === 'marcas') corpo = miTelaMarcas();
+  else if (MI.view === 'radar') corpo = miTelaRadar();
 
   el.innerHTML = nav + corpo;
 }
@@ -9121,6 +9442,7 @@ function miRender() {
 if (typeof module !== 'undefined') module.exports = {
   miDelta, miFaixa, miTelaVisao, miTelaProdutos, miTelaMarcas, miRender,
 };
+
 
 </script>
 </body>
