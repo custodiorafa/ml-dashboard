@@ -914,7 +914,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
     <div class="tab active" onclick="goTab(this,'overview')">📊 Visão Geral</div>
     <div class="tab" onclick="goTab(this,'comercial');ccOpen()">💼 Comercial</div>
     <div class="tab" onclick="goTab(this,'pricing');pxOpen()">💰 Precificação</div>
-    <div class="tab" onclick="goTab(this,'demand')">📈 Demanda & Trends</div>
+    <div class="tab" onclick="goTab(this,'demand');miOpen()">🔎 Inteligência de Mercado</div>
     <div class="tab" onclick="goTab(this,'compras');ecOpen()">🧭 Estoque &amp; Compras</div>
     <div class="tab" onclick="goTab(this,'posvenda');pvOpen()">↩️ Pós-Venda</div>
     <div class="tab" onclick="goTab(this,'xp');xpOpen()">🏆 Titanium XP</div>
@@ -1127,150 +1127,15 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
       <div id="px-body"><div class="card"><div class="card-body" style="text-align:center;padding:40px;color:var(--text2)">Abra esta aba para comparar seus preços com os concorrentes.</div></div></div>
     </div>
 
-    <!-- ═══ DEMAND & TRENDS ═══ -->
+    <!-- ═══ INTELIGÊNCIA DE MERCADO ═══ -->
     <div class="page" id="page-demand">
       <div class="page-header">
         <div>
-          <div class="page-title">Demanda & <span>Tendências</span></div>
-          <div class="page-meta">Produtos mais buscados nas suas categorias — API /trends</div>
-        </div>
-        <button class="btn-sm btn-primary" onclick="loadTrends()">↻ Atualizar Trends</button>
-      </div>
-
-      <div class="kpi-row">
-        <div class="kpi" style="--kpi-color:var(--orange)">
-          <div class="kpi-label">Tendências Monitoradas</div>
-          <div class="kpi-val" id="trend-count">—</div>
-          <div class="kpi-delta neutral">Top buscas da semana</div>
-        </div>
-        <div class="kpi" style="--kpi-color:var(--green)">
-          <div class="kpi-label">Você Já Vende</div>
-          <div class="kpi-val" id="your-in-trend">—</div>
-          <div class="kpi-delta up">↑ produtos nas trends</div>
-        </div>
-        <div class="kpi" style="--kpi-color:var(--accent)">
-          <div class="kpi-label">Gap — Não Vende Ainda</div>
-          <div class="kpi-val" id="launch-opps">—</div>
-          <div class="kpi-delta neutral">oportunidades de lançamento</div>
-        </div>
-        <div class="kpi" style="--kpi-color:var(--purple)">
-          <div class="kpi-label">Categorias Monitoradas</div>
-          <div class="kpi-val" id="active-cats">—</div>
-          <div class="kpi-delta neutral">das suas categorias ativas</div>
+          <div class="page-title">Inteligência de <span>Mercado</span></div>
+          <div class="page-meta">Ranking oficial, concorrência e marcas — coleta diária com fonte e data</div>
         </div>
       </div>
-
-      <!-- Filtros -->
-      <div class="card" style="margin-bottom:16px">
-        <div class="card-head">
-          <span class="card-title">Filtros</span>
-          <span class="badge b-blue">Selecione categoria + tipo de análise</span>
-        </div>
-        <div class="card-body" style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
-          <div>
-            <div style="font-size:10px;font-family:var(--mono);text-transform:uppercase;letter-spacing:0.8px;color:var(--muted);margin-bottom:6px">Categoria</div>
-            <div id="cat-filter-pills" style="display:flex;flex-wrap:wrap;gap:0"></div>
-          </div>
-          <div>
-            <div style="font-size:10px;font-family:var(--mono);text-transform:uppercase;letter-spacing:0.8px;color:var(--muted);margin-bottom:6px">Visualizar</div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap">
-              <button class="filter-btn active" id="btn-all" onclick="setTrendFilter(this,'all')">Todos</button>
-              <button class="filter-btn" id="btn-gap" onclick="setTrendFilter(this,'gap')">🚀 Só Oportunidades</button>
-              <button class="filter-btn" id="btn-have" onclick="setTrendFilter(this,'have')">✓ Você já vende</button>
-              <button class="filter-btn" id="btn-hot" onclick="setTrendFilter(this,'hot')">🔥 Top 10</button>
-            </div>
-          </div>
-          <div>
-            <div style="font-size:10px;font-family:var(--mono);text-transform:uppercase;letter-spacing:0.8px;color:var(--muted);margin-bottom:6px">Score mínimo</div>
-            <select id="score-filter" onchange="applyTrendFilter()" style="background:var(--surface2);border:1px solid var(--border2);border-radius:8px;padding:6px 12px;color:var(--text);font-size:12px;font-family:var(--sans)">
-              <option value="0">Todos os scores</option>
-              <option value="70">Score ≥ 70</option>
-              <option value="80">Score ≥ 80</option>
-              <option value="90">Score ≥ 90</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div class="g2">
-        <!-- Lista de trends com filtros -->
-        <div class="card">
-          <div class="card-head">
-            <span class="card-title">🔥 Mais Buscados — <span id="trend-filter-label">Todos</span></span>
-            <span class="badge b-orange" id="trend-showing-count">0 resultados</span>
-          </div>
-          <div class="card-body" style="padding:0">
-            <div class="scroll" id="trends-list" style="max-height:480px">
-              <div style="padding:20px;text-align:center;color:var(--muted);font-size:13px">Carregando tendências...</div>
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <!-- Score de oportunidade -->
-          <div class="card" style="margin-bottom:16px">
-            <div class="card-head">
-              <span class="card-title">📊 Score de Oportunidade</span>
-              <span class="badge b-green">Gap × Rank × Demanda</span>
-            </div>
-            <div class="card-body">
-              <div class="bars" id="opp-score-bars"></div>
-              <div style="margin-top:10px;font-size:11px;color:var(--muted);line-height:1.6">
-                Score = (50-rank)/50 × 100 + bônus por gap (não vende ainda).<br>
-                Quanto maior, maior a oportunidade de lançamento.
-              </div>
-            </div>
-          </div>
-
-          <!-- Demanda por categoria -->
-          <div class="card">
-            <div class="card-head"><span class="card-title">Demanda por Categoria</span></div>
-            <div class="card-body">
-              <div class="bars" id="demand-bars"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Oportunidades de lançamento detalhadas -->
-      <div class="card">
-        <div class="card-head">
-          <span class="card-title">🚀 Oportunidades de Lançamento — Detalhado</span>
-          <div style="display:flex;gap:8px;align-items:center">
-            <span class="badge b-green" id="opp-count-badge">0 oportunidades</span>
-            <select id="opp-sort" onchange="sortOpportunities()" style="background:var(--surface2);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:11px;font-family:var(--sans)">
-              <option value="score">Ordenar: Score</option>
-              <option value="rank">Ordenar: Rank nas buscas</option>
-              <option value="competition">Ordenar: Menor concorrência</option>
-            </select>
-          </div>
-        </div>
-        <div class="card-body" style="padding:0">
-          <div id="launch-opps-list" style="max-height:400px;overflow-y:auto"></div>
-        </div>
-      </div>
-
-      <!-- Projeção de demanda — da planilha Projeção TABELA2 -->
-      <div class="g2">
-        <div class="card">
-          <div class="card-head">
-            <span class="card-title">📈 Projeção de Demanda — Próximos 3 Meses</span>
-            <span class="badge b-blue">Base: trends + sazonalidade</span>
-          </div>
-          <div class="card-body">
-            <div class="bars" id="growth-bars"></div>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-head">
-            <span class="card-title">🎯 Meta vs Tendência</span>
-            <span class="badge b-purple">Taxonomia de produto</span>
-          </div>
-          <div class="card-body" id="meta-trends-body">
-            <div class="c-muted" style="font-size:13px">Carregando...</div>
-          </div>
-        </div>
-      </div>
+      <div id="mi-corpo"></div>
     </div>
 
     <!-- ═══ COMPETITORS ═══ -->
@@ -1877,16 +1742,6 @@ function demoItems(){
   })); 
 }
 
-function demoTrends(catId){
-  const all = [
-    'fone bluetooth','smartwatch','carregador usb c','case iphone 15','webcam full hd','mesa home office','teclado mecânico','mouse sem fio','headset gamer','monitor 27 polegadas','cabo hdmi 4k','hub usb','pen drive 64gb','ssd externo 1tb','caixa de som bluetooth',
-    'tênis running','mochila escolar','óculos de sol','relógio masculino','bolsa feminina','perfume importado','creme facial','shampoo profissional','kit maquiagem','protetor solar fps70',
-    'cafeteira nespresso','air fryer 5l','panela de pressão elétrica','aspirador robô','ferro a vapor','liquidificador potente','batedeira stand mixer','churrasqueira elétrica','balança digital','garrafa térmica',
-    'bicicleta elétrica','halteres borracha','colchonete yoga','band loop exercício','corda pular speed',
-    'livro sapiens','lego minecraft','boneca barbie','hot wheels pista','jogo banco imobiliário'
-  ];
-  return all.slice(0,50).map((kw,i)=>({ keyword:kw, url:`https://listado.mercadolibre.com.br/${kw.replace(/ /g,'-')}` }));
-}
 
 function demoOrders(){ return { results: Array.from({length:187},(_,i)=>({ id:i, total_amount: 80+Math.random()*400 })) }; }
 
@@ -2001,7 +1856,7 @@ async function startApp(){
 async function renderAll(){
   renderTopBar();
   await renderOverview();
-  loadTrends();
+  miOpen();
   loadCompetitorsData();
   renderAlerts();
   updateSync();
@@ -2270,207 +2125,6 @@ function renderPriceDist(items){
 // ════════════════════════════════════════════
 // PRICING — tempo real via busca pública ML
 // ════════════════════════════════════════════
-// ════════════════════════════════════════════
-// TRENDS — por categoria real + filtros interativos
-// ════════════════════════════════════════════
-const trendState = { filter:'all', catId:null, catNames:{}, allTrends:[], oppList:[] };
-
-function setTrendFilter(el, filter){
-  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
-  el.classList.add('active');
-  trendState.filter = filter;
-  const labels={all:'Todos',gap:'Só Oportunidades',have:'Você já vende',hot:'Top 10'};
-  document.getElementById('trend-filter-label').textContent = labels[filter]||filter;
-  applyTrendFilter();
-}
-
-function applyTrendFilter(){
-  const filter = trendState.filter;
-  const minScore = parseInt(document.getElementById('score-filter')?.value||0);
-  const items = trendState.allItems||[];
-  const myTitles = items.map(i=>(i.title||'').toLowerCase());
-
-  let visible = trendState.allTrends.map((tr,i)=>{
-    const kw=(tr.keyword||'').toLowerCase();
-    const kwFirst=kw.split(' ')[0];
-    const isYours=myTitles.some(t=>t.includes(kwFirst)||kwFirst.split('').length>4&&t.includes(kw.slice(0,6)));
-    const score = Math.max(10, Math.round((1-i/trendState.allTrends.length)*80) + (isYours?0:20));
-    return { ...tr, rank:i+1, isYours, score };
-  });
-
-  if(filter==='gap') visible=visible.filter(t=>!t.isYours);
-  else if(filter==='have') visible=visible.filter(t=>t.isYours);
-  else if(filter==='hot') visible=visible.slice(0,10);
-
-  if(minScore>0) visible=visible.filter(t=>t.score>=minScore);
-
-  document.getElementById('trend-showing-count').textContent=`${visible.length} resultados`;
-
-  document.getElementById('trends-list').innerHTML = visible.length
-    ? visible.map(tr=>`
-        <div class="trend-item" style="${!tr.isYours?'border-left:2px solid rgba(0,212,161,0.3);padding-left:10px':''}">
-          <div class="trend-rank ${tr.rank<=3?'top':''}">${tr.rank<=3?['🥇','🥈','🥉'][tr.rank-1]:tr.rank}</div>
-          <div style="flex:1">
-            <div class="trend-kw">${tr.keyword}</div>
-            <div style="font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:2px">
-              ${trendState.catNames[trendState.catId]||'categoria'} · rank #${tr.rank}
-            </div>
-          </div>
-          <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
-            ${tr.isYours?'<span class="badge b-green">✓ Você tem</span>':'<span class="badge b-orange">Gap</span>'}
-            <span style="background:rgba(52,131,250,0.1);color:var(--accent);border-radius:6px;padding:2px 8px;font-size:11px;font-family:var(--mono);font-weight:700">${tr.score}</span>
-            ${tr.rank<=3?'<span class="trend-chip trend-hot">🔥</span>':''}
-          </div>
-        </div>`)
-      .join('')
-    : '<div style="padding:24px;text-align:center;color:var(--muted);font-size:13px">Nenhum resultado para este filtro</div>';
-
-  // Atualiza oportunidades
-  const opps = visible.filter(t=>!t.isYours).sort((a,b)=>b.score-a.score);
-  trendState.oppList = opps;
-  document.getElementById('opp-count-badge').textContent=`${opps.length} oportunidades`;
-  renderOppList(opps);
-
-  // Score bars — top 8 oportunidades
-  const colors=['#00d4a1','#3483fa','#ff9500','#a78bfa','#ff4d6a','#ffe600','#00d4a1','#ff6b35'];
-  document.getElementById('opp-score-bars').innerHTML = opps.slice(0,8).map((tr,i)=>`
-    <div class="bar-row">
-      <div class="bar-lbl">${tr.keyword}</div>
-      <div class="bar-trk"><div class="bar-fill" style="width:${tr.score}%;background:${colors[i%8]}"></div></div>
-      <div class="bar-num" style="color:${colors[i%8]}">${tr.score}</div>
-    </div>`).join('') || '<div class="c-muted" style="font-size:13px">Nenhuma oportunidade detectada</div>';
-}
-
-function renderOppList(opps){
-  document.getElementById('launch-opps-list').innerHTML = opps.length
-    ? opps.slice(0,10).map((tr,i)=>`
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--border);${i===0?'background:rgba(0,212,161,0.03)':''}">
-          <div style="flex:1">
-            <div style="font-size:14px;font-weight:700">${tr.keyword}</div>
-            <div style="font-size:12px;color:var(--text2);margin-top:4px">
-              Rank #${tr.rank} nas buscas · ${trendState.catNames[trendState.catId]||'sua categoria'} · Você ainda não vende
-            </div>
-            <div style="margin-top:6px;display:flex;gap:8px">
-              <span style="font-size:11px;background:rgba(52,131,250,0.08);color:var(--accent);border-radius:4px;padding:2px 8px;font-family:var(--mono)">Score ${tr.score}</span>
-              ${tr.rank<=5?'<span style="font-size:11px;background:rgba(255,149,0,0.08);color:var(--orange);border-radius:4px;padding:2px 8px">Alta demanda</span>':''}
-              <span style="font-size:11px;background:rgba(0,212,161,0.08);color:var(--green);border-radius:4px;padding:2px 8px">Gap detectado</span>
-            </div>
-          </div>
-          <div style="text-align:right;flex-shrink:0">
-            <div style="font-size:22px;font-weight:800;color:var(--green)">${tr.score}</div>
-            <div style="font-size:10px;color:var(--muted);font-family:var(--mono)">score</div>
-            <a href="https://www.mercadolivre.com.br/${(tr.keyword||'').replace(/ /g,'-')}" target="_blank" 
-               style="font-size:11px;color:var(--accent);text-decoration:none;display:block;margin-top:4px">Ver no ML →</a>
-          </div>
-        </div>`)
-      .join('')
-    : '<div style="padding:24px;text-align:center;color:var(--green);font-size:13px">🎉 Você já cobre todas as tendências desta categoria!</div>';
-}
-
-function sortOpportunities(){
-  const sort = document.getElementById('opp-sort')?.value||'score';
-  let sorted = [...trendState.oppList];
-  if(sort==='rank') sorted.sort((a,b)=>a.rank-b.rank);
-  else if(sort==='score') sorted.sort((a,b)=>b.score-a.score);
-  else if(sort==='competition') sorted.sort((a,b)=>b.score-a.score); // proxy
-  renderOppList(sorted);
-}
-
-async function loadTrends(){
-  const items = state.isDemo ? demoItems() : state.items;
-  trendState.allItems = items;
-  const catCounts={}; items.forEach(i=>{ if(i.category_id) catCounts[i.category_id]=(catCounts[i.category_id]||0)+1; }); const catIds=Object.entries(catCounts).sort((a,b)=>b[1]-a[1]).map(([cid])=>cid).slice(0,8);
-
-  // Resolve nomes reais das categorias
-  const catNames={};
-  if(!state.isDemo && catIds.length){
-    for(const cid of catIds){
-      const cat=await mlGetPublic(`/categories/${cid}`);
-      catNames[cid]=cat?.name||cid;
-    }
-  } else {
-    const fb={'MLB1051':'Eletrônicos','MLB1574':'Casa','MLB1430':'Moda','MLB1246':'Esporte','MLB1144':'Beleza','MLB1000':'Geral'};
-    catIds.forEach(c=>catNames[c]=fb[c]||c);
-  }
-  trendState.catNames=catNames;
-
-  const filterCats=catIds.length?catIds:['MLB1051','MLB1574','MLB1430'];
-  if(!filterCats.length) filterCats.push('MLB1051');
-
-  document.getElementById('active-cats').textContent=filterCats.length;
-  document.getElementById('cat-filter-pills').innerHTML=filterCats.map((c,i)=>`
-    <span class="cat-pill ${i===0?'sel':''}" onclick="filterTrendsByCat(this,'${c}')">${catNames[c]||c}</span>`).join('');
-
-  await fetchAndRenderTrends(filterCats[0]);
-}
-
-async function filterTrendsByCat(el, catId){
-  document.querySelectorAll('.cat-pill').forEach(p=>p.classList.remove('sel'));
-  el.classList.add('sel');
-  await fetchAndRenderTrends(catId);
-}
-
-async function fetchAndRenderTrends(catId){
-  trendState.catId=catId;
-  document.getElementById('trends-list').innerHTML='<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px">⏳ Buscando tendências...</div>';
-
-  let trends=null;
-  if(!state.isDemo){
-    trends=await mlGetPublic(`/trends/${state.site}/${catId}`);
-    if(!trends||!Array.isArray(trends)) trends=await mlGetPublic(`/trends/${state.site}`);
-  }
-  const trendsUnavailable=(!trends||!Array.isArray(trends))&&!state.isDemo; if(!trends||!Array.isArray(trends)) trends = state.isDemo ? demoTrends(catId) : []; trendState.trendsUnavailable=trendsUnavailable; if(trendsUnavailable){ const _msg='<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px">⚠️ API de Trends do Mercado Livre indisponível para esta conta (endpoint bloqueado ou descontinuado pelo ML). Não é possível exibir dados reais de demanda agora.</div>'; document.getElementById('trends-list').innerHTML=_msg; document.getElementById('demand-bars').innerHTML=_msg; document.getElementById('growth-bars').innerHTML=_msg; document.getElementById('trend-count').textContent='—'; document.getElementById('your-in-trend').textContent='—'; document.getElementById('launch-opps').textContent='—'; return; }
-
-  trendState.allTrends=trends;
-  document.getElementById('trend-count').textContent=trends.length;
-
-  const items=trendState.allItems||[];
-  const myTitles=items.map(i=>(i.title||'').toLowerCase());
-  let inTrend=0,launchOpps=0;
-  trends.forEach((tr,i)=>{
-    const kw=(tr.keyword||'').toLowerCase();
-    const isYours=myTitles.some(t=>t.includes(kw.split(' ')[0]));
-    if(isYours) inTrend++; else launchOpps++;
-  });
-  document.getElementById('your-in-trend').textContent=inTrend;
-  document.getElementById('launch-opps').textContent=launchOpps;
-
-  // Barras de demanda por categoria
-  const catEntries=Object.entries(trendState.catNames).slice(0,6);
-  const demVals=[92,84,76,68,60,52];
-  document.getElementById('demand-bars').innerHTML=catEntries.map(([cid,name],i)=>`
-    <div class="bar-row">
-      <div class="bar-lbl">${name}</div>
-      <div class="bar-trk"><div class="bar-fill" style="width:${demVals[i]||50}%;background:var(--accent)"></div></div>
-      <div class="bar-num c-blue">${demVals[i]||50}</div>
-    </div>`).join('')||'<div class="c-muted" style="font-size:13px">Sem dados</div>';
-
-  // Projeção crescimento
-  const colors=['#ff9500','#ff6b35','#ffe600','#00d4a1','#3483fa','#a78bfa','#ff4d6a','#00d4a1'];
-  document.getElementById('growth-bars').innerHTML=trends.slice(0,8).map((tr,i)=>`
-    <div class="bar-row">
-      <div class="bar-lbl">${tr.keyword}</div>
-      <div class="bar-trk"><div class="bar-fill" style="width:${100-i*10}%;background:${colors[i]}"></div></div>
-      <div class="bar-num" style="color:${colors[i]}">+${100-i*10}%</div>
-    </div>`).join('');
-
-  // Meta vs Tendência — da aba META TABELA1 da planilha
-  const topInTrend=trends.filter(tr=>myTitles.some(t=>t.includes((tr.keyword||'').toLowerCase().split(' ')[0]))).slice(0,5);
-  document.getElementById('meta-trends-body').innerHTML=topInTrend.length
-    ? topInTrend.map((tr,i)=>`
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
-          <span style="font-size:13px;font-weight:600;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${tr.keyword}</span>
-          <div style="display:flex;gap:6px;align-items:center">
-            <span class="badge b-green">✓ Você vende</span>
-            <span style="font-size:11px;color:var(--muted);font-family:var(--mono)">rank #${i+1}</span>
-          </div>
-        </div>`).join('')
-    : '<div class="c-muted" style="font-size:13px">Nenhum dos seus produtos aparece nas trends desta categoria. Veja as oportunidades de lançamento.</div>';
-
-  // Aplica filtro atual
-  applyTrendFilter();
-}
-
 // ════════════════════════════════════════════
 // STOCK PREDICTIVE + sugestão de reposição
 // ════════════════════════════════════════════
@@ -9216,6 +8870,257 @@ async function xpCriarOutubro() {
     await xpCarregar();
   } catch (e) { alert('Não foi possível criar: ' + e.message); }
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   INTELIGÊNCIA DE MERCADO | TITANIUM — a aba
+
+   Substitui a antiga Demanda & Trends. A diferença de fundo: aquela
+   convertia posição numa lista de palavras-chave em "score" e chamava
+   aquilo de demanda. Aqui cada número tem fonte e data, e o que não existe
+   aparece como N.D. — nunca como zero.
+
+   Regra que atravessa a tela toda: o Mercado Livre não publica quantidade
+   vendida de concorrente. O que existe é a POSIÇÃO no ranking oficial de
+   mais vendidos. A tela diz "posição", não "vendas".
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var MI = { estado: null, view: 'visao', cat: '', dados: null, loading: false, erro: null };
+
+async function miApi(rota) {
+  var chave = (typeof miChave === 'function') ? miChave() : '';
+  if (!chave) throw new Error('chave do Worker não configurada');
+  var r = await fetchWithTimeout(MI_URL + rota, { headers: { 'x-chave': chave } }, 45000);
+  var j = await r.json().catch(function () { return null; });
+  if (!r.ok || (j && j.erro)) throw new Error((j && j.erro) || ('HTTP ' + r.status));
+  return j;
+}
+
+async function miOpen() { if (!MI.estado) miCarregar(); else miRender(); }
+
+async function miCarregar() {
+  MI.loading = true; MI.erro = null; miRender();
+  try {
+    MI.estado = await miApi('/mi/visao');
+    if (MI.view === 'produtos') MI.dados = await miApi('/mi/produtos' + (MI.cat ? '?cat=' + MI.cat : ''));
+    if (MI.view === 'marcas')   MI.dados = await miApi('/mi/marcas');
+  } catch (e) { MI.erro = e.message; }
+  MI.loading = false; miRender();
+}
+
+async function miVer(v) {
+  MI.view = v; MI.dados = null; MI.erro = null; MI.loading = true; miRender();
+  try {
+    if (v === 'produtos') MI.dados = await miApi('/mi/produtos' + (MI.cat ? '?cat=' + MI.cat : ''));
+    if (v === 'marcas')   MI.dados = await miApi('/mi/marcas');
+    if (v === 'visao')    MI.estado = await miApi('/mi/visao');
+  } catch (e) { MI.erro = e.message; }
+  MI.loading = false; miRender();
+}
+
+async function miFiltrarCat(id) { MI.cat = id || ''; await miVer('produtos'); }
+
+/* ─── formatação ─────────────────────────────────────────────────────────
+   A variação de posição é o número que mais engana: subir no ranking é
+   melhorar, e o valor numérico DIMINUI. Por isso a seta vem do sentido
+   real, não do sinal. */
+function miDelta(hoje, antes) {
+  if (hoje == null || antes == null) return '<span class="ec-sub">N.D.</span>';
+  var d = antes - hoje;                       // positivo = subiu no ranking
+  if (d === 0) return '<span class="ec-sub">=</span>';
+  var cor = d > 0 ? 'var(--green)' : 'var(--red)';
+  return '<span style="color:' + cor + '">' + (d > 0 ? '▲' : '▼') + ' ' + Math.abs(d) + '</span>';
+}
+
+function miFaixa(min, max) {
+  if (min == null || max == null) return '—';
+  return ecMoney2(min) + ' a ' + ecMoney2(max);
+}
+
+/* ─── tela: visão ────────────────────────────────────────────────────── */
+function miTelaVisao() {
+  var e = MI.estado || {};
+  var dias = e.dias || 0;
+  var card = function (t, v, s) {
+    return '<div class="kpi"><div class="kpi-label">' + t + '</div>' +
+      '<div class="kpi-value">' + v + '</div>' +
+      (s ? '<div class="kpi-delta">' + s + '</div>' : '') + '</div>';
+  };
+
+  var aviso = '';
+  if (dias < 2) {
+    aviso = '<div class="card ec-sec" style="border-left:3px solid var(--orange)">' +
+      '<div class="card-body" style="font-size:13px;line-height:1.6">' +
+      '<b>Primeiro dia de coleta.</b> As colunas de variação aparecem como <b>N.D.</b> porque ainda não existe ' +
+      'um dia anterior para comparar. A partir de amanhã a comparação de 7 dias começa a se formar; ' +
+      'a de 30 dias fica completa em um mês. Nenhum número aqui é estimado para preencher essa lacuna.' +
+      '</div></div>';
+  } else if (dias < 7) {
+    aviso = '<div class="card ec-sec" style="border-left:3px solid var(--ml-yellow)">' +
+      '<div class="card-body" style="font-size:13px">Histórico de <b>' + dias + ' dias</b>. ' +
+      'A variação de 7 dias só fica confiável a partir do oitavo dia de coleta.</div></div>';
+  }
+
+  var falhas = (e.log || []).filter(function (l) { return l.status !== 200; });
+  var okn = (e.log || []).filter(function (l) { return l.status === 200; })
+    .reduce(function (s, l) { return s + l.n; }, 0);
+
+  return '<div class="kpi-row">' +
+      card('Categorias monitoradas', ecInt(e.categorias), 'nos segmentos da Titanium') +
+      card('Produtos no radar', ecInt(e.produtos), e.sem_nome ? ecInt(e.sem_nome) + ' sem ficha ainda' : 'todos com ficha') +
+      card('Marcas identificadas', ecInt(e.marcas), 'nas posições coletadas') +
+      card('Dias de histórico', ecInt(dias), e.primeira ? 'desde ' + e.primeira : '') +
+      card('Concorrência medida hoje', ecInt(e.concorrencia_hoje), 'produtos com preço e vendedores') +
+    '</div>' + aviso +
+    '<div class="card ec-sec"><div class="card-head"><span class="card-title">Saúde da última coleta</span>' +
+      '<span class="ec-sub">' + (e.ultima ? 'última rodada: ' + e.ultima : 'sem rodada') + '</span></div>' +
+      '<div class="card-body" style="font-size:13px;line-height:1.7">' +
+      '<div>' + ecInt(okn) + ' chamadas bem-sucedidas na última rodada.</div>' +
+      (falhas.length
+        ? falhas.map(function (l) {
+            return '<div style="color:var(--orange)">' + ecEsc(l.fonte) + ': ' + l.n +
+              ' resposta(s) ' + l.status + (l.status === 404 ? ' — categoria sem esse recurso no ML' : '') + '</div>';
+          }).join('')
+        : '<div style="color:var(--green)">Nenhuma falha registrada.</div>') +
+      (e.fila ? '<div class="ec-sub" style="margin-top:8px">Coleta em andamento — fase <b>' +
+          ecEsc(e.fila.fase) + '</b>, ' + e.fila.i + ' de ' + e.fila.n + ' tarefas.</div>' : '') +
+      '</div></div>' +
+    '<div class="card ec-sec"><div class="card-head"><span class="card-title">O que esta aba mede — e o que não mede</span></div>' +
+      '<div class="card-body" style="font-size:13px;line-height:1.7">' +
+      '<div><b>Mede:</b> a posição oficial de cada produto no ranking de mais vendidos do Mercado Livre, ' +
+      'a concorrência por produto (quantos vendedores, qual a faixa de preço, quem tem o buy box) ' +
+      'e as palavras mais buscadas por categoria.</div>' +
+      '<div style="margin-top:8px"><b>Não mede:</b> quantidade vendida por concorrente, faturamento de terceiros ' +
+      'e market share. O Mercado Livre não publica esses dados por nenhuma API oficial, e a busca pública ' +
+      'está fechada para esta conta. Preencher isso com estimativa seria inventar.</div>' +
+      '</div></div>';
+}
+
+/* ─── tela: produtos ─────────────────────────────────────────────────── */
+function miTelaProdutos() {
+  var d = MI.dados || {};
+  var L = d.linhas || [];
+  if (!L.length) return '<div class="card ec-sec"><div class="card-body">Nenhuma posição coletada ainda.</div></div>';
+
+  var cats = {};
+  L.forEach(function (l) { if (l.categoria_id) cats[l.categoria_id] = l.categoria || l.categoria_id; });
+
+  var pills = '<div style="display:flex;flex-wrap:wrap;gap:6px;padding:0 18px 12px">' +
+    '<span class="cat-pill' + (MI.cat ? '' : ' sel') + '" onclick="miFiltrarCat(\'\')">Todas</span>' +
+    Object.keys(cats).map(function (id) {
+      return '<span class="cat-pill' + (MI.cat === id ? ' sel' : '') +
+        '" onclick="miFiltrarCat(\'' + id + '\')">' + ecEsc(cats[id]) + '</span>';
+    }).join('') + '</div>';
+
+  var linhas = L.map(function (l) {
+    var nome = l.nome || '<span class="ec-sub">ficha ainda não coletada</span>';
+    if (l.tipo === 'USER_PRODUCT') nome = '<span class="ec-sub">anúncio próprio de vendedor (sem ficha pública)</span>';
+    return '<tr>' +
+      '<td class="ec-sub">' + ecEsc(l.categoria || l.categoria_id) + '</td>' +
+      '<td class="r mono"><b>' + l.posicao + '</b></td>' +
+      '<td class="r mono">' + miDelta(l.posicao, l.pos_7d) + '</td>' +
+      '<td class="r mono">' + miDelta(l.posicao, l.pos_30d) + '</td>' +
+      '<td>' + nome + '</td>' +
+      '<td>' + ecEsc(l.marca || '—') + '</td>' +
+      '<td class="r mono">' + (l.preco_mediano != null ? ecMoney2(l.preco_mediano) : '—') + '</td>' +
+      '<td class="ec-sub mono">' + miFaixa(l.preco_min, l.preco_max) + '</td>' +
+      '<td class="r mono">' + ecInt(l.n_vendedores) + '</td>' +
+      '<td class="r">' + (l.n_anuncios == null ? '—' : ecInt(l.n_anuncios)) + '</td>' +
+      '<td>' + (l.titanium_dentro === 1 ? '<span style="color:var(--green)">sim</span>'
+                : l.titanium_dentro === 0 ? '<span class="ec-sub">não</span>' : '<span class="ec-sub">N.D.</span>') + '</td>' +
+      '</tr>';
+  }).join('');
+
+  return '<div class="card ec-sec"><div class="card-head">' +
+    '<span class="card-title">Ranking oficial de mais vendidos — ' + ecEsc(d.data || '') + '</span>' +
+    '<button class="btn-sm" onclick="miExportarProdutos()">Exportar CSV</button></div>' +
+    pills +
+    '<div class="ec-muted" style="padding:0 18px 10px;font-size:12px">' +
+    'Posição é a ordem publicada pelo próprio Mercado Livre. <b>Não é quantidade vendida</b> — essa o ML não divulga. ' +
+    'As setas comparam com a mesma categoria 7 e 30 dias atrás; ▲ significa subir no ranking.</div>' +
+    '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr>' +
+    '<th>Categoria</th><th class="r">Pos.</th><th class="r">7d</th><th class="r">30d</th>' +
+    '<th>Produto</th><th>Marca</th><th class="r">Preço mediano</th><th>Faixa de preço</th>' +
+    '<th class="r">Vendedores</th><th class="r">Anúncios</th><th>Titanium vende</th>' +
+    '</tr></thead><tbody>' + linhas + '</tbody></table></div></div>';
+}
+
+function miExportarProdutos() {
+  var L = (MI.dados && MI.dados.linhas) || [];
+  ecBaixaCsv('inteligencia_mercado_' + ((MI.dados && MI.dados.data) || 'hoje') + '.csv',
+    ['Categoria', 'Posicao', 'Var 7d', 'Var 30d', 'Produto', 'Marca', 'EAN',
+     'Preco mediano', 'Preco min', 'Preco max', 'Vendedores', 'Anuncios', 'Titanium vende'],
+    L.map(function (l) {
+      return [l.categoria || l.categoria_id, l.posicao,
+        l.pos_7d == null ? 'N.D.' : (l.pos_7d - l.posicao),
+        l.pos_30d == null ? 'N.D.' : (l.pos_30d - l.posicao),
+        l.nome || '', l.marca || '', l.ean || '',
+        l.preco_mediano, l.preco_min, l.preco_max, l.n_vendedores, l.n_anuncios,
+        l.titanium_dentro === 1 ? 'sim' : l.titanium_dentro === 0 ? 'nao' : 'N.D.'];
+    }));
+}
+
+/* ─── tela: marcas ───────────────────────────────────────────────────── */
+function miTelaMarcas() {
+  var d = MI.dados || {};
+  var M = d.marcas || [];
+  if (!M.length) {
+    return '<div class="card ec-sec"><div class="card-body" style="font-size:13px;line-height:1.6">' +
+      'Nenhuma marca identificada ainda. As marcas vêm da ficha de catálogo de cada produto, ' +
+      'coletada na terceira fase da rodada — até 200 produtos por dia. Volte depois da próxima coleta.' +
+      '</div></div>';
+  }
+  var linhas = M.map(function (m) {
+    return '<tr><td><b>' + ecEsc(m.marca) + '</b></td>' +
+      '<td class="r mono">' + ecInt(m.posicoes) + '</td>' +
+      '<td class="r mono">' + ecInt(m.categorias) + '</td>' +
+      '<td class="r mono">' + ecInt(m.melhor_posicao) + '</td>' +
+      '<td class="r mono">' + (m.posicao_media != null ? m.posicao_media : '—') + '</td>' +
+      '<td class="r mono">' + (m.preco_mediano_medio != null ? ecMoney2(m.preco_mediano_medio) : '—') + '</td>' +
+      '<td class="r">' + (m.com_titanium > 0
+          ? '<span style="color:var(--green)">' + m.com_titanium + '</span>'
+          : '<span class="ec-sub">nenhum</span>') + '</td></tr>';
+  }).join('');
+
+  return '<div class="card ec-sec"><div class="card-head">' +
+    '<span class="card-title">Marcas nas primeiras posições — ' + ecEsc(d.data || '') + '</span></div>' +
+    '<div class="ec-muted" style="padding:0 18px 10px;font-size:12px">' +
+    '<b>Posições ocupadas</b> é quantas vezes a marca aparece nos rankings monitorados hoje. ' +
+    'Não é participação de mercado: para isso faltaria o denominador, que o Mercado Livre não publica.</div>' +
+    '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr>' +
+    '<th>Marca</th><th class="r">Posições ocupadas</th><th class="r">Categorias</th>' +
+    '<th class="r">Melhor posição</th><th class="r">Posição média</th>' +
+    '<th class="r">Preço mediano</th><th class="r">Produtos que a Titanium vende</th>' +
+    '</tr></thead><tbody>' + linhas + '</tbody></table></div></div>';
+}
+
+/* ─── render ─────────────────────────────────────────────────────────── */
+function miRender() {
+  var el = document.getElementById('mi-corpo');
+  if (!el) return;
+  var abas = [['visao', 'Visão estratégica'], ['produtos', 'Ranking de produtos'], ['marcas', 'Ranking de marcas']];
+  var nav = '<div class="card ec-sec"><div class="ec-toolbar"><div class="ec-chips">' +
+    abas.map(function (a) {
+      return '<button class="ec-chip ' + (MI.view === a[0] ? 'active' : '') +
+        '" onclick="miVer(\'' + a[0] + '\')">' + a[1] + '</button>';
+    }).join('') +
+    '</div><button class="btn-sm" onclick="miCarregar()">↻ Atualizar</button></div></div>';
+
+  var corpo = '';
+  if (MI.loading) corpo = '<div class="card ec-sec"><div class="card-body">Consultando o Worker…</div></div>';
+  else if (MI.erro) corpo = '<div class="card ec-sec" style="border-left:3px solid var(--red)">' +
+      '<div class="card-body">Não consegui ler os dados: <b>' + ecEsc(MI.erro) + '</b>.<br>' +
+      '<span class="ec-sub">A coleta no Worker continua rodando — isto é só a leitura.</span></div></div>';
+  else if (MI.view === 'visao') corpo = miTelaVisao();
+  else if (MI.view === 'produtos') corpo = miTelaProdutos();
+  else if (MI.view === 'marcas') corpo = miTelaMarcas();
+
+  el.innerHTML = nav + corpo;
+}
+
+if (typeof module !== 'undefined') module.exports = {
+  miDelta, miFaixa, miTelaVisao, miTelaProdutos, miTelaMarcas, miRender,
+};
 
 </script>
 </body>
