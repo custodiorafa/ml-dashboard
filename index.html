@@ -8920,8 +8920,13 @@ function miCompDemanda(l) { return miNorm(l.posicao, 1, 21); }
 /* Crescimento: quantas posições subiu em 7 dias. Sem o dia de comparação,
    não existe — e isso é o caso normal na primeira semana. */
 function miCompCrescimento(l) {
-  if (l.pos_7d == null || l.posicao == null) return null;
-  return miNorm(l.pos_7d - l.posicao, 5, -5);
+  if (l.posicao == null) return null;
+  /* Preferência pela janela de 7 dias. Com histórico curto, o dia anterior
+     é a única comparação possível — e é comparável de verdade, então vale,
+     numa escala mais apertada porque um dia mexe menos que uma semana. */
+  if (l.pos_7d != null) return miNorm(l.pos_7d - l.posicao, 5, -5);
+  if (l.pos_1d != null) return miNorm(l.pos_1d - l.posicao, 2, -2);
+  return null;
 }
 
 /* Atratividade competitiva: poucos vendedores é melhor. Até 3 vendedores
@@ -9014,10 +9019,12 @@ function miJustificar(l, s, tipo) {
   if (l.n_vendedores != null) p.push(l.n_vendedores + (l.n_vendedores === 1 ? ' vendedor' : ' vendedores') + ' disputando');
   if (l.preco_mediano != null) p.push('preço mediano de R$ ' + l.preco_mediano.toFixed(2).replace('.', ','));
   if (s.margemPct != null) p.push('margem estimada de ' + Math.round(s.margemPct * 100) + '%');
-  if (l.pos_7d != null) {
-    var d = l.pos_7d - l.posicao;
-    p.push(d > 0 ? 'subiu ' + d + ' posições em 7 dias'
-         : d < 0 ? 'caiu ' + (-d) + ' posições em 7 dias' : 'estável há 7 dias');
+  var base = l.pos_7d != null ? { v: l.pos_7d, j: '7 dias' }
+           : l.pos_1d != null ? { v: l.pos_1d, j: 'um dia' } : null;
+  if (base) {
+    var d = base.v - l.posicao;
+    p.push(d > 0 ? 'subiu ' + d + ' posições em ' + base.j
+         : d < 0 ? 'caiu ' + (-d) + ' posições em ' + base.j : 'estável há ' + base.j);
   }
   var texto = tipo + ': ' + p.join('; ') + '.';
   if (s.score == null) {
@@ -9261,6 +9268,7 @@ function miTelaProdutos() {
     return '<tr>' +
       '<td class="ec-sub">' + ecEsc(l.categoria || l.categoria_id) + '</td>' +
       '<td class="r mono"><b>' + l.posicao + '</b></td>' +
+      '<td class="r mono">' + miDelta(l.posicao, l.pos_1d) + '</td>' +
       '<td class="r mono">' + miDelta(l.posicao, l.pos_7d) + '</td>' +
       '<td class="r mono">' + miDelta(l.posicao, l.pos_30d) + '</td>' +
       '<td>' + nome + '</td>' +
@@ -9280,9 +9288,9 @@ function miTelaProdutos() {
     pills +
     '<div class="ec-muted" style="padding:0 18px 10px;font-size:12px">' +
     'Posição é a ordem publicada pelo próprio Mercado Livre. <b>Não é quantidade vendida</b> — essa o ML não divulga. ' +
-    'As setas comparam com a mesma categoria 7 e 30 dias atrás; ▲ significa subir no ranking.</div>' +
+    'As setas comparam com a mesma categoria 1, 7 e 30 dias atrás; ▲ significa subir no ranking.</div>' +
     '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr>' +
-    '<th>Categoria</th><th class="r">Pos.</th><th class="r">7d</th><th class="r">30d</th>' +
+    '<th>Categoria</th><th class="r">Pos.</th><th class="r">1d</th><th class="r">7d</th><th class="r">30d</th>' +
     '<th>Produto</th><th>Marca</th><th class="r">Preço mediano</th><th>Faixa de preço</th>' +
     '<th class="r">Vendedores</th><th class="r">Anúncios</th><th>Titanium vende</th>' +
     '</tr></thead><tbody>' + linhas + '</tbody></table></div></div>';
@@ -9291,10 +9299,11 @@ function miTelaProdutos() {
 function miExportarProdutos() {
   var L = (MI.dados && MI.dados.linhas) || [];
   ecBaixaCsv('inteligencia_mercado_' + ((MI.dados && MI.dados.data) || 'hoje') + '.csv',
-    ['Categoria', 'Posicao', 'Var 7d', 'Var 30d', 'Produto', 'Marca', 'EAN',
+    ['Categoria', 'Posicao', 'Var 1d', 'Var 7d', 'Var 30d', 'Produto', 'Marca', 'EAN',
      'Preco mediano', 'Preco min', 'Preco max', 'Vendedores', 'Anuncios', 'Titanium vende'],
     L.map(function (l) {
       return [l.categoria || l.categoria_id, l.posicao,
+        l.pos_1d == null ? 'N.D.' : (l.pos_1d - l.posicao),
         l.pos_7d == null ? 'N.D.' : (l.pos_7d - l.posicao),
         l.pos_30d == null ? 'N.D.' : (l.pos_30d - l.posicao),
         l.nome || '', l.marca || '', l.ean || '',
