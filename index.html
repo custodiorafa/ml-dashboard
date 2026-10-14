@@ -8921,9 +8921,6 @@ function miCompDemanda(l) { return miNorm(l.posicao, 1, 21); }
    não existe — e isso é o caso normal na primeira semana. */
 function miCompCrescimento(l) {
   if (l.posicao == null) return null;
-  /* Preferência pela janela de 7 dias. Com histórico curto, o dia anterior
-     é a única comparação possível — e é comparável de verdade, então vale,
-     numa escala mais apertada porque um dia mexe menos que uma semana. */
   if (l.pos_7d != null) return miNorm(l.pos_7d - l.posicao, 5, -5);
   if (l.pos_1d != null) return miNorm(l.pos_1d - l.posicao, 2, -2);
   return null;
@@ -9036,9 +9033,41 @@ function miJustificar(l, s, tipo) {
   return texto;
 }
 
+/* ─── um produto, uma linha ──────────────────────────────────────────────
+   O mesmo produto pode estar ranqueado em mais de uma categoria (a cinta
+   catraca aparece em Cintas de Amarração e em Elevação e Tração). No
+   ranking por categoria isso é correto e deve continuar aparecendo duas
+   vezes. No radar, não: é uma oportunidade só, e repetida ela rouba espaço
+   de outra. Guardo a melhor posição e registro onde mais apareceu. */
+function miDedup(linhas) {
+  var porProduto = {};
+  (linhas || []).forEach(function (l) {
+    var k = l.produto_id;
+    if (!k) { porProduto['_' + Math.random()] = Object.assign({}, l, { categorias: [l.categoria] }); return; }
+    var atual = porProduto[k];
+    if (!atual) {
+      porProduto[k] = Object.assign({}, l, { categorias: [l.categoria || l.categoria_id] });
+      return;
+    }
+    if (atual.categorias.indexOf(l.categoria || l.categoria_id) < 0) {
+      atual.categorias.push(l.categoria || l.categoria_id);
+    }
+    /* Fica a melhor posição — a mais alta no ranking é a que descreve a
+       oportunidade. Os dados de concorrência são do produto, não da
+       categoria, então não mudam. */
+    if (l.posicao != null && (atual.posicao == null || l.posicao < atual.posicao)) {
+      atual.posicao = l.posicao;
+      atual.categoria = l.categoria;
+      atual.categoria_id = l.categoria_id;
+      atual.pos_1d = l.pos_1d; atual.pos_7d = l.pos_7d; atual.pos_30d = l.pos_30d;
+    }
+  });
+  return Object.keys(porProduto).map(function (k) { return porProduto[k]; });
+}
+
 /* ─── a lista ───────────────────────────────────────────────────────── */
 function miRadar(linhas, ctx, pesos) {
-  var out = (linhas || []).map(function (l) {
+  var out = miDedup(linhas).map(function (l) {
     var s = miScore(l, ctx, pesos);
     var tipo = miClassificar(l, ctx);
     return {
@@ -9395,7 +9424,12 @@ function miTelaRadar() {
         (o.score == null ? '<div class="ec-sub" style="font-size:10px">' + Math.round((o.cobertura || 0) * 100) + '% medido</div>'
          : o.parcial ? '<div class="ec-sub" style="font-size:10px">parcial</div>' : '') + '</td>' +
       '<td><span class="ec-tag">' + ecEsc(o.tipo) + '</span></td>' +
-      '<td class="ec-sub">' + ecEsc(l.categoria || l.categoria_id) + '</td>' +
+      '<td class="ec-sub">' + ecEsc(l.categoria || l.categoria_id) +
+        (l.categorias && l.categorias.length > 1
+          ? '<div class="ec-sub" style="font-size:10px">+ ' + (l.categorias.length - 1) +
+            ' outra' + (l.categorias.length > 2 ? 's' : '') + ': ' +
+            ecEsc(l.categorias.filter(function (c) { return c !== l.categoria; }).join(', ')) + '</div>'
+          : '') + '</td>' +
       '<td class="r mono">' + l.posicao + '</td>' +
       '<td>' + nome + '<div class="ec-sub" style="font-size:11px">' + ecEsc(o.justificativa) + '</div></td>' +
       '<td>' + ecEsc(l.marca || '—') + '</td>' +
