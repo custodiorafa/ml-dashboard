@@ -5377,7 +5377,10 @@ function ccCliente360(id) {
 async function ccExportClientes() {
   if (!CC._clist || !(await ccLoadXlsx())) return;
   const linhas = CC._clist.map(c => ({ 'Cliente': ccMask(c.n, c.id), 'Tipo': c.tipo, 'ICMS': ccContribX(c.b), 'UF': c.b ? c.b.uf : '', 'Cidade': c.b ? c.b.city : '', 'Status': c.status, 'Potencial B2B': c.potB2B ? 'Sim' : '',
-    'Pedidos período': c.pedP, 'Receita período': +c.recP.toFixed(2), 'Pedidos base': c.ped, 'Receita base': +c.receita.toFixed(2), 'Margem base': +c.margem.toFixed(2), 'Ticket': +c.ticket.toFixed(2), '1º pedido': c.first, 'Último pedido': c.last, 'Recência (dias)': c.rec, 'Intervalo médio (dias)': c.intervalo != null ? Math.round(c.intervalo) : '' }));
+    'Pedidos período': c.pedP, 'Receita período': +c.recP.toFixed(2), 'Pedidos base': c.ped, 'Receita base': +c.receita.toFixed(2), 'Margem base': +c.margem.toFixed(2), 'Ticket': +c.ticket.toFixed(2), '1º pedido': c.first, 'Último pedido': c.last, 'Recência (dias)': c.rec, 'Intervalo médio (dias)': c.intervalo != null ? Math.round(c.intervalo) : '',
+    /* Chave para achar o cadastro no Bling: lá, o pedido do marketplace é
+       pesquisável por este número, e o contato do faturamento vem junto. */
+    'Pedidos no ML (para buscar no Bling)': [...c.ok].reverse().map(o => String(o.o)).filter(x => /^\d{6,}$/.test(x)).slice(0, 3).join(' / ') }));
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), 'Clientes');
   XLSX.writeFile(wb, `clientes_${ecDay()}.xlsx`);
 }
