@@ -8513,6 +8513,17 @@ async function xpMedir() {
   var jan = janelaDaCompetencia(c.nome);
   if (!jan) { XP.erro = 'competência "' + c.nome + '" não tem formato Mês/Ano'; return; }
 
+  /* Nove dos treze indicadores saem do Bling — margem, cadastro, ativação,
+     divergência do Full. Se o módulo de Estoque não tiver sido aberto nesta
+     sessão do navegador, EC.rows está vazio e esses nove viram N.D. sem
+     explicação, como se o time não tivesse entregue. Então a medição carrega
+     o Bling por conta própria, em vez de depender de qual aba foi visitada. */
+  if (typeof EC !== 'undefined' && (!EC.rows || !EC.rows.length) && typeof ecLoad === 'function') {
+    XP.aviso = 'Lendo o Bling — nove dos treze indicadores dependem dele…';
+    xpRender();
+    try { await ecLoad(false); } catch (e) { XP.aviso = null; }
+  }
+
   var pv = [];
   try { pv = (await pvApi('/pv/ocorrencias')).ocorrencias || []; } catch (e) {}
 
