@@ -8806,7 +8806,17 @@ function xpTelaMetas(R) {
       '<td>' + ecEsc(l.quem) + (l.tipo === 'Global' ? ' <span class="ec-tag">global</span>' : '') + '</td>' +
       '<td>' + ecEsc(l.item) + '</td>' +
       '<td><select class="btn-sm"' + dis + ' onchange="xpSet(' + i + ',\'fonteId\',this.value)">' + opFonte(l.fonteId) + '</select></td>' +
-      '<td class="r mono">' + (l.quantidade != null ? (l.base != null ? ecInt(l.quantidade) + '/' + ecInt(l.base) : ecInt(l.quantidade)) : '<span class="ec-sub">—</span>') + '</td>' +
+      /* Fonte manual: a medição é digitada, então a célula vira campo. Nas
+         automáticas continua só de leitura — ninguém deve poder corrigir à
+         mão um número que o painel apurou sozinho. */
+      '<td class="r mono">' + (l.fonteId === 'manual'
+        ? '<input class="btn-sm" style="width:72px" type="number" step="0.01"' + dis +
+            ' placeholder="qtd" value="' + (l.quantidade == null ? '' : l.quantidade) +
+            '" onchange="xpSet(' + i + ',\'quantidade\',this.value)"> / ' +
+          '<input class="btn-sm" style="width:72px" type="number" step="0.01"' + dis +
+            ' placeholder="base" value="' + (l.base == null ? '' : l.base) +
+            '" onchange="xpSet(' + i + ',\'base\',this.value)">'
+        : (l.quantidade != null ? (l.base != null ? ecInt(l.quantidade) + '/' + ecInt(l.base) : ecInt(l.quantidade)) : '<span class="ec-sub">—</span>')) + '</td>' +
       '<td class="r mono">' + (xpValorDe(l) === null ? '—' : (l.unidade === 'R$' ? ecMoney(xpValorDe(l)) : xpValorDe(l).toFixed(2) + (l.unidade === '%' ? '%' : ''))) + '</td>' +
       '<td><input class="btn-sm" style="width:92px" type="number" step="0.01"' + dis + ' value="' + (l.meta == null ? '' : l.meta) + '" onchange="xpSet(' + i + ',\'meta\',this.value)"></td>' +
       '<td><select class="btn-sm"' + dis + ' onchange="xpSet(' + i + ',\'unidade\',this.value)">' +
@@ -8841,7 +8851,8 @@ function xpTelaMetas(R) {
 function xpSet(i, campo, valor) {
   var c = xpCompetencia(); if (!c) return;
   var l = c.lancamentos[i]; if (!l) return;
-  if (campo === 'meta' || campo === 'peso') l[campo] = valor === '' ? null : Number(valor);
+  if (campo === 'meta' || campo === 'peso' || campo === 'quantidade' || campo === 'base')
+    l[campo] = valor === '' ? null : Number(valor);
   else l[campo] = valor;
   XP.view.editando = true;
   xpRender();
