@@ -3511,12 +3511,12 @@ function ecRenderCesta() {
   const el = document.getElementById('ec-cesta'); if (!el) return;
   const V = EC.view; V.cestaQ = V.cestaQ || ''; V.cestaOpen = V.cestaOpen || {};
   const all = ecCesta(); const q = V.cestaQ.trim().toUpperCase();
-  const fs = q ? all.filter(f => f.nome.toUpperCase().includes(q) || f.itens.some(r => r.sku.includes(q) || r.nome.toUpperCase().includes(q))) : all;
+  const fs = q ? all.filter(f => f.nome.toUpperCase().includes(q) || f.itens.some(r => r.sku.includes(q) || r.nome.toUpperCase().includes(q) || (r.refForn || '').toUpperCase().includes(q))) : all;
   const T = all.reduce((t, f) => ({ sk: t.sk + f.itens.length, q: t.q + f.qtd, c: t.c + f.vCusto, p: t.p + f.vCompra, sp: t.sp + f.semPreco, ag: t.ag + f.vAgora, m: t.m + f.margem }), { sk: 0, q: 0, c: 0, p: 0, sp: 0, ag: 0, m: 0 });
   const a = EC.agg; const ok = Math.abs(T.c - a.valorSugerido) < 1 && Math.abs(T.p - a.valorSugeridoCompra) < 1;
   const na = '<span class="ec-muted">não informado</span>';
   const item = r => { const c = ecConf(r); const dep = r.rate > 0 ? (r.total + r.transito + r.sugCompra) / r.rate : null;
-    return `<tr><td>${ecProd(r)}</td><td>${ecCurva(r.curva)}</td><td>${ecPill(r.rec, ecRecTone(r.rec))}</td><td class="r mono">${ecInt(r.total)}</td><td class="r mono">${r.transito ? ecInt(r.transito) : '—'}</td><td class="r mono">${ecDays(r.cob)} → ${ecDays(dep)}</td><td class="r mono"><b>${ecInt(r.sugCompra)}</b></td><td class="r mono">${r.precoCompra > 0 ? ecMoney2(r.precoCompra) : '<span class="c-orange">sem preço</span>'}</td><td class="r mono">${r.precoCompra > 0 ? ecMoney(r.sugCompra * r.precoCompra) : '—'}</td><td class="r mono">${r.custo > 0 ? ecMoney(r.sugCompra * r.custo) : '<span class="c-orange">sem custo</span>'}</td><td class="mono">${r.diasAteComprar <= 0 ? '<span class="c-red">hoje</span>' : ecFmtDate(r.comprarAte)}</td><td>${ecPill(c.nivel, c.tone)}</td></tr>`; };
+    return `<tr><td>${ecProd(r)}</td><td class="mono" style="white-space:nowrap">${r.refForn ? `<span title="Referência do fornecedor${r.fornFonte === 'pedido' ? ' (do último pedido)' : ' (cadastro Bling)'}">${ecEsc(r.refForn)}</span>` : '<span class="ec-muted">—</span>'}</td><td>${ecCurva(r.curva)}</td><td>${ecPill(r.rec, ecRecTone(r.rec))}</td><td class="r mono">${ecInt(r.total)}</td><td class="r mono">${r.transito ? ecInt(r.transito) : '—'}</td><td class="r mono">${ecDays(r.cob)} → ${ecDays(dep)}</td><td class="r mono"><b>${ecInt(r.sugCompra)}</b></td><td class="r mono">${r.precoCompra > 0 ? ecMoney2(r.precoCompra) : '<span class="c-orange">sem preço</span>'}</td><td class="r mono">${r.precoCompra > 0 ? ecMoney(r.sugCompra * r.precoCompra) : '—'}</td><td class="r mono">${r.custo > 0 ? ecMoney(r.sugCompra * r.custo) : '<span class="c-orange">sem custo</span>'}</td><td class="mono">${r.diasAteComprar <= 0 ? '<span class="c-red">hoje</span>' : ecFmtDate(r.comprarAte)}</td><td>${ecPill(c.nivel, c.tone)}</td></tr>`; };
   const card = (f, i) => { const open = !!V.cestaOpen[f.nome];
     return `<div class="card ec-sec" style="margin-bottom:10px">
       <div class="card-head" style="cursor:pointer;gap:10px;flex-wrap:wrap" onclick="ecCestaToggle(${i})">
@@ -3532,7 +3532,7 @@ function ecRenderCesta() {
         ${ecStat('Margem projetada', ecMoney(f.margem), f.semMargem ? `${f.semMargem} SKU${f.semMargem > 1 ? 's' : ''} sem margem calculada` : 'das unidades sugeridas')}
       </div>
       ${open ? `<div style="padding:0 18px 6px;font-size:12px;color:var(--text2)">Pedido mínimo: ${na} · MOQ preenchido em ${f.itens.filter(r => r.moq).length} e múltiplo de compra em ${f.itens.filter(r => r.mult).length} de ${f.itens.length} SKUs (campos do Bling) · Condição de pagamento: ${na} · Frete de entrada: ${na} <span title="Esses dados não existem no Bling nem no Mercado Livre. Entram na próxima etapa, por cadastro manual do fornecedor.">ⓘ</span></div>
-      <div class="ec-table-wrap" style="margin:0 18px 14px"><table class="t ec-t" style="min-width:1020px"><thead><tr><th>Produto</th><th>Curva</th><th>Recomendação</th><th class="r">Estoque</th><th class="r">Trânsito</th><th class="r">Cobertura</th><th class="r">Qtd sugerida</th><th class="r">Preço compra</th><th class="r">Valor compra</th><th class="r">Valor a custo</th><th>Comprar até</th><th>Confiança</th></tr></thead><tbody>${f.itens.map(item).join('')}</tbody></table></div>` : ''}
+      <div class="ec-table-wrap" style="margin:0 18px 14px"><table class="t ec-t" style="min-width:1120px"><thead><tr><th>Produto</th><th>Ref. fornecedor</th><th>Curva</th><th>Recomendação</th><th class="r">Estoque</th><th class="r">Trânsito</th><th class="r">Cobertura</th><th class="r">Qtd sugerida</th><th class="r">Preço compra</th><th class="r">Valor compra</th><th class="r">Valor a custo</th><th>Comprar até</th><th>Confiança</th></tr></thead><tbody>${f.itens.map(item).join('')}</tbody></table></div>` : ''}
     </div>`; };
   EC._cesta = fs;
   el.innerHTML = `<div class="card ec-sec"><div class="card-head"><span class="card-title">🧺 Cesta de compra por fornecedor</span><span class="ec-muted">mesma recomendação da lista por SKU, agrupada · nenhuma compra é emitida pelo painel</span></div>
@@ -3545,7 +3545,7 @@ function ecRenderCesta() {
         ${ecStat('Conferência', ok ? '<span class="c-green">✓ confere</span>' : '<span class="c-red">diverge</span>', `com o valor sugerido do Dashboard (${ecMoneyK(a.valorSugerido)})`)}
       </div>
       <div class="ec-toolbar"><div class="ec-muted" style="font-size:12px">Decisão é orientação: <b>comprar</b> (há SKU em risco), <b>programar</b>, <b>aguardar</b> (trânsito cobre) ou <b>revisar</b> (dados fracos ou sem fornecedor). Clique no fornecedor para ver os SKUs.</div>
-        <div class="ec-tools"><input id="ec-cesta-q" type="text" placeholder="Buscar fornecedor, SKU ou produto…" value="${ecEsc(V.cestaQ)}" onchange="EC.view.cestaQ=this.value;ecRenderCesta()"><button class="btn-sm" onclick="ecCestaAll(true)">Abrir todos</button><button class="btn-sm" onclick="ecCestaAll(false)">Fechar</button><button class="btn-sm" onclick="ecExportCesta()">⬇ Excel</button></div></div>
+        <div class="ec-tools"><input id="ec-cesta-q" type="text" placeholder="Buscar fornecedor, SKU, ref. ou produto…" value="${ecEsc(V.cestaQ)}" onchange="EC.view.cestaQ=this.value;ecRenderCesta()"><button class="btn-sm" onclick="ecCestaAll(true)">Abrir todos</button><button class="btn-sm" onclick="ecCestaAll(false)">Fechar</button><button class="btn-sm" onclick="ecExportCesta()">⬇ Excel</button></div></div>
     </div>
     ${fs.length ? fs.map(card).join('') : '<div class="card"><div class="card-body ec-muted" style="text-align:center;padding:30px">Nenhuma compra sugerida' + (q ? ' para esta busca' : '') + '.</div></div>'}`;
 }
@@ -4331,17 +4331,21 @@ function ecCadastroAgg() {
     a['n_' + k] = g[k].length; a['un_' + k] = ecSomaUn(g[k]); a['v_' + k] = ecSomaCusto(g[k]);
   });
   a.nFalta = g.kitsem.length + g.buraco.length;
+  /* Sem nenhum anúncio: nem avulso nem dentro de kit anunciado (buraco + kitsem + vende). */
+  g.nenhum = [...g.buraco, ...g.kitsem, ...g.vende].sort((x, y) => (y.valorCusto || 0) - (x.valorCusto || 0));
+  a.n_nenhum = g.nenhum.length; a.un_nenhum = ecSomaUn(g.nenhum); a.v_nenhum = ecSomaCusto(g.nenhum);
   a.vFalta = a.v_kitsem + a.v_buraco;
   return a;
 }
 
-function ecExportSemAnuncio() {
+function ecExportSemAnuncio(soNenhum) {
   const ROT = { kitok: 'vendido em kit anunciado', kitsem: 'componente de kit sem anuncio',
                 vende: 'vende fora do ML', buraco: 'parado por falta de anuncio' };
   const H = ['SKU', 'Descrição', 'Estoque total', 'Matriz', 'Full', 'Custo unit.',
              'Valor a custo', 'Fornecedor', 'Vendas 90d', 'Última venda',
              'Classificação', 'Kits que consomem', 'Kits anunciados'];
-  const linhas = ecSemAnuncio().map(r => {
+  const base = soNenhum ? ecSemAnuncio().filter(r => ecClassCadastro(r) !== 'kitok') : ecSemAnuncio();
+  const linhas = base.map(r => {
     const kits = ecKitsDe(r);
     return [
       r.sku, r.nome, r.total, r.matriz, r.fullBling || 0, r.custo || '',
@@ -4350,7 +4354,7 @@ function ecExportSemAnuncio() {
       ecKitsAnunciados(r).map(k => k.sku).join(' / ')
     ];
   });
-  ecBaixaCsv('bling-sem-anuncio-ml', H, linhas);
+  ecBaixaCsv(soNenhum ? 'bling-sem-nenhum-anuncio-ml' : 'bling-sem-anuncio-ml', H, linhas);
 }
 
 function ecExportSemSku() {
@@ -4392,7 +4396,7 @@ function ecRenderCadastro(el) {
   }
   const a = ecCadastroAgg();
   const q = (v.cadQ || '').trim().toUpperCase();
-  const aba = v.cadAba || 'buraco';
+  const aba = v.cadAba || 'nenhum';
   const verSku = aba === 'semsku';
   const fq = r => !q || r.sku.includes(q) || (r.nome || '').toUpperCase().includes(q);
 
@@ -4403,6 +4407,7 @@ function ecRenderCadastro(el) {
     `<button class="ec-chip ${k === v.concF ? 'active' : ''}" onclick="ecConcSet('${k}')">${l} <span>${EC.rows.filter(r => !r.isKit && f(r)).length}</span></button>`).join('');
 
   const VAZIO = {
+    nenhum: 'Todo produto ativo com saldo tem anúncio próprio ou está em kit anunciado.',
     buraco: 'Nenhum produto avulso está parado por falta de anúncio. Cadastro em dia.',
     kitsem: 'Todo componente de kit tem pelo menos um kit anunciado.',
     kitok: 'Nenhum produto é vendido exclusivamente dentro de kit anunciado.',
@@ -4455,11 +4460,13 @@ function ecRenderCadastro(el) {
       <div class="ec-chips">${chips}</div>
       <div class="ec-tools">
         <input id="ec-cadq" type="text" placeholder="Buscar SKU, anúncio ou descrição…" value="${ecEsc(v.cadQ || '')}">
+        <button class="btn-sm" onclick="ecExportSemAnuncio(true)" title="Só quem não tem anúncio avulso nem kit anunciado">⬇ Sem nenhum anúncio (CSV)</button>
         <button class="btn-sm" onclick="ecExportSemAnuncio()">⬇ Sem anúncio (CSV)</button>
         <button class="btn-sm" onclick="ecExportSemSku()">⬇ Sem SKU (CSV)</button>
       </div>
     </div>
     <div class="ec-chips" style="padding:0 18px 10px">
+      ${ab('nenhum', 'Sem nenhum anúncio (avulso ou kit)', a.n_nenhum)}
       ${ab('buraco', 'Avulso parado por falta de anúncio', a.n_buraco)}
       ${ab('kitsem', 'Componente sem kit anunciado', a.n_kitsem)}
       ${ab('vende', 'Vende fora do ML', a.n_vende)}
