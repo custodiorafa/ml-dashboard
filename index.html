@@ -9142,11 +9142,19 @@ function miRadar(linhas, ctx, pesos) {
   var out = miDedup(linhas).map(function (l) {
     var s = miScore(l, ctx, pesos);
     var tipo = miClassificar(l, ctx);
+    var ci = ctx && ctx.custoInfo ? ctx.custoInfo(l) : null;
+    var forn = ci && ci.match ? ci.match : (ctx && ctx.fornecedorDe ? ctx.fornecedorDe(l) : null);
+    var just = miJustificar(l, s, tipo);
+    if (ci && ci.fonte === 'fornecedor' && s.margemPct != null) {
+      just += ' Margem sobre o custo de ' + ci.match.item.fornecedor + ' (cód. ' + ci.match.item.codigo +
+              ', correspondência ' + ci.match.confianca + ').';
+    }
     return {
       linha: l, tipo: tipo, score: s.score, parcial: s.parcial,
       faltando: s.faltando, cobertura: s.cobertura, motivo: s.motivo || null,
       componentes: s.componentes, margemPct: s.margemPct,
-      justificativa: miJustificar(l, s, tipo),
+      fonteCusto: ci ? ci.fonte : null, forn: forn,
+      justificativa: just,
     };
   });
   /* Ordena por score, mas joga o não-calculável para o fim em vez de
@@ -9170,6 +9178,648 @@ function miResumoRadar(radar) {
     r.porTipo[o.tipo] = (r.porTipo[o.tipo] || 0) + 1;
   });
   return r;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   CATÁLOGO DE FORNECEDORES — ligar o radar ao que a Virtus consegue comprar
+
+   O radar sabe o que vende no Mercado Livre. Este bloco responde as duas
+   perguntas que faltavam: existe fornecedor para isso? sobra margem?
+
+   Como casa, do mais seguro para o menos seguro:
+   1. EAN igual ................................. exata
+   2. código OEM do fornecedor no título do ML .. alta
+   3. marca + descrição (texto) ................ provável ou possível
+   4. decisão humana no painel ................. confirmada (ou recusada)
+
+   Regras que este bloco não quebra:
+   - Só "exata", "alta", "provável" e "confirmada" entram na margem do score.
+     "Possível" aparece na tela para revisão, mas não mexe no ranking.
+   - Código repetido com preços diferentes no arquivo: fica o MAIOR preço,
+     marcado. Errar para menos margem é melhor que errar para mais.
+   - Preço de compra não é custo. O custo considerado é
+     preço × câmbio × (1 + acréscimo %), e o acréscimo é parâmetro visível.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var FORN = { itens: null, meta: null, idx: null, cache: {}, carregando: false, erro: null, filtro: '' };
+var FORN_DB = 'ml_intel_forn', FORN_STORE = 'catalogo';
+
+/* de-para de cabeçalhos: o nome da coluna como vier do fornecedor → campo */
+var FORN_ALIAS = {
+  fornecedor: ['fornecedor', 'supplier', 'vendor', 'fabricante_fornecedor'],
+  codigo_fornecedor: ['codigo_fornecedor', 'codigo', 'cod', 'cod_produto', 'codigo_produto', 'sku', 'referencia', 'ref', 'item', 'part_no', 'part_number', 'item_no', 'model'],
+  descricao: ['descricao', 'descricao_produto', 'produto', 'nome', 'description', 'desc', 'product_name', 'name'],
+  preco_compra: ['preco_compra', 'preco', 'valor', 'valor_unitario', 'preco_unitario', 'unit_price', 'price', 'fob', 'preco_liquido', 'preco_tabela'],
+  moeda: ['moeda', 'currency', 'moeda_preco'],
+  ean_gtin: ['ean_gtin', 'ean', 'gtin', 'cod_barras', 'codigo_barras', 'codigo_de_barras', 'barcode', 'ean13'],
+  marca: ['marca', 'brand', 'fabricante'],
+  referencia_oem: ['referencia_oem', 'oem', 'ref_oem', 'codigo_original', 'cod_original', 'oem_no', 'original'],
+  aplicacao: ['aplicacao', 'application', 'veiculo', 'veiculos'],
+  categoria_fornecedor: ['categoria_fornecedor', 'categoria', 'linha', 'grupo', 'familia', 'category'],
+  unidade: ['unidade', 'un', 'unit', 'und'],
+  qtd_embalagem: ['qtd_embalagem', 'embalagem', 'qtd_caixa', 'pcs_ctn', 'qty_per_carton'],
+  moq: ['moq', 'pedido_minimo', 'minimo'],
+  prazo_dias: ['prazo_dias', 'prazo', 'lead_time', 'leadtime'],
+  estoque_fornecedor: ['estoque_fornecedor', 'estoque', 'stock', 'saldo'],
+  ncm: ['ncm', 'hs_code', 'hs'],
+  peso_kg: ['peso_kg', 'peso', 'weight', 'peso_liquido'],
+  observacao: ['observacao', 'obs', 'observacoes', 'remark', 'remarks', 'nota'],
+};
+
+function fornChave(s) {
+  return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
+/* "1.234,56", "1234.56", "R$ 12,3" → número; vazio → null (nunca zero) */
+function fornNum(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return isFinite(v) ? v : null;
+  var s = String(v).replace(/[^\d,.\-]/g, '');
+  if (!s) return null;
+  if (s.indexOf(',') >= 0 && s.indexOf('.') >= 0) {
+    s = s.lastIndexOf(',') > s.lastIndexOf('.') ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+  } else if (s.indexOf(',') >= 0) s = s.replace(',', '.');
+  var n = parseFloat(s);
+  return isFinite(n) ? n : null;
+}
+
+function fornDigitos(v) {
+  var s = String(v == null ? '' : v).replace(/\D/g, '').replace(/^0+/, '');
+  return s.length >= 7 ? s : '';
+}
+
+/* As linhas que o fornecedor usa como categoria e que às vezes vêm em
+   observação (é o caso da Unifort: AUTOS, PESADA, MOTOS…). */
+var FORN_LINHAS = { AUTOS: 1, PESADA: 1, MOTOS: 1, FIXACAO: 1, FERRAMENTAS: 1, ELETRICA: 1,
+  QUIMICOS: 1, EPIS: 1, AGRICOLA: 1, USO_CONSUMO: 1 };
+
+/* Recebe a planilha como matriz (linhas × colunas) e devolve itens no
+   formato do modelo. Acha a linha de cabeçalho sozinha. */
+function fornLerMatriz(matriz, padrao) {
+  padrao = padrao || {};
+  var avisos = [];
+  var hdrRow = -1, mapa = null;
+  for (var r = 0; r < Math.min(matriz.length, 30) && hdrRow < 0; r++) {
+    var m = {}, row = matriz[r] || [];
+    row.forEach(function (c, i) {
+      var k = fornChave(c);
+      Object.keys(FORN_ALIAS).forEach(function (campo) {
+        if (m[campo] == null && FORN_ALIAS[campo].indexOf(k) >= 0) m[campo] = i;
+      });
+    });
+    if (m.descricao != null && m.preco_compra != null) { hdrRow = r; mapa = m; }
+  }
+  if (hdrRow < 0) return { itens: [], avisos: ['Não achei as colunas de descrição e preço nas primeiras 30 linhas.'] };
+  if (mapa.codigo_fornecedor == null) avisos.push('Sem coluna de código: usei a descrição como chave.');
+
+  var porCod = {}, ordem = [], ignoradas = 0, divergentes = 0, exemplos = 0;
+  for (var i = hdrRow + 1; i < matriz.length; i++) {
+    var row2 = matriz[i] || [];
+    var g = function (campo) { return mapa[campo] == null ? null : row2[mapa[campo]]; };
+    var desc = String(g('descricao') == null ? '' : g('descricao')).trim();
+    if (!desc || /^obrigat/i.test(desc)) { ignoradas++; continue; }
+    var obs = String(g('observacao') == null ? '' : g('observacao')).trim();
+    if (/exemplo, pode apagar/i.test(obs)) { exemplos++; continue; }
+    var preco = fornNum(g('preco_compra'));
+    if (preco == null || !(preco > 0)) { ignoradas++; continue; }
+    var cod = String(g('codigo_fornecedor') == null ? desc : g('codigo_fornecedor')).trim();
+    var cat = String(g('categoria_fornecedor') == null ? '' : g('categoria_fornecedor')).trim();
+    if (!cat && FORN_LINHAS[fornChave(obs).toUpperCase()]) cat = obs;
+    var it = {
+      fornecedor: String(g('fornecedor') || padrao.fornecedor || 'Fornecedor').trim(),
+      codigo: cod,
+      descricao: desc,
+      preco: preco,
+      moeda: String(g('moeda') || padrao.moeda || 'BRL').trim().toUpperCase(),
+      ean: fornDigitos(g('ean_gtin')),
+      marca: String(g('marca') == null ? '' : g('marca')).trim(),
+      oem: String(g('referencia_oem') == null ? '' : g('referencia_oem')).split(/[;|\/]/)
+             .map(function (x) { return x.replace(/[^A-Za-z0-9]/g, '').toUpperCase(); })
+             .filter(function (x) { return x.length >= 5; }),
+      aplicacao: String(g('aplicacao') == null ? '' : g('aplicacao')).trim(),
+      categoria: cat,
+      unidade: g('unidade') || null,
+      emb: fornNum(g('qtd_embalagem')),
+      moq: fornNum(g('moq')),
+      prazo: fornNum(g('prazo_dias')),
+      estoque: fornNum(g('estoque_fornecedor')),
+      ncm: g('ncm') ? String(g('ncm')).trim() : '',
+      peso: fornNum(g('peso_kg')),
+      obs: obs,
+    };
+    var k = it.fornecedor + '|' + it.codigo;
+    var ant = porCod[k];
+    if (!ant) { porCod[k] = it; ordem.push(k); continue; }
+    if (Math.abs(ant.preco - it.preco) > 0.0001) {
+      if (!ant.precoDivergente) divergentes++;
+      var lo = Math.min(ant.preco, it.preco), hi = Math.max(ant.preco, it.preco);
+      ant.precoDivergente = [Math.min(lo, (ant.precoDivergente || [lo])[0]), hi];
+      ant.preco = hi;                        // conservador: fica o maior
+    }
+  }
+  var itens = ordem.map(function (k) { return porCod[k]; });
+  if (exemplos) avisos.push('Linha de exemplo do modelo removida.');
+  if (divergentes) avisos.push(divergentes + ' códigos aparecem com preços diferentes no arquivo — usei o maior e marquei.');
+  if (ignoradas) avisos.push(ignoradas + ' linhas ignoradas por falta de descrição ou preço.');
+  var semEan = itens.filter(function (x) { return !x.ean; }).length;
+  if (semEan === itens.length) avisos.push('Nenhum item com EAN: toda correspondência será por texto e precisa de revisão.');
+  return { itens: itens, avisos: avisos };
+}
+
+/* ─── texto → termos comparáveis ─────────────────────────────────────────
+   O fornecedor escreve "TAMPA RADIADOR 7LBS MB 1113" e o ML escreve
+   "Tampa Do Radiador Mercedes Benz 1113". Normalizo os dois para o mesmo
+   vocabulário antes de comparar. */
+var FORN_SINONIMO = {
+  VOLKSWAGEN: 'VW', VOLKS: 'VW', MERCEDES: 'MB', BENZ: 'MB', MBB: 'MB', FORD: 'FD', CHEVROLET: 'GM',
+  CHEVY: 'GM', FIAT: 'FT', HONDA: 'HD', HYUNDAI: 'HY', MITSUBISHI: 'MT', RENAULT: 'RN', PEUGEOT: 'PG',
+  CITROEN: 'CT', TOYOTA: 'TY', NISSAN: 'NS', YAMAHA: 'YM', SUZUKI: 'SZ', KAWASAKI: 'KW',
+  CAMINHAO: 'CAMINH', CAMINHOES: 'CAMINH', CAMINHOE: 'CAMINH', ONIBUS: 'ONIB', TRATOR: 'TRAT', TRATORES: 'TRAT',
+  SUSPENSAO: 'SUSP', DIANTEIRO: 'DIANT', DIANTEIRA: 'DIANT', DT: 'DIANT', TRASEIRO: 'TRAS', TRASEIRA: 'TRAS', TR: 'TRAS',
+  DIREITO: 'DIR', DIREITA: 'DIR', LD: 'DIR', ESQUERDO: 'ESQ', ESQUERDA: 'ESQ', LE: 'ESQ',
+  RESERVATORIO: 'RESERV', EXPANSAO: 'EXP', COMBUSTIVEL: 'COMB', ELETRICO: 'ELET', ELETRICA: 'ELET',
+  PARAFUSOS: 'PARAFUSO', LAMPADAS: 'LAMPADA', MANGUEIRAS: 'MANGUEIRA', ARRUELAS: 'ARRUELA',
+  ROLAMENTO: 'ROLAM', ROLAMENTOS: 'ROLAM', JOGO: 'JG', JOGOS: 'JG', CONJUNTO: 'JG', CJ: 'JG', KITS: 'KIT',
+  CHAVE: 'CHV', CHAVES: 'CHV', SEMCHAVE: 'SEMCHV',
+  PECAS: 'PC', PECA: 'PC', UNIDADES: 'UN', UNIDADE: 'UN',
+};
+var FORN_VAZIA = ('DE DA DO DAS DOS E P PARA C COM S SEM EM A O AS OS NA NO NAS NOS AO UM UMA ' +
+  'ORIGINAL NOVO NOVA NOVOS PREMIUM QUALIDADE ENVIO IMEDIATO PRONTA ENTREGA PROMOCAO OFERTA ' +
+  'LINHA REF MODELO TODOS TODAS UNIVERSAL MAIS MENOS PC UN').split(' ')
+  .reduce(function (o, w) { o[w] = 1; return o; }, {});
+
+function fornTermos(s) {
+  var t = String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase()
+    .replace(/(^|[^\d])(\d{1,3}),(\d{1,2})(?!\d)/g, '$1$2.$3')   // 1,4BAR → 1.4BAR; 1113,1115 fica
+    .replace(/\bS\/\s*/g, 'SEM ').replace(/\bC\/\s*/g, 'COM ').replace(/\bP\/\s*/g, 'PARA ')
+    .replace(/\bSEM\s+([A-Z]+)/g, function (_, w) { return 'SEM' + (FORN_SINONIMO[w] || w); })
+    .split(/[^A-Z0-9.]+/);
+  var out = [];
+  t.forEach(function (w) {
+    w = w.replace(/^\.+|\.+$/g, '');
+    if (!w) return;
+    if (/^\d{2}$/.test(w) || /^(19|20)\d{2}$/.test(w)) return;   // ano: 74>86, 2014
+    if (FORN_SINONIMO[w]) w = FORN_SINONIMO[w];
+    if (!/\d/.test(w) && w.length > 4) {
+      w = w.replace(/(OES|AES)$/, 'AO').replace(/S$/, '');
+      if (FORN_SINONIMO[w]) w = FORN_SINONIMO[w];
+      if (w.length > 4) w = w.replace(/[AO]$/, '');
+    }
+    if (w.length < 2 && !/\d/.test(w)) return;
+    if (FORN_VAZIA[w]) return;
+    out.push(w);
+  });
+  return out;
+}
+
+/* Faixas de ano como o fornecedor escreve: "97>02", "03>19", ">92", "04>". */
+function fornAno2(a) { a = +a; return a >= 50 ? 1900 + a : 2000 + a; }
+function fornFaixas(desc) {
+  var out = [], re = /(?:^|[^\d.,])(\d{2})?\s*>\s*(\d{2})?(?![\d])/g, m;
+  while ((m = re.exec(String(desc || ''))) !== null) {
+    if (m[1] == null && m[2] == null) continue;
+    out.push([m[1] != null ? fornAno2(m[1]) : 1950, m[2] != null ? fornAno2(m[2]) : 2100]);
+  }
+  return out;
+}
+function fornAnosTitulo(nome) {
+  var out = [], re = /\b(19[5-9]\d|20[0-4]\d)\b/g, m;
+  while ((m = re.exec(String(nome || ''))) !== null) out.push(+m[1]);
+  return out;
+}
+/* null = não dá para comparar; true/false = cabe ou não na faixa */
+function fornAnoCabe(anos, faixas) {
+  if (!anos.length || !faixas.length) return null;
+  return anos.some(function (a) { return faixas.some(function (f) { return a >= f[0] && a <= f[1]; }); });
+}
+
+function fornUnicos(a) { var o = {}; a.forEach(function (x) { o[x] = 1; }); return Object.keys(o); }
+
+/* ─── índice invertido com peso por raridade (IDF) ─────────────────────── */
+function fornIndice(itens) {
+  var df = {}, post = {}, termos = new Array(itens.length), cab = new Array(itens.length), faixas = new Array(itens.length), porEan = {}, oem = [];
+  itens.forEach(function (it, i) {
+    cab[i] = fornCabeca(fornTermos(it.descricao));
+    faixas[i] = fornFaixas(it.descricao);
+    var tk = fornUnicos(fornTermos(it.descricao + ' ' + (it.marca || '') + ' ' + (it.aplicacao || '')));
+    termos[i] = tk;
+    tk.forEach(function (w) { df[w] = (df[w] || 0) + 1; (post[w] = post[w] || []).push(i); });
+    if (it.ean) porEan[it.ean] = i;
+    (it.oem || []).forEach(function (c) { oem.push([c, i]); });
+  });
+  var N = itens.length;
+  var idf = function (w) { return Math.log(1 + N / ((df[w] || 0) + 1)); };
+  var peso = termos.map(function (tk) { return tk.reduce(function (s, w) { return s + idf(w); }, 0); });
+  return { N: N, df: df, post: post, termos: termos, cab: cab, faixas: faixas, peso: peso, idf: idf, porEan: porEan, oem: oem };
+}
+
+/* O substantivo que abre a descrição é o produto. "HASTE LONGA CUICA" é
+   uma haste, não uma cuíca — sem isso, componente casava com o conjunto. */
+var FORN_GENERICO = { KIT: 1, JG: 1, PAR: 1, JOGO: 1, CONJUNT: 1, PC: 1, UN: 1, REPARO: 1, REPAR: 1 };
+function fornCabeca(tk) {
+  for (var i = 0; i < tk.length && i < 4; i++) {
+    if (!/\d/.test(tk[i]) && !FORN_GENERICO[tk[i]]) return tk[i];
+  }
+  return null;
+}
+
+var FORN_CONF = { exata: 4, confirmada: 4, alta: 3, 'provável': 2, 'possível': 1 };
+var FORN_USAVEL = { exata: 1, confirmada: 1, alta: 1, 'provável': 1 };
+
+function fornTemNumero(w) { return /\d/.test(w); }
+
+/* Casa uma linha do radar com o catálogo.
+   decisao: { cod: 'fornecedor|codigo', acao: 'ok' } ou { recusados: [...] } */
+function fornCasar(l, itens, idx, decisao) {
+  if (!itens || !itens.length || !idx) return null;
+  decisao = decisao || {};
+  var recusados = {};
+  (decisao.recusados || []).forEach(function (k) { recusados[k] = 1; });
+  var chave = function (it) { return it.fornecedor + '|' + it.codigo; };
+
+  if (decisao.acao === 'ok' && decisao.cod) {
+    for (var c = 0; c < itens.length; c++) {
+      if (chave(itens[c]) === decisao.cod) {
+        return { item: itens[c], confianca: 'confirmada', sim: 1, comuns: [], alternativas: [] };
+      }
+    }
+  }
+  var ean = fornDigitos(l.ean);
+  if (ean && idx.porEan[ean] != null && !recusados[chave(itens[idx.porEan[ean]])]) {
+    return { item: itens[idx.porEan[ean]], confianca: 'exata', sim: 1, comuns: ['EAN ' + ean], alternativas: [] };
+  }
+  var nome = l.nome && !/^\(/.test(l.nome) ? l.nome : '';
+  if (!nome) return null;
+
+  var compacto = nome.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  for (var o = 0; o < idx.oem.length; o++) {
+    var par = idx.oem[o];
+    if (compacto.indexOf(par[0]) >= 0 && !recusados[chave(itens[par[1]])]) {
+      return { item: itens[par[1]], confianca: 'alta', sim: 1, comuns: ['OEM ' + par[0]], alternativas: [] };
+    }
+  }
+
+  var tlOrdem = fornTermos(nome);
+  var cabL = fornCabeca(tlOrdem);
+  var tl = fornUnicos(tlOrdem.concat(fornTermos(l.marca || '')));
+  var conhecidos = tl.filter(function (w) { return idx.df[w]; });
+  if (conhecidos.length < 2) return null;
+  var A = tl.reduce(function (s, w) { return s + idx.idf(w); }, 0);
+  var numsL = tl.filter(fornTemNumero);
+  var anosL = fornAnosTitulo(nome);
+
+  /* Candidatos: só quem divide termo com o título; termo comum demais
+     (presente em mais de 8% do catálogo) não abre candidato sozinho. */
+  var lim = Math.max(50, idx.N * 0.08);
+  var acum = {};
+  conhecidos.forEach(function (w) {
+    var p = idx.post[w];
+    if (p.length > lim) return;
+    var iw = idx.idf(w);
+    p.forEach(function (i) { acum[i] = (acum[i] || 0) + iw; });
+  });
+  /* termos comuns entram na soma só de quem já é candidato */
+  conhecidos.forEach(function (w) {
+    if (idx.post[w].length <= lim) return;
+    var iw = idx.idf(w);
+    idx.post[w].forEach(function (i) { if (acum[i] != null) acum[i] += iw; });
+  });
+
+  var marcaL = fornChave(l.marca);
+  var lista = Object.keys(acum).map(function (k) {
+    var i = +k, it = itens[i];
+    if (recusados[chave(it)]) return null;
+    var S = acum[i], B = idx.peso[i] || 1;
+    var sim = 2 * S / (A + B);
+    var marcaOk = !!marcaL && fornChave(it.marca) === marcaL;
+    var nf = idx.termos[i].filter(fornTemNumero);
+    var numComum = numsL.filter(function (w) { return nf.indexOf(w) >= 0; }).length;
+    var anoOk = fornAnoCabe(anosL, idx.faixas[i]);
+    var numConflito = (numsL.length > 0 && nf.length > 0 && numComum === 0) || anoOk === false;
+    var cabF = idx.cab[i];
+    var cabOk = !!cabL && idx.termos[i].indexOf(cabL) >= 0 && (!cabF || tl.indexOf(cabF) >= 0);
+    var score = sim + (marcaOk ? 0.08 : 0) + (numComum ? 0.05 * Math.min(numComum, 2) : 0)
+      - (numConflito ? 0.12 : 0) - (cabOk ? 0 : 0.25) + (anoOk ? 0.04 : 0);
+    return { i: i, sim: sim, score: score, cabOk: cabOk, cobForn: S / B, cobML: S / A, marcaOk: marcaOk, numConflito: numConflito, numComum: numComum };
+  }).filter(Boolean).sort(function (a, b) { return b.score - a.score || itens[a.i].preco - itens[b.i].preco; });
+
+  if (!lista.length) return null;
+  var m = lista[0];
+  var comuns = idx.termos[m.i].filter(function (w) { return tl.indexOf(w) >= 0; });
+  var conf = null;
+  if (m.cabOk && m.sim >= 0.5 && m.cobForn >= 0.55 && !m.numConflito) conf = 'provável';
+  else if (m.cabOk && m.sim >= 0.33 && comuns.length >= 2) conf = 'possível';
+  if (!conf) return null;
+
+  /* Empate técnico com preço diferente: não dá para saber qual é. */
+  var seg = lista[1];
+  if (conf === 'provável' && seg && seg.score >= m.score - 0.03) {
+    var p1 = itens[m.i].preco, p2 = itens[seg.i].preco;
+    if (Math.abs(p1 - p2) / Math.max(p1, p2) > 0.15) conf = 'possível';
+  }
+  return {
+    item: itens[m.i], confianca: conf, sim: Math.round(m.sim * 100) / 100, comuns: comuns,
+    marcaOk: m.marcaOk, numConflito: m.numConflito,
+    alternativas: lista.slice(1, 4).map(function (x) {
+      return { item: itens[x.i], sim: Math.round(x.sim * 100) / 100 };
+    }),
+  };
+}
+
+/* custo considerado = preço × câmbio × (1 + acréscimo) */
+function fornCusto(item, par) {
+  if (!item || !(item.preco > 0)) return null;
+  par = par || {};
+  var cambio = item.moeda === 'BRL' ? 1 : item.moeda === 'USD' ? par.usd : item.moeda === 'CNY' ? par.cny : null;
+  if (!(cambio > 0)) return null;                 // sem câmbio, sem custo — não invento
+  var acr = par.acrescimo != null && isFinite(par.acrescimo) ? par.acrescimo : 0;
+  return item.preco * cambio * (1 + acr / 100);
+}
+
+
+/* ─── persistência: o catálogo vive no IndexedDB deste navegador ───────── */
+function fornDb() {
+  if (FORN._db) return FORN._db;
+  FORN._db = new Promise(function (res, rej) {
+    var r = indexedDB.open(FORN_DB, 1);
+    r.onupgradeneeded = function () {
+      if (!r.result.objectStoreNames.contains(FORN_STORE)) r.result.createObjectStore(FORN_STORE, { keyPath: 'id' });
+    };
+    r.onsuccess = function () { res(r.result); };
+    r.onerror = function () { rej(r.error); };
+  });
+  return FORN._db;
+}
+async function fornCarregar() {
+  FORN.carregando = true;
+  try {
+    var db = await fornDb();
+    var rec = await new Promise(function (res) {
+      var q = db.transaction(FORN_STORE).objectStore(FORN_STORE).get('atual');
+      q.onsuccess = function () { res(q.result || null); }; q.onerror = function () { res(null); };
+    });
+    FORN.itens = rec ? rec.itens : [];
+    FORN.meta = rec ? rec.meta : { arquivos: [] };
+  } catch (e) { FORN.erro = 'não consegui abrir o armazenamento local: ' + e.message; FORN.itens = []; FORN.meta = { arquivos: [] }; }
+  FORN.idx = FORN.itens.length ? fornIndice(FORN.itens) : null;
+  FORN.cache = {};
+  FORN.carregando = false;
+}
+async function fornSalvar() {
+  var db = await fornDb();
+  return new Promise(function (res, rej) {
+    var t = db.transaction(FORN_STORE, 'readwrite');
+    t.objectStore(FORN_STORE).put({ id: 'atual', itens: FORN.itens, meta: FORN.meta });
+    t.oncomplete = function () { res(true); }; t.onerror = function () { rej(t.error); };
+  });
+}
+
+/* ─── parâmetros e decisões (por navegador) ───────────────────────────── */
+function fornParams() {
+  try { return Object.assign({ acrescimo: null, usd: null, cny: null }, JSON.parse(localStorage.getItem('forn_params') || '{}')); }
+  catch (e) { return { acrescimo: null, usd: null, cny: null }; }
+}
+function fornSetParam(k, v) {
+  var p = fornParams();
+  p[k] = v === '' ? null : fornNum(v);
+  try { localStorage.setItem('forn_params', JSON.stringify(p)); } catch (e) {}
+  miRender();
+}
+function fornDecisoes() {
+  try { return JSON.parse(localStorage.getItem('forn_decisoes') || '{}'); } catch (e) { return {}; }
+}
+function fornDecidir(n, acao) {
+  var alvo = (FORN.ui || [])[n];
+  if (!alvo) return;
+  var d = fornDecisoes(), pid = alvo.pid, cod = alvo.cod;
+  if (acao === 'ok') d[pid] = { acao: 'ok', cod: cod, recusados: (d[pid] && d[pid].recusados) || [] };
+  else if (acao === 'nao') {
+    var x = d[pid] || {};
+    x.recusados = (x.recusados || []).filter(function (c) { return c !== cod; }).concat([cod]);
+    delete x.acao; delete x.cod;
+    d[pid] = x;
+  } else delete d[pid];
+  try { localStorage.setItem('forn_decisoes', JSON.stringify(d)); } catch (e) {}
+  delete FORN.cache[pid];
+  miRender();
+}
+
+function fornDe(l) {
+  if (!FORN.idx) return null;
+  var k = l.produto_id || ('t:' + (l.nome || ''));
+  if (Object.prototype.hasOwnProperty.call(FORN.cache, k)) return FORN.cache[k];
+  var r = fornCasar(l, FORN.itens, FORN.idx, l.produto_id ? fornDecisoes()[l.produto_id] : null);
+  FORN.cache[k] = r;
+  return r;
+}
+function fornChaveItem(it) { return it.fornecedor + '|' + it.codigo; }
+
+/* ─── importação ──────────────────────────────────────────────────────── */
+async function fornGarantirXlsx() {
+  if (typeof XLSX !== 'undefined') return;
+  await new Promise(function (res, rej) {
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload = res; s.onerror = function () { rej(new Error('falha ao carregar biblioteca Excel')); };
+    document.head.appendChild(s);
+  });
+}
+async function fornImportar(input) {
+  var f = input.files && input.files[0];
+  if (!f) return;
+  try {
+    await fornGarantirXlsx();
+    if (FORN.itens === null) await fornCarregar();
+    var wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+    var aba = wb.Sheets.ITENS || wb.Sheets[wb.SheetNames[0]];
+    var mat = XLSX.utils.sheet_to_json(aba, { header: 1, raw: true, defval: null });
+    var nomeEl = document.getElementById('forn-nome'), moedaEl = document.getElementById('forn-moeda');
+    var r = fornLerMatriz(mat, { fornecedor: nomeEl && nomeEl.value.trim(), moeda: moedaEl && moedaEl.value });
+    if (!r.itens.length) { showToast(ecEsc(r.avisos.join(' ') || 'Nenhum item reconhecido no arquivo.'), 'err'); return; }
+    var novos = {};
+    r.itens.forEach(function (it) { novos[it.fornecedor] = (novos[it.fornecedor] || 0) + 1; });
+    /* reimportar um fornecedor substitui só ele; os outros ficam */
+    FORN.itens = FORN.itens.filter(function (it) { return !novos[it.fornecedor]; }).concat(r.itens);
+    FORN.meta = FORN.meta || { arquivos: [] };
+    FORN.meta.arquivos = (FORN.meta.arquivos || []).filter(function (a) { return !novos[a.fornecedor]; });
+    Object.keys(novos).forEach(function (nome) {
+      FORN.meta.arquivos.push({ fornecedor: nome, itens: novos[nome], arquivo: f.name,
+        em: new Date().toISOString(), avisos: r.avisos });
+    });
+    FORN.idx = fornIndice(FORN.itens);
+    FORN.cache = {};
+    await fornSalvar();
+    showToast(r.itens.length.toLocaleString('pt-BR') + ' itens importados de ' + ecEsc(Object.keys(novos).join(', ')), 'ok');
+  } catch (e) {
+    showToast('Não consegui importar: ' + ecEsc(e.message), 'err');
+  } finally { input.value = ''; miRender(); }
+}
+async function fornRemover(nome) {
+  if (!confirm('Remover o catálogo de ' + nome + ' deste navegador?')) return;
+  FORN.itens = (FORN.itens || []).filter(function (it) { return it.fornecedor !== nome; });
+  FORN.meta.arquivos = (FORN.meta.arquivos || []).filter(function (a) { return a.fornecedor !== nome; });
+  FORN.idx = FORN.itens.length ? fornIndice(FORN.itens) : null;
+  FORN.cache = {};
+  await fornSalvar();
+  miRender();
+}
+
+/* ─── tela: o cartão do catálogo, dentro do radar ─────────────────────── */
+var FORN_COR = { exata: 'var(--green)', confirmada: 'var(--green)', alta: 'var(--green)',
+  'provável': 'var(--ml-yellow)', 'possível': 'var(--orange)' };
+
+function fornTag(conf) {
+  return '<span class="ec-tag" style="color:' + (FORN_COR[conf] || 'var(--text2)') + '">' + ecEsc(conf) + '</span>';
+}
+
+function fornCartao(radar) {
+  var p = fornParams();
+  var entrada = '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-top:10px">' +
+    '<label class="ec-f" style="min-width:180px"><span>Fornecedor (se o arquivo não disser)</span>' +
+      '<input id="forn-nome" type="text" placeholder="ex.: Unifort"></label>' +
+    '<label class="ec-f" style="min-width:90px"><span>Moeda padrão</span>' +
+      '<select id="forn-moeda"><option>BRL</option><option>USD</option><option>CNY</option></select></label>' +
+    '<label class="btn-sm" style="cursor:pointer">Importar catálogo (Excel ou CSV)' +
+      '<input type="file" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="fornImportar(this)"></label>' +
+    '</div>';
+
+  if (FORN.carregando || FORN.itens === null) {
+    return '<div class="card ec-sec"><div class="card-body">Abrindo catálogo de fornecedores…</div></div>';
+  }
+  if (!FORN.itens.length) {
+    return '<div class="card ec-sec" style="border-left:3px solid var(--ml-yellow)"><div class="card-head">' +
+      '<span class="card-title">Catálogo de fornecedores</span></div><div class="card-body" style="font-size:13px;line-height:1.6">' +
+      'Nenhum catálogo carregado. Sem ele, o radar mostra o que vende mas não sabe se a Virtus consegue comprar, ' +
+      'nem se sobra margem. Importe a planilha do fornecedor como ela vier — o painel reconhece as colunas.' +
+      (FORN.erro ? '<div style="color:var(--red)">' + ecEsc(FORN.erro) + '</div>' : '') + entrada + '</div></div>';
+  }
+
+  var cont = { exata: 0, confirmada: 0, alta: 0, 'provável': 0, 'possível': 0, sem: 0, bling: 0, semFicha: 0 };
+  radar.forEach(function (o) {
+    if (o.fonteCusto === 'bling') { cont.bling++; return; }
+    if (!o.forn) { if (!o.linha.nome || /^\(/.test(o.linha.nome)) cont.semFicha++; else cont.sem++; return; }
+    cont[o.forn.confianca]++;
+  });
+  var usaveis = cont.exata + cont.confirmada + cont.alta + cont['provável'];
+  var temMoedaExt = FORN.itens.some(function (it) { return it.moeda !== 'BRL'; });
+
+  var arquivos = (FORN.meta.arquivos || []).map(function (a) {
+    return '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+      '<b>' + ecEsc(a.fornecedor) + '</b><span class="ec-sub">' + ecInt(a.itens) + ' itens · ' + ecEsc(a.arquivo) +
+      ' · ' + ecEsc(String(a.em || '').slice(0, 10)) + '</span>' +
+      '<button class="btn-sm" onclick="fornRemover(\'' + ecEsc(String(a.fornecedor).replace(/'/g, '')) + '\')">remover</button></div>' +
+      ((a.avisos || []).length ? '<div class="ec-sub" style="font-size:11px">' + a.avisos.map(ecEsc).join(' · ') + '</div>' : '');
+  }).join('');
+
+  var semAcrescimo = p.acrescimo == null;
+  var parametros = '<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:12px">' +
+    '<label class="ec-f" style="min-width:200px"><span>Acréscimo sobre o preço de compra (%)</span>' +
+      '<input type="number" step="0.1" value="' + (p.acrescimo == null ? '' : p.acrescimo) +
+      '" placeholder="impostos + frete de entrada" onchange="fornSetParam(\'acrescimo\', this.value)"></label>' +
+    (temMoedaExt ?
+      '<label class="ec-f" style="min-width:120px"><span>Câmbio USD → R$</span><input type="number" step="0.01" value="' +
+        (p.usd == null ? '' : p.usd) + '" onchange="fornSetParam(\'usd\', this.value)"></label>' +
+      '<label class="ec-f" style="min-width:120px"><span>Câmbio CNY → R$</span><input type="number" step="0.01" value="' +
+        (p.cny == null ? '' : p.cny) + '" onchange="fornSetParam(\'cny\', this.value)"></label>' : '') +
+    '</div>' +
+    (semAcrescimo ? '<div style="font-size:12px;color:var(--orange);margin-top:6px">Acréscimo em branco: a margem está ' +
+      'sendo calculada sobre o preço de compra puro, sem impostos nem frete — ela sai <b>maior</b> do que a real.</div>' : '');
+
+  return '<div class="card ec-sec"><div class="card-head"><span class="card-title">Catálogo de fornecedores × radar</span>' +
+    '<span class="ec-sub">' + ecInt(FORN.itens.length) + ' itens no catálogo</span></div>' +
+    '<div class="card-body" style="font-size:13px;line-height:1.7">' + arquivos +
+    '<div style="margin-top:10px"><b>' + ecInt(usaveis) + '</b> oportunidades com fornecedor e margem calculada ' +
+      '(' + cont.exata + ' por EAN, ' + cont.alta + ' por OEM, ' + cont['provável'] + ' prováveis por texto, ' +
+      cont.confirmada + ' confirmadas por você) · <b>' + ecInt(cont['possível']) + '</b> para revisar · ' +
+      ecInt(cont.sem) + ' sem correspondente · ' + ecInt(cont.bling) + ' já vendidas (custo do Bling) · ' +
+      ecInt(cont.semFicha) + ' sem ficha do ML para comparar.</div>' +
+    '<div class="ec-sub" style="font-size:12px">Correspondência <b>possível</b> não entra no score até você confirmar. ' +
+      'Confirmar ou recusar fica gravado neste navegador.</div>' +
+    parametros + entrada + '</div></div>';
+}
+
+/* célula da coluna Fornecedor */
+function fornCelula(o) {
+  var l = o.linha;
+  if (o.fonteCusto === 'bling') return '<span class="ec-sub">já vende · custo do Bling</span>';
+  var f = o.forn;
+  if (!f) {
+    return '<span class="ec-sub">' + ((!l.nome || /^\(/.test(l.nome)) ? 'sem ficha para comparar' : 'sem correspondente') + '</span>';
+  }
+  var it = f.item;
+  FORN.ui = FORN.ui || [];
+  var n = FORN.ui.push({ pid: l.produto_id, cod: fornChaveItem(it) }) - 1;
+  var botoes = '';
+  if (l.produto_id && f.confianca !== 'exata') {
+    botoes = f.confianca === 'confirmada'
+      ? '<button class="btn-sm" onclick="fornDecidir(' + n + ',\'limpar\')">desfazer</button>'
+      : '<button class="btn-sm" title="É este item" onclick="fornDecidir(' + n + ',\'ok\')">✓ é este</button> ' +
+        '<button class="btn-sm" title="Não é este item — mostrar o próximo" onclick="fornDecidir(' + n + ',\'nao\')">✗ não é</button>';
+  }
+  return '<div>' + fornTag(f.confianca) + ' <b class="mono">' + ecEsc(it.codigo) + '</b> ' +
+    '<span class="mono">' + (it.moeda === 'BRL' ? ecMoney2(it.preco) : ecEsc(it.moeda) + ' ' + it.preco.toFixed(2)) + '</span>' +
+    (it.precoDivergente ? ' <span title="o arquivo traz este código com mais de um preço; usei o maior" style="color:var(--orange)">*</span>' : '') +
+    '</div><div class="ec-sub" style="font-size:11px">' + ecEsc(it.fornecedor) + ' · ' + ecEsc(it.descricao) + '</div>' +
+    (botoes ? '<div style="margin-top:4px;white-space:nowrap">' + botoes + '</div>' : '');
+}
+
+/* margem indicativa de uma correspondência "possível" — mostrada, nunca pontuada */
+function fornMargemIndicativa(o, ctx) {
+  if (!o.forn || FORN_USAVEL[o.forn.confianca] || o.fonteCusto) return null;
+  var l = o.linha, c = fornCusto(o.forn.item, fornParams());
+  if (c == null || !(l.preco_mediano > 0)) return null;
+  var com = ctx && ctx.comissaoPct != null ? ctx.comissaoPct : 0.16;
+  return (l.preco_mediano * (1 - com) - c) / l.preco_mediano;
+}
+
+/* ─── lista de compra em Excel ────────────────────────────────────────── */
+async function fornExportarCompra() {
+  try { await fornGarantirXlsx(); } catch (e) { showToast(e.message, 'err'); return; }
+  var L = (MI.dados && MI.dados.linhas) || [];
+  var ctx = miCtx(), par = fornParams();
+  var com = ctx.comissaoPct != null ? ctx.comissaoPct : 0.16;
+  var radar = miRadar(L, ctx, miPesos()).filter(function (o) { return o.forn && o.fonteCusto !== 'bling'; });
+  radar.sort(function (a, b) {
+    var ua = FORN_USAVEL[a.forn.confianca] ? 1 : 0, ub = FORN_USAVEL[b.forn.confianca] ? 1 : 0;
+    if (ua !== ub) return ub - ua;
+    return (b.score == null ? -1 : b.score) - (a.score == null ? -1 : a.score);
+  });
+  var linhas = radar.map(function (o) {
+    var l = o.linha, it = o.forn.item, c = fornCusto(it, par);
+    var mR = (c != null && l.preco_mediano > 0) ? l.preco_mediano * (1 - com) - c : null;
+    var alt = o.forn.alternativas && o.forn.alternativas[0];
+    return {
+      'Score': o.score == null ? 'N.D.' : o.score,
+      'Entra no score': FORN_USAVEL[o.forn.confianca] ? 'sim' : 'não — revisar',
+      'Confiança': o.forn.confianca,
+      'Tipo': o.tipo,
+      'Produto no ML': l.nome || '',
+      'Marca no ML': l.marca || '',
+      'Categoria': l.categoria || l.categoria_id || '',
+      'Posição': l.posicao,
+      'Preço mediano ML': l.preco_mediano,
+      'Vendedores': l.n_vendedores,
+      'Fornecedor': it.fornecedor,
+      'Código fornecedor': it.codigo,
+      'Descrição fornecedor': it.descricao,
+      'Marca fornecedor': it.marca || '',
+      'Preço de compra': it.preco,
+      'Moeda': it.moeda,
+      'Preço divergente no arquivo': it.precoDivergente ? it.precoDivergente.join(' / ') : '',
+      'Custo considerado (R$)': c == null ? 'N.D.' : Math.round(c * 100) / 100,
+      'Acréscimo usado (%)': par.acrescimo == null ? 'não informado' : par.acrescimo,
+      'Margem unitária (R$)': mR == null ? 'N.D.' : Math.round(mR * 100) / 100,
+      'Margem (%)': mR == null ? 'N.D.' : Math.round(mR / l.preco_mediano * 1000) / 10,
+      'Termos em comum': (o.forn.comuns || []).join(' '),
+      'Alternativa 1': alt ? alt.item.codigo + ' — ' + alt.item.descricao : '',
+      'ID produto ML': l.produto_id || '',
+    };
+  });
+  if (!linhas.length) { showToast('Nenhuma oportunidade com fornecedor para exportar.', 'err'); return; }
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), 'Lista de compra');
+  XLSX.writeFile(wb, 'radar_x_fornecedor_' + ((MI.dados && MI.dados.data) || 'hoje') + '.xlsx');
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -9204,17 +9854,28 @@ function miCtx() {
   ((typeof EC !== 'undefined' && EC.rows) || []).forEach(function (r) {
     if (r.sku && r.custo != null) custoPorSku[r.sku] = r.custo;
   });
+  var parForn = (typeof fornParams === 'function') ? fornParams() : {};
+  /* Custo: Bling primeiro (é o custo real de quem já vende). Sem ele, o do
+     fornecedor — só com correspondência exata, alta, provável ou confirmada. */
+  var custoInfo = function (l) {
+    var it = porCatalogo[l.produto_id];
+    var sku = it && it.seller_custom_field;
+    if (sku && custoPorSku[sku] != null) return { custo: custoPorSku[sku], fonte: 'bling' };
+    var f = (typeof fornDe === 'function') ? fornDe(l) : null;
+    if (f && FORN_USAVEL[f.confianca]) {
+      var c = fornCusto(f.item, parForn);
+      if (c != null) return { custo: c, fonte: 'fornecedor', match: f };
+    }
+    return null;
+  };
   return {
     marcasTitanium: marcas,
     dominiosTitanium: dominios,
     comissaoPct: 0.16,
     vendeProduto: function (l) { return !!porCatalogo[l.produto_id]; },
-    custoPorProduto: function (l) {
-      var it = porCatalogo[l.produto_id];
-      if (!it) return null;
-      var sku = it.seller_custom_field;
-      return (sku && custoPorSku[sku] != null) ? custoPorSku[sku] : null;
-    },
+    custoInfo: custoInfo,
+    fornecedorDe: function (l) { return (typeof fornDe === 'function') ? fornDe(l) : null; },
+    custoPorProduto: function (l) { var x = custoInfo(l); return x ? x.custo : null; },
     totais: { itens: itens.length, comCatalogo: Object.keys(porCatalogo).length,
               marcas: Object.keys(marcas).length },
   };
@@ -9452,10 +10113,12 @@ function miTelaRadar() {
   var L = (MI.dados && MI.dados.linhas) || [];
   if (!L.length) return '<div class="card ec-sec"><div class="card-body">Sem posições coletadas ainda.</div></div>';
 
+  if (FORN.itens === null && !FORN.carregando) { fornCarregar().then(miRender); }
   var ctx = miCtx();
   var P = miPesos();
   var radar = miRadar(L, ctx, P);
   var res = miResumoRadar(radar);
+  FORN.ui = [];
 
   var campos = [['demanda', 'Demanda'], ['crescimento', 'Crescimento'],
                 ['competicao', 'Concorrência'], ['margem', 'Margem'], ['portfolio', 'Portfólio']];
@@ -9479,13 +10142,28 @@ function miTelaRadar() {
     '<div class="card-body" style="font-size:13px;line-height:1.7">' +
     '<b>' + ecInt(res.total) + '</b> produtos avaliados · <b>' + ecInt(res.parciais) + '</b> com score parcial · <b>' +
     ecInt(res.semScore) + '</b> sem score calculável.<br>' +
-    'Dos avaliados, <b>' + ecInt(semMargem) + '</b> estão sem margem porque a Titanium não vende o produto — ' +
-    'sem custo de compra, estimar margem seria inventar. O cruzamento usa os <b>' +
+    'Dos avaliados, <b>' + ecInt(semMargem) + '</b> estão sem margem: a Titanium não vende o produto e não há ' +
+    'item de fornecedor com correspondência segura — sem custo de compra, estimar margem seria inventar. O cruzamento usa os <b>' +
     ecInt(ctx.totais.comCatalogo) + '</b> anúncios seus que estão vinculados a um produto de catálogo do ML ' +
     '(de ' + ecInt(ctx.totais.itens) + ' no total).</div></div>';
 
-  var linhas = radar.slice(0, 200).map(function (o) {
+  var filtros = [['', 'Todas'], ['com', 'Com fornecedor'], ['revisar', 'Para revisar'], ['sem', 'Sem fornecedor']];
+  var noFiltro = radar.filter(function (o) {
+    var f = MI.fornFiltro || '';
+    if (!f) return true;
+    var usavel = o.fonteCusto === 'fornecedor' || (o.forn && FORN_USAVEL[o.forn.confianca]);
+    if (f === 'com') return usavel;
+    if (f === 'revisar') return !!o.forn && !usavel && o.fonteCusto !== 'bling';
+    return !o.forn && o.fonteCusto !== 'bling';
+  });
+  var chipsForn = '<div class="ec-chips" style="padding:0 18px 10px">' + filtros.map(function (f) {
+    return '<button class="ec-chip ' + ((MI.fornFiltro || '') === f[0] ? 'active' : '') +
+      '" onclick="MI.fornFiltro=\'' + f[0] + '\';miRender()">' + f[1] + '</button>';
+  }).join('') + '</div>';
+
+  var linhas = noFiltro.slice(0, 200).map(function (o) {
     var l = o.linha;
+    var mInd = fornMargemIndicativa(o, ctx);
     var nome = l.nome && !/^\(/.test(l.nome) ? l.nome
       : (l.tipo === 'USER_PRODUCT' ? '<span class="ec-sub">anúncio próprio de vendedor</span>'
                                    : '<span class="ec-sub">ficha ainda não coletada</span>');
@@ -9507,7 +10185,14 @@ function miTelaRadar() {
       '<td>' + ecEsc(l.marca || '—') + '</td>' +
       '<td class="r mono">' + (l.preco_mediano != null ? ecMoney2(l.preco_mediano) : '—') + '</td>' +
       '<td class="r mono">' + ecInt(l.n_vendedores) + '</td>' +
-      '<td class="r mono">' + (o.margemPct != null ? Math.round(o.margemPct * 100) + '%' : '<span class="ec-sub">N.D.</span>') + '</td>' +
+      '<td style="min-width:220px">' + fornCelula(o) + '</td>' +
+      '<td class="r mono">' + (o.margemPct != null
+          ? Math.round(o.margemPct * 100) + '%<div class="ec-sub" style="font-size:10px">' +
+            (o.fonteCusto === 'fornecedor' ? 'custo fornecedor' : o.fonteCusto === 'bling' ? 'custo Bling' : '') + '</div>'
+          : mInd != null
+            ? '<span class="ec-sub" title="correspondência ainda não confirmada — não entra no score">≈ ' +
+              Math.round(mInd * 100) + '%</span><div class="ec-sub" style="font-size:10px">a confirmar</div>'
+            : '<span class="ec-sub">N.D.</span>') + '</td>' +
       '</tr>';
   }).join('');
 
@@ -9515,16 +10200,19 @@ function miTelaRadar() {
     return '<span class="ec-tag" style="margin-right:6px">' + ecEsc(t) + ': ' + res.porTipo[t] + '</span>';
   }).join('');
 
-  return pesosUI + aviso +
+  return fornCartao(radar) + pesosUI + aviso +
     '<div class="card ec-sec"><div class="card-head">' +
     '<span class="card-title">Oportunidades ordenadas por score</span>' +
-    '<button class="btn-sm" onclick="miExportarRadar()">Exportar CSV</button></div>' +
-    '<div class="ec-muted" style="padding:0 18px 10px;font-size:12px">' + porTipo + '</div>' +
+    '<span style="display:flex;gap:6px">' +
+    (FORN.itens && FORN.itens.length ? '<button class="btn-sm" onclick="fornExportarCompra()">Lista de compra (Excel)</button>' : '') +
+    '<button class="btn-sm" onclick="miExportarRadar()">Exportar CSV</button></span></div>' +
+    '<div class="ec-muted" style="padding:0 18px 10px;font-size:12px">' + porTipo + '</div>' + chipsForn +
     '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr>' +
     '<th class="r">Score</th><th>Tipo</th><th>Categoria</th><th class="r">Pos.</th>' +
     '<th>Produto e justificativa</th><th>Marca</th><th class="r">Preço mediano</th>' +
-    '<th class="r">Vendedores</th><th class="r">Margem</th>' +
-    '</tr></thead><tbody>' + linhas + '</tbody></table></div></div>';
+    '<th class="r">Vendedores</th><th>Fornecedor</th><th class="r">Margem</th>' +
+    '</tr></thead><tbody>' + (linhas || '<tr><td colspan="10" class="ec-sub">Nada neste filtro.</td></tr>') +
+    '</tbody></table></div></div>';
 }
 
 function miExportarRadar() {
@@ -9532,13 +10220,16 @@ function miExportarRadar() {
   var radar = miRadar(L, miCtx(), miPesos());
   ecBaixaCsv('radar_oportunidades_' + ((MI.dados && MI.dados.data) || 'hoje') + '.csv',
     ['Score', 'Parcial', 'Faltou', 'Tipo', 'Categoria', 'Posicao', 'Produto', 'Marca',
-     'Preco mediano', 'Vendedores', 'Margem %', 'Justificativa'],
+     'Preco mediano', 'Vendedores', 'Margem %', 'Fonte do custo', 'Fornecedor', 'Codigo fornecedor',
+     'Confianca', 'Justificativa'],
     radar.map(function (o) {
       var l = o.linha;
       return [o.score == null ? 'N.D.' : o.score, o.parcial ? 'sim' : 'nao', o.faltando.join(' '),
         o.tipo, l.categoria || l.categoria_id, l.posicao, l.nome || '', l.marca || '',
         l.preco_mediano, l.n_vendedores,
-        o.margemPct == null ? 'N.D.' : Math.round(o.margemPct * 100), o.justificativa];
+        o.margemPct == null ? 'N.D.' : Math.round(o.margemPct * 100), o.fonteCusto || '',
+        o.forn ? o.forn.item.fornecedor : '', o.forn ? o.forn.item.codigo : '',
+        o.forn ? o.forn.confianca : '', o.justificativa];
     }));
 }
 
