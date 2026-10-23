@@ -9680,8 +9680,9 @@ function fornCartao(radar) {
       '<input id="forn-nome" type="text" placeholder="ex.: Unifort"></label>' +
     '<label class="ec-f" style="min-width:90px"><span>Moeda padrão</span>' +
       '<select id="forn-moeda"><option>BRL</option><option>USD</option><option>CNY</option></select></label>' +
-    '<label class="btn-sm" style="cursor:pointer">Importar catálogo (Excel ou CSV)' +
-      '<input type="file" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="fornImportar(this)"></label>' +
+    '<input id="forn-arquivo" type="file" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="fornImportar(this)">' +
+    '<button class="btn" style="background:var(--blue,#2d7ff9);color:#fff;border:none;padding:8px 16px;border-radius:6px;' +
+      'font-weight:600;cursor:pointer" onclick="document.getElementById(\'forn-arquivo\').click()">📂 Importar catálogo (Excel ou CSV)</button>' +
     '</div>';
 
   if (FORN.carregando || FORN.itens === null) {
