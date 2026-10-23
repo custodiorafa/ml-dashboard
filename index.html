@@ -9418,7 +9418,8 @@ var FORN_SINONIMO = {
   RESERVATORIO: 'RESERV', EXPANSAO: 'EXP', COMBUSTIVEL: 'COMB', ELETRICO: 'ELET', ELETRICA: 'ELET',
   PARAFUSOS: 'PARAFUSO', LAMPADAS: 'LAMPADA', MANGUEIRAS: 'MANGUEIRA', ARRUELAS: 'ARRUELA',
   ROLAMENTO: 'ROLAM', ROLAMENTOS: 'ROLAM', JOGO: 'JG', JOGOS: 'JG', CONJUNTO: 'JG', CJ: 'JG', KITS: 'KIT',
-  CHAVE: 'CHV', CHAVES: 'CHV', SEMCHAVE: 'SEMCHV',
+  SELANTE: 'ADESIV', SELANTES: 'ADESIV', SILICONE: 'ADESIV', ADESIVO: 'ADESIV', ADESIVOS: 'ADESIV', COLA: 'ADESIV',
+  CHAVE: 'CHV', CHAVES: 'CHV', SEMCHAVE: 'SEMCHV', PCS: 'PC', TONELADAS: 'TON', TONELADA: 'TON',
   PECAS: 'PC', PECA: 'PC', UNIDADES: 'UN', UNIDADE: 'UN',
 };
 var FORN_VAZIA = ('DE DA DO DAS DOS E P PARA C COM S SEM EM A O AS OS NA NO NAS NOS AO UM UMA ' +
@@ -9428,7 +9429,15 @@ var FORN_VAZIA = ('DE DA DO DAS DOS E P PARA C COM S SEM EM A O AS OS NA NO NAS 
 
 function fornTermos(s) {
   var t = String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase()
+    /* faixa de ano (74>86, >92, 04>) sai antes; número de 2 dígitos fica (12 peças, 22 mm) */
+    .replace(/(^|[^\d.,])\d{2}\s*>\s*\d{2}(?!\d)|(^|[^\d.,])>\s*\d{2}(?!\d)|(^|[^\d.,])\d{2}\s*>(?!\s*\d)/g, ' ')
     .replace(/(^|[^\d])(\d{1,3}),(\d{1,2})(?!\d)/g, '$1$2.$3')   // 1,4BAR → 1.4BAR; 1113,1115 fica
+    .replace(/(\d)X(?=\d)/g, '$1 ')                              // 17X19X21X23MM → 17 19 21 23MM
+    .replace(/\bPU\s+(\d)/g, 'PU$1')                             // PU 40 → PU40
+    /* "22 mm", "3 Toneladas", "12 Pçs" → 22MM, 3TON, 12PC, igual ao fornecedor */
+    .replace(/(\d)\s*(MM|CM|KG|ML|LTS|LT|LITROS|LITRO|V|W|AH|MTS|METROS|METRO|M|TONELADAS|TONELADA|TON|PCS|PC|PECAS)\b/g,
+      function (_, d, u) { return d + ({ LTS: 'L', LT: 'L', LITROS: 'L', LITRO: 'L', MTS: 'M', METROS: 'M', METRO: 'M',
+        TONELADAS: 'TON', TONELADA: 'TON', PCS: 'PC', PECAS: 'PC' }[u] || u); })
     .replace(/\bS\/\s*/g, 'SEM ').replace(/\bC\/\s*/g, 'COM ').replace(/\bP\/\s*/g, 'PARA ')
     .replace(/\bSEM\s+([A-Z]+)/g, function (_, w) { return 'SEM' + (FORN_SINONIMO[w] || w); })
     .split(/[^A-Z0-9.]+/);
@@ -9436,7 +9445,7 @@ function fornTermos(s) {
   t.forEach(function (w) {
     w = w.replace(/^\.+|\.+$/g, '');
     if (!w) return;
-    if (/^\d{2}$/.test(w) || /^(19|20)\d{2}$/.test(w)) return;   // ano: 74>86, 2014
+    if (/^(19|20)\d{2}$/.test(w)) return;   // ano solto: 2014
     if (FORN_SINONIMO[w]) w = FORN_SINONIMO[w];
     if (!/\d/.test(w) && w.length > 4) {
       w = w.replace(/(OES|AES)$/, 'AO').replace(/S$/, '');
@@ -9475,9 +9484,11 @@ function fornUnicos(a) { var o = {}; a.forEach(function (x) { o[x] = 1; }); retu
 
 /* ─── índice invertido com peso por raridade (IDF) ─────────────────────── */
 function fornIndice(itens) {
-  var df = {}, post = {}, termos = new Array(itens.length), cab = new Array(itens.length), faixas = new Array(itens.length), porEan = {}, oem = [];
+  var df = {}, post = {}, termos = new Array(itens.length), cab = new Array(itens.length), qual = new Array(itens.length), faixas = new Array(itens.length), porEan = {}, oem = [];
   itens.forEach(function (it, i) {
-    cab[i] = fornCabeca(fornTermos(it.descricao));
+    var td = fornTermos(it.descricao);
+    cab[i] = fornCabeca(td);
+    qual[i] = td.filter(function (w) { return !/\d/.test(w) && !FORN_GENERICO[w]; }).slice(0, 2);
     faixas[i] = fornFaixas(it.descricao);
     var tk = fornUnicos(fornTermos(it.descricao + ' ' + (it.marca || '') + ' ' + (it.aplicacao || '')));
     termos[i] = tk;
@@ -9488,7 +9499,7 @@ function fornIndice(itens) {
   var N = itens.length;
   var idf = function (w) { return Math.log(1 + N / ((df[w] || 0) + 1)); };
   var peso = termos.map(function (tk) { return tk.reduce(function (s, w) { return s + idf(w); }, 0); });
-  return { N: N, df: df, post: post, termos: termos, cab: cab, faixas: faixas, peso: peso, idf: idf, porEan: porEan, oem: oem };
+  return { N: N, df: df, post: post, termos: termos, cab: cab, qual: qual, faixas: faixas, peso: peso, idf: idf, porEan: porEan, oem: oem };
 }
 
 /* O substantivo que abre a descrição é o produto. "HASTE LONGA CUICA" é
@@ -9573,14 +9584,21 @@ function fornCasar(l, itens, idx, decisao) {
     var nf = idx.termos[i].filter(fornTemNumero);
     var numComum = numsL.filter(function (w) { return nf.indexOf(w) >= 0; }).length;
     var anoOk = fornAnoCabe(anosL, idx.faixas[i]);
-    var numConflito = (numsL.length > 0 && nf.length > 0 && numComum === 0) || anoOk === false;
+    /* Mais da metade das medidas do fornecedor ausentes do título também é
+       outro produto: câmara 3.50-19 não é câmara 3.50-8. */
+    var nfFora = nf.filter(function (w) { return tl.indexOf(w) < 0; }).length;
+    var numConflito = (numsL.length > 0 && nf.length > 0 && numComum === 0) || anoOk === false ||
+      (numsL.length > 0 && nf.length >= 2 && nfFora / nf.length > 0.5);
     /* O produto tem que ser o mesmo substantivo dos dois lados: "chave de
        roda" não é "porca de roda", mesmo que a porca mencione a chave. */
     var cabF = idx.cab[i];
     var cabOk = !!cabL && !!cabF && cabF === cabL;
+    /* As duas primeiras palavras do fornecedor dizem que produto é: "CABO
+       ACO" não é "cabo flexível". As duas têm que estar no título. */
+    var qual = idx.qual[i], qualOk = qual.filter(function (w) { return tl.indexOf(w) >= 0; }).length;
     var score = sim + (marcaOk ? 0.08 : 0) + (numComum ? 0.05 * Math.min(numComum, 2) : 0)
       - (numConflito ? 0.12 : 0) - (cabOk ? 0 : 0.25) + (anoOk ? 0.04 : 0);
-    return { i: i, sim: sim, score: score, cabOk: cabOk, cobForn: S / B, cobML: S / A, marcaOk: marcaOk, numConflito: numConflito, numComum: numComum };
+    return { i: i, sim: sim, score: score, cabOk: cabOk, qualOk: qualOk, qualN: qual.length, cobForn: S / B, cobML: S / A, marcaOk: marcaOk, numConflito: numConflito, numComum: numComum };
   }).filter(Boolean).sort(function (a, b) { return b.score - a.score || itens[a.i].preco - itens[b.i].preco; });
 
   if (!lista.length) return null;
@@ -9588,11 +9606,13 @@ function fornCasar(l, itens, idx, decisao) {
   var comuns = idx.termos[m.i].filter(function (w) { return tl.indexOf(w) >= 0; });
   var conf = null;
   /* Medida diferente (200 mm × 150 mm, 2 t × 5 t, ano fora da faixa) é
-     outro produto: nem para revisão. E a maior parte do título do ML tem
-     que estar na descrição do fornecedor, não só uma ou duas palavras. */
+     outro produto: nem para revisão. O título do ML vem cheio de palavra-
+     -chave ("profissional", "carro moto caminhão"); o que decide é a
+     descrição do fornecedor estar quase toda dentro do título. */
   if (m.numConflito || !m.cabOk) return null;
-  if (m.sim >= 0.55 && m.cobML >= 0.6 && m.cobForn >= 0.5) conf = 'provável';
-  else if (m.sim >= 0.42 && m.cobML >= 0.5 && comuns.length >= 3) conf = 'possível';
+  if (m.qualOk < m.qualN) return null;
+  if (m.cobForn >= 0.6 && m.cobML >= 0.35 && comuns.length >= 3) conf = 'provável';
+  else if (m.cobForn >= 0.5 && m.cobML >= 0.25 && comuns.length >= 3) conf = 'possível';
   if (!conf) return null;
 
   /* Empate técnico com preço diferente: não dá para saber qual é. */
