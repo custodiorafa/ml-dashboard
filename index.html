@@ -9002,15 +9002,91 @@ function miCompCrescimento(l) {
    vale 1; de 40 para cima, 0. */
 function miCompCompeticao(l) { return miNorm(l.n_vendedores, 3, 40); }
 
-/* Margem potencial: só existe com custo conhecido. Para produto que a
-   Titanium não vende, não há custo — e estimar seria inventar.
-   margem = (preço mediano − custo − comissão estimada) / preço mediano */
+/* ─── base de cálculo da margem: números reais da conta ──────────────────
+   Margem de contribuição, a mesma conta de Estoque & Compras e da Central
+   Comercial: preço − tarifa ML − frete − imposto − custo. Para produto que
+   a Titanium ainda não vende não existe tarifa nem frete próprios, então
+   uso o que a conta pagou de fato em produtos da mesma faixa de preço:
+   - tarifa: tarifa real dos pedidos (% do preço), mediana da faixa
+   - frete: frete real pago nos envios (R$ por unidade), mediana da faixa
+   - imposto: % Tributos do cadastro do Bling, mediana da conta
+   A faixa importa: abaixo de R$ 79 o ML cobra tarifa fixa e o frete é
+   outro. Faixa com menos de 5 produtos medidos usa a mediana da conta. */
+var MI_FAIXAS = [[0, 79], [79, 150], [150, 300], [300, Infinity]];
+var MI_MIN_AMOSTRA = 5;
+function miMediana(a) {
+  if (!a || !a.length) return null;
+  a = a.slice().sort(function (x, y) { return x - y; });
+  var k = Math.floor(a.length / 2);
+  return a.length % 2 ? a[k] : (a[k - 1] + a[k]) / 2;
+}
+function miBaseConta() {
+  var rows = (typeof EC !== 'undefined' && EC.rows) || [];
+  if (MI._base && MI._base.ref === rows) return MI._base;
+  var fx = MI_FAIXAS.map(function (f) { return { de: f[0], ate: f[1], tar: [], fre: [] }; });
+  var tarAll = [], freAll = [], imp = [], fatorAll = [], fatorForn = {};
+  rows.forEach(function (r) {
+    if (!(r.preco > 0)) return;
+    var b = null;
+    fx.forEach(function (f) { if (r.preco >= f.de && r.preco < f.ate) b = f; });
+    if (r.v90 > 0 && r.tarifaUn > 0) { var t = r.tarifaUn / r.preco; b.tar.push(t); tarAll.push(t); }
+    if (r.freteFonte === 'pedidos' && r.freteUn != null) { b.fre.push(r.freteUn); freAll.push(r.freteUn); }
+    if (r.impFonte === 'Bling' && r.impPct != null) imp.push(r.impPct);
+    if (r.custoFonte === 'Bling' && r.custo > 0 && r.precoCompraFonte === 'cadastro' && r.precoCompra > 0) {
+      var f = r.custo / r.precoCompra;
+      if (f >= 1 && f <= 3) {
+        fatorAll.push(f);
+        var fn = fornChave(r.fornecedor);
+        if (fn) (fatorForn[fn] = fatorForn[fn] || []).push(f);
+      }
+    }
+  });
+  var cfgImp = (typeof ecCfg === 'function' && ecCfg().impostoPct != null) ? Number(ecCfg().impostoPct) : null;
+  var base = {
+    ref: rows, ok: tarAll.length > 0,
+    tarifaConta: miMediana(tarAll), freteConta: miMediana(freAll),
+    faixas: fx.map(function (f) {
+      return { de: f.de, ate: f.ate, nTar: f.tar.length, nFre: f.fre.length,
+        tarifaPct: f.tar.length >= MI_MIN_AMOSTRA ? miMediana(f.tar) : miMediana(tarAll),
+        frete: f.fre.length >= MI_MIN_AMOSTRA ? miMediana(f.fre) : miMediana(freAll) };
+    }),
+    impPct: imp.length ? miMediana(imp) : cfgImp,
+    impFonte: imp.length ? 'Bling (' + imp.length + ' produtos)' : (cfgImp != null ? 'padrão configurado' : null),
+    fatorConta: miMediana(fatorAll), nFator: fatorAll.length,
+    fatorForn: Object.keys(fatorForn).reduce(function (o, k) {
+      if (fatorForn[k].length >= MI_MIN_AMOSTRA) o[k] = { f: miMediana(fatorForn[k]), n: fatorForn[k].length };
+      return o;
+    }, {}),
+  };
+  MI._base = base;
+  return base;
+}
+function miFaixaDe(base, preco) {
+  for (var i = 0; i < base.faixas.length; i++) {
+    if (preco >= base.faixas[i].de && preco < base.faixas[i].ate) return base.faixas[i];
+  }
+  return null;
+}
+/* Desconta tudo do preço. Devolve null se faltar qualquer parcela —
+   margem sem frete ou sem imposto é margem errada, não margem parcial. */
+function miMargemCalc(preco, custo, base, proprio) {
+  if (!(preco > 0) || custo == null || !base) return null;
+  var fx = miFaixaDe(base, preco) || {};
+  var tarPct = proprio && proprio.tarifaPct != null ? proprio.tarifaPct : fx.tarifaPct;
+  var frete = proprio && proprio.frete != null ? proprio.frete : fx.frete;
+  var impPct = proprio && proprio.impPct != null ? proprio.impPct : base.impPct;
+  if (tarPct == null || frete == null || impPct == null) return null;
+  var tarifa = preco * tarPct, imposto = preco * impPct / 100;
+  var un = preco - tarifa - frete - imposto - custo;
+  return { pct: un / preco, un: un, preco: preco, tarifa: tarifa, frete: frete, imposto: imposto, custo: custo,
+           tarifaPct: tarPct, impPct: impPct, fonte: proprio ? 'anúncio próprio' : 'média da conta na faixa' };
+}
+
 function miCompMargem(l, ctx) {
-  var custo = ctx && ctx.custoPorProduto ? ctx.custoPorProduto(l) : null;
-  if (custo == null || l.preco_mediano == null || !(l.preco_mediano > 0)) return null;
-  var comissao = (ctx && ctx.comissaoPct != null ? ctx.comissaoPct : 0.16);
-  var m = (l.preco_mediano * (1 - comissao) - custo) / l.preco_mediano;
-  return { valor: miNorm(m, 0.45, 0), margemPct: m };
+  var m = ctx && ctx.margemDe ? ctx.margemDe(l) : null;
+  if (!m) return null;
+  /* 30% de margem de contribuição já é nota cheia; zero ou negativa, nota zero */
+  return { valor: miNorm(m.pct, 0.30, 0), margemPct: m.pct, detalhe: m };
 }
 
 /* Adequação ao portfólio: o quanto isso se parece com o que a Titanium já
@@ -9063,6 +9139,7 @@ function miScore(l, ctx, pesos) {
     cobertura: cobertura,
     componentes: comp,
     margemPct: mg ? mg.margemPct : null,
+    margemDetalhe: mg ? mg.detalhe : null,
   };
 }
 
@@ -9152,7 +9229,7 @@ function miRadar(linhas, ctx, pesos) {
     return {
       linha: l, tipo: tipo, score: s.score, parcial: s.parcial,
       faltando: s.faltando, cobertura: s.cobertura, motivo: s.motivo || null,
-      componentes: s.componentes, margemPct: s.margemPct,
+      componentes: s.componentes, margemPct: s.margemPct, margemDetalhe: s.margemDetalhe || null,
       fonteCusto: ci ? ci.fonte : null, forn: forn,
       justificativa: just,
     };
@@ -9278,7 +9355,7 @@ function fornLerMatriz(matriz, padrao) {
     var row2 = matriz[i] || [];
     var g = function (campo) { return mapa[campo] == null ? null : row2[mapa[campo]]; };
     var desc = String(g('descricao') == null ? '' : g('descricao')).trim();
-    if (!desc || /^obrigat/i.test(desc)) { ignoradas++; continue; }
+    if (!desc || /^obrigat/i.test(desc) || /\bTESTE\b/i.test(desc)) { ignoradas++; continue; }
     var obs = String(g('observacao') == null ? '' : g('observacao')).trim();
     if (/exemplo, pode apagar/i.test(obs)) { exemplos++; continue; }
     var preco = fornNum(g('preco_compra'));
@@ -9346,7 +9423,7 @@ var FORN_SINONIMO = {
 };
 var FORN_VAZIA = ('DE DA DO DAS DOS E P PARA C COM S SEM EM A O AS OS NA NO NAS NOS AO UM UMA ' +
   'ORIGINAL NOVO NOVA NOVOS PREMIUM QUALIDADE ENVIO IMEDIATO PRONTA ENTREGA PROMOCAO OFERTA ' +
-  'LINHA REF MODELO TODOS TODAS UNIVERSAL MAIS MENOS PC UN').split(' ')
+  'LINHA REF MODELO TODOS TODAS MAIS MENOS PC UN').split(' ')
   .reduce(function (o, w) { o[w] = 1; return o; }, {});
 
 function fornTermos(s) {
@@ -9497,8 +9574,10 @@ function fornCasar(l, itens, idx, decisao) {
     var numComum = numsL.filter(function (w) { return nf.indexOf(w) >= 0; }).length;
     var anoOk = fornAnoCabe(anosL, idx.faixas[i]);
     var numConflito = (numsL.length > 0 && nf.length > 0 && numComum === 0) || anoOk === false;
+    /* O produto tem que ser o mesmo substantivo dos dois lados: "chave de
+       roda" não é "porca de roda", mesmo que a porca mencione a chave. */
     var cabF = idx.cab[i];
-    var cabOk = !!cabL && idx.termos[i].indexOf(cabL) >= 0 && (!cabF || tl.indexOf(cabF) >= 0);
+    var cabOk = !!cabL && !!cabF && cabF === cabL;
     var score = sim + (marcaOk ? 0.08 : 0) + (numComum ? 0.05 * Math.min(numComum, 2) : 0)
       - (numConflito ? 0.12 : 0) - (cabOk ? 0 : 0.25) + (anoOk ? 0.04 : 0);
     return { i: i, sim: sim, score: score, cabOk: cabOk, cobForn: S / B, cobML: S / A, marcaOk: marcaOk, numConflito: numConflito, numComum: numComum };
@@ -9508,8 +9587,12 @@ function fornCasar(l, itens, idx, decisao) {
   var m = lista[0];
   var comuns = idx.termos[m.i].filter(function (w) { return tl.indexOf(w) >= 0; });
   var conf = null;
-  if (m.cabOk && m.sim >= 0.5 && m.cobForn >= 0.55 && !m.numConflito) conf = 'provável';
-  else if (m.cabOk && m.sim >= 0.33 && comuns.length >= 2) conf = 'possível';
+  /* Medida diferente (200 mm × 150 mm, 2 t × 5 t, ano fora da faixa) é
+     outro produto: nem para revisão. E a maior parte do título do ML tem
+     que estar na descrição do fornecedor, não só uma ou duas palavras. */
+  if (m.numConflito || !m.cabOk) return null;
+  if (m.sim >= 0.55 && m.cobML >= 0.6 && m.cobForn >= 0.5) conf = 'provável';
+  else if (m.sim >= 0.42 && m.cobML >= 0.5 && comuns.length >= 3) conf = 'possível';
   if (!conf) return null;
 
   /* Empate técnico com preço diferente: não dá para saber qual é. */
@@ -9527,14 +9610,24 @@ function fornCasar(l, itens, idx, decisao) {
   };
 }
 
-/* custo considerado = preço × câmbio × (1 + acréscimo) */
-function fornCusto(item, par) {
+/* Preço de compra não é custo. O fator custo/compra vem do Bling: nos
+   produtos que têm os dois cadastrados, quanto o custo (com IPI, ST, frete
+   de entrada) é maior que o preço do fornecedor. Primeiro o fator desse
+   fornecedor; sem amostra, o da conta; se o usuário informar um
+   acréscimo, ele manda. Sem nenhum dos três, não há custo. */
+function fornCusto(item, par, base) {
   if (!item || !(item.preco > 0)) return null;
   par = par || {};
   var cambio = item.moeda === 'BRL' ? 1 : item.moeda === 'USD' ? par.usd : item.moeda === 'CNY' ? par.cny : null;
   if (!(cambio > 0)) return null;                 // sem câmbio, sem custo — não invento
-  var acr = par.acrescimo != null && isFinite(par.acrescimo) ? par.acrescimo : 0;
-  return item.preco * cambio * (1 + acr / 100);
+  var fator = null, fonte = null;
+  if (par.acrescimo != null && isFinite(par.acrescimo)) { fator = 1 + par.acrescimo / 100; fonte = 'acréscimo informado'; }
+  else if (base && base.fatorForn && base.fatorForn[fornChave(item.fornecedor)]) {
+    var ff = base.fatorForn[fornChave(item.fornecedor)];
+    fator = ff.f; fonte = 'fator do Bling para ' + item.fornecedor + ' (' + ff.n + ' produtos)';
+  } else if (base && base.fatorConta != null) { fator = base.fatorConta; fonte = 'fator médio do Bling (' + base.nFator + ' produtos)'; }
+  if (fator == null) return null;
+  return { custo: item.preco * cambio * fator, fator: fator, fonte: fonte };
 }
 
 
@@ -9713,19 +9806,36 @@ function fornCartao(radar) {
       ((a.avisos || []).length ? '<div class="ec-sub" style="font-size:11px">' + a.avisos.map(ecEsc).join(' · ') + '</div>' : '');
   }).join('');
 
-  var semAcrescimo = p.acrescimo == null;
+  var B = miBaseConta();
+  var pc = function (v) { return v == null ? 'N.D.' : (v * 100).toFixed(1).replace('.', ',') + '%'; };
+  var baseHtml = !B.ok
+    ? '<div style="font-size:12px;color:var(--orange);margin-top:10px">Sem a base da conta a margem não é calculada. ' +
+      'Abra <b>Estoque &amp; Compras</b> uma vez para carregar tarifa, frete, imposto e o fator de custo do Bling, e volte aqui.</div>'
+    : '<div style="margin-top:12px"><b>Como a margem é calculada</b> ' +
+      '<span class="ec-sub">— preço mediano do ML − tarifa − frete − imposto − custo, com números reais da sua conta</span>' +
+      '<div class="ec-table-wrap"><table class="t ec-table" style="font-size:12px"><thead><tr><th>Faixa de preço</th>' +
+      '<th class="r">Tarifa ML</th><th class="r">Frete/un</th><th class="r">Base</th></tr></thead><tbody>' +
+      B.faixas.map(function (f) {
+        return '<tr><td>' + (f.ate === Infinity ? 'acima de R$ ' + f.de : 'R$ ' + f.de + ' a ' + f.ate) + '</td>' +
+          '<td class="r mono">' + pc(f.tarifaPct) + '</td><td class="r mono">' + ecMoney2(f.frete) + '</td>' +
+          '<td class="r ec-sub">' + (f.nTar >= MI_MIN_AMOSTRA ? f.nTar + ' produtos' : 'média da conta') + '</td></tr>';
+      }).join('') + '</tbody></table></div>' +
+      '<div class="ec-sub" style="font-size:12px">Imposto: <b>' + (B.impPct == null ? 'N.D.' : String(B.impPct).replace('.', ',') + '%') +
+      '</b> (' + ecEsc(B.impFonte || 'sem fonte') + ') · Custo do fornecedor = preço de compra × <b>' +
+      (p.acrescimo != null ? (1 + p.acrescimo / 100).toFixed(2) + '</b> (acréscimo informado)'
+        : B.fatorConta != null ? B.fatorConta.toFixed(2).replace('.', ',') + '</b> (fator custo/compra do Bling, ' + B.nFator + ' produtos' +
+          (Object.keys(B.fatorForn).length ? '; por fornecedor quando houver amostra' : '') + ')'
+        : 'N.D.</b>') + '. Passe o mouse na margem para ver a conta de cada produto.</div></div>';
   var parametros = '<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:12px">' +
-    '<label class="ec-f" style="min-width:200px"><span>Acréscimo sobre o preço de compra (%)</span>' +
+    '<label class="ec-f" style="min-width:240px"><span>Substituir o fator do Bling por um acréscimo fixo (%)</span>' +
       '<input type="number" step="0.1" value="' + (p.acrescimo == null ? '' : p.acrescimo) +
-      '" placeholder="impostos + frete de entrada" onchange="fornSetParam(\'acrescimo\', this.value)"></label>' +
+      '" placeholder="em branco = usar o fator do Bling" onchange="fornSetParam(\'acrescimo\', this.value)"></label>' +
     (temMoedaExt ?
       '<label class="ec-f" style="min-width:120px"><span>Câmbio USD → R$</span><input type="number" step="0.01" value="' +
         (p.usd == null ? '' : p.usd) + '" onchange="fornSetParam(\'usd\', this.value)"></label>' +
       '<label class="ec-f" style="min-width:120px"><span>Câmbio CNY → R$</span><input type="number" step="0.01" value="' +
         (p.cny == null ? '' : p.cny) + '" onchange="fornSetParam(\'cny\', this.value)"></label>' : '') +
-    '</div>' +
-    (semAcrescimo ? '<div style="font-size:12px;color:var(--orange);margin-top:6px">Acréscimo em branco: a margem está ' +
-      'sendo calculada sobre o preço de compra puro, sem impostos nem frete — ela sai <b>maior</b> do que a real.</div>' : '');
+    '</div>' + baseHtml;
 
   return '<div class="card ec-sec"><div class="card-head"><span class="card-title">Catálogo de fornecedores × radar</span>' +
     '<span class="ec-sub">' + ecInt(FORN.itens.length) + ' itens no catálogo</span></div>' +
@@ -9768,10 +9878,26 @@ function fornCelula(o) {
 /* margem indicativa de uma correspondência "possível" — mostrada, nunca pontuada */
 function fornMargemIndicativa(o, ctx) {
   if (!o.forn || FORN_USAVEL[o.forn.confianca] || o.fonteCusto) return null;
-  var l = o.linha, c = fornCusto(o.forn.item, fornParams());
-  if (c == null || !(l.preco_mediano > 0)) return null;
-  var com = ctx && ctx.comissaoPct != null ? ctx.comissaoPct : 0.16;
-  return (l.preco_mediano * (1 - com) - c) / l.preco_mediano;
+  var base = ctx && ctx.base ? ctx.base : miBaseConta();
+  var c = fornCusto(o.forn.item, fornParams(), base);
+  if (!c) return null;
+  return miMargemCalc(o.linha.preco_mediano, c.custo, base, null);
+}
+
+/* "preço − tarifa − frete − imposto − custo" escrito por extenso, para o tooltip */
+function miMargemTexto(m) {
+  if (!m) return '';
+  var f = function (v) { return 'R$ ' + v.toFixed(2).replace('.', ','); };
+  return 'Preço ' + f(m.preco) + ' − tarifa ' + f(m.tarifa) + ' (' + (m.tarifaPct * 100).toFixed(1).replace('.', ',') + '%)' +
+    ' − frete ' + f(m.frete) + ' − imposto ' + f(m.imposto) + ' (' + String(m.impPct).replace('.', ',') + '%)' +
+    ' − custo ' + f(m.custo) + ' = ' + f(m.un) + '. Tarifa e frete: ' + m.fonte + '.';
+}
+function miMargemCelula(m, provisoria) {
+  if (!m) return null;
+  var cor = m.pct < 0 ? 'var(--red)' : m.pct < 0.1 ? 'var(--orange)' : m.pct >= 0.2 ? 'var(--green)' : 'var(--text1,inherit)';
+  return '<span title="' + ecEsc(miMargemTexto(m)) + '" style="cursor:help;color:' + (provisoria ? 'var(--text2)' : cor) + '">' +
+    (provisoria ? '≈ ' : '') + (m.pct * 100).toFixed(1).replace('.', ',') + '%</span>' +
+    '<div class="ec-sub" style="font-size:10px">' + ecMoney2(m.un) + '/un</div>';
 }
 
 /* ─── lista de compra em Excel ────────────────────────────────────────── */
@@ -9779,7 +9905,6 @@ async function fornExportarCompra() {
   try { await fornGarantirXlsx(); } catch (e) { showToast(e.message, 'err'); return; }
   var L = (MI.dados && MI.dados.linhas) || [];
   var ctx = miCtx(), par = fornParams();
-  var com = ctx.comissaoPct != null ? ctx.comissaoPct : 0.16;
   var radar = miRadar(L, ctx, miPesos()).filter(function (o) { return o.forn && o.fonteCusto !== 'bling'; });
   radar.sort(function (a, b) {
     var ua = FORN_USAVEL[a.forn.confianca] ? 1 : 0, ub = FORN_USAVEL[b.forn.confianca] ? 1 : 0;
@@ -9787,8 +9912,9 @@ async function fornExportarCompra() {
     return (b.score == null ? -1 : b.score) - (a.score == null ? -1 : a.score);
   });
   var linhas = radar.map(function (o) {
-    var l = o.linha, it = o.forn.item, c = fornCusto(it, par);
-    var mR = (c != null && l.preco_mediano > 0) ? l.preco_mediano * (1 - com) - c : null;
+    var l = o.linha, it = o.forn.item, c = fornCusto(it, par, ctx.base);
+    var m = c ? miMargemCalc(l.preco_mediano, c.custo, ctx.base, null) : null;
+    var r2 = function (v) { return v == null ? 'N.D.' : Math.round(v * 100) / 100; };
     var alt = o.forn.alternativas && o.forn.alternativas[0];
     return {
       'Score': o.score == null ? 'N.D.' : o.score,
@@ -9808,10 +9934,17 @@ async function fornExportarCompra() {
       'Preço de compra': it.preco,
       'Moeda': it.moeda,
       'Preço divergente no arquivo': it.precoDivergente ? it.precoDivergente.join(' / ') : '',
-      'Custo considerado (R$)': c == null ? 'N.D.' : Math.round(c * 100) / 100,
-      'Acréscimo usado (%)': par.acrescimo == null ? 'não informado' : par.acrescimo,
-      'Margem unitária (R$)': mR == null ? 'N.D.' : Math.round(mR * 100) / 100,
-      'Margem (%)': mR == null ? 'N.D.' : Math.round(mR / l.preco_mediano * 1000) / 10,
+      'Fator custo/compra': c ? Math.round(c.fator * 1000) / 1000 : 'N.D.',
+      'Origem do fator': c ? c.fonte : 'sem fator',
+      'Custo considerado (R$)': c ? r2(c.custo) : 'N.D.',
+      'Tarifa ML (R$)': m ? r2(m.tarifa) : 'N.D.',
+      'Tarifa ML (%)': m ? Math.round(m.tarifaPct * 1000) / 10 : 'N.D.',
+      'Frete (R$)': m ? r2(m.frete) : 'N.D.',
+      'Imposto (R$)': m ? r2(m.imposto) : 'N.D.',
+      'Imposto (%)': m ? m.impPct : 'N.D.',
+      'Margem de contribuição (R$)': m ? r2(m.un) : 'N.D.',
+      'Margem de contribuição (%)': m ? Math.round(m.pct * 1000) / 10 : 'N.D.',
+      'Origem tarifa/frete': m ? m.fonte : '',
       'Termos em comum': (o.forn.comuns || []).join(' '),
       'Alternativa 1': alt ? alt.item.codigo + ' — ' + alt.item.descricao : '',
       'ID produto ML': l.produto_id || '',
@@ -9856,6 +9989,9 @@ function miCtx() {
     if (r.sku && r.custo != null) custoPorSku[r.sku] = r.custo;
   });
   var parForn = (typeof fornParams === 'function') ? fornParams() : {};
+  var base = miBaseConta();
+  var rowPorSku = {};
+  ((typeof EC !== 'undefined' && EC.rows) || []).forEach(function (r) { if (r.sku) rowPorSku[r.sku] = r; });
   /* Custo: Bling primeiro (é o custo real de quem já vende). Sem ele, o do
      fornecedor — só com correspondência exata, alta, provável ou confirmada. */
   var custoInfo = function (l) {
@@ -9864,10 +10000,23 @@ function miCtx() {
     if (sku && custoPorSku[sku] != null) return { custo: custoPorSku[sku], fonte: 'bling' };
     var f = (typeof fornDe === 'function') ? fornDe(l) : null;
     if (f && FORN_USAVEL[f.confianca]) {
-      var c = fornCusto(f.item, parForn);
-      if (c != null) return { custo: c, fonte: 'fornecedor', match: f };
+      var c = fornCusto(f.item, parForn, base);
+      if (c != null) return { custo: c.custo, fator: c, fonte: 'fornecedor', match: f };
     }
     return null;
+  };
+  var margemDe = function (l) {
+    var ci = custoInfo(l);
+    if (!ci) return null;
+    var proprio = null;
+    if (ci.fonte === 'bling') {
+      var it = porCatalogo[l.produto_id], r = it && rowPorSku[it.seller_custom_field];
+      if (r && r.preco > 0) proprio = {
+        tarifaPct: r.tarifaUn > 0 ? r.tarifaUn / r.preco : null,
+        frete: r.freteFonte === 'pedidos' || r.freteFonte === 'anúncio' ? r.freteUn : null,
+        impPct: r.impFonte === 'Bling' ? r.impPct : null };
+    }
+    return miMargemCalc(l.preco_mediano, ci.custo, base, proprio);
   };
   return {
     marcasTitanium: marcas,
@@ -9875,6 +10024,8 @@ function miCtx() {
     comissaoPct: 0.16,
     vendeProduto: function (l) { return !!porCatalogo[l.produto_id]; },
     custoInfo: custoInfo,
+    margemDe: margemDe,
+    base: base,
     fornecedorDe: function (l) { return (typeof fornDe === 'function') ? fornDe(l) : null; },
     custoPorProduto: function (l) { var x = custoInfo(l); return x ? x.custo : null; },
     totais: { itens: itens.length, comCatalogo: Object.keys(porCatalogo).length,
@@ -10187,12 +10338,11 @@ function miTelaRadar() {
       '<td class="r mono">' + (l.preco_mediano != null ? ecMoney2(l.preco_mediano) : '—') + '</td>' +
       '<td class="r mono">' + ecInt(l.n_vendedores) + '</td>' +
       '<td style="min-width:220px">' + fornCelula(o) + '</td>' +
-      '<td class="r mono">' + (o.margemPct != null
-          ? Math.round(o.margemPct * 100) + '%<div class="ec-sub" style="font-size:10px">' +
-            (o.fonteCusto === 'fornecedor' ? 'custo fornecedor' : o.fonteCusto === 'bling' ? 'custo Bling' : '') + '</div>'
-          : mInd != null
-            ? '<span class="ec-sub" title="correspondência ainda não confirmada — não entra no score">≈ ' +
-              Math.round(mInd * 100) + '%</span><div class="ec-sub" style="font-size:10px">a confirmar</div>'
+      '<td class="r mono">' + (o.margemDetalhe
+          ? miMargemCelula(o.margemDetalhe) + '<div class="ec-sub" style="font-size:10px">' +
+            (o.fonteCusto === 'fornecedor' ? 'custo fornecedor' : 'custo Bling') + '</div>'
+          : mInd
+            ? miMargemCelula(mInd, true) + '<div class="ec-sub" style="font-size:10px">a confirmar</div>'
             : '<span class="ec-sub">N.D.</span>') + '</td>' +
       '</tr>';
   }).join('');
