@@ -919,6 +919,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
     <div class="tab" onclick="goTab(this,'posvenda');pvOpen()">↩️ Pós-Venda</div>
     <div class="tab" onclick="goTab(this,'xp');xpOpen()">🏆 Titanium XP</div>
     <div class="tab" onclick="goTab(this,'promo');prOpen()">🏷 Promoções &amp; Ofertas</div>
+    <div class="tab" onclick="goTab(this,'ads');adsOpen()">📣 Ads</div>
     <div class="tab" onclick="goTab(this,'competitors')">👁 Concorrentes</div>
     <div class="tab" onclick="goTab(this,'alerts')">🔔 Alertas <span class="tab-count red" id="alert-badge">0</span></div>
   </div>
@@ -1205,6 +1206,22 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
       </div>
       <div class="ec-progress" id="pr-progress"><span class="ec-prog-msg">Carregando…</span><div class="ec-prog-trk"><div class="ec-prog-fill"></div></div></div>
       <div id="pr-body"><div class="card"><div class="card-body" style="text-align:center;padding:40px;color:var(--text2)">Abra esta aba para carregar as promoções.</div></div></div>
+    </div>
+
+    <!-- ═══ GESTÃO DE ADS ═══ -->
+    <div class="page" id="page-ads">
+      <div class="page-header" style="flex-wrap:wrap;gap:12px">
+        <div>
+          <div class="page-title">Gestão de <span>Ads</span></div>
+          <div class="page-meta" id="ads-meta">Product Ads do Mercado Livre</div>
+        </div>
+        <div class="ec-head-actions">
+          <button class="btn-sm" onclick="adsExportar()">⬇ Excel</button>
+          <button class="btn-sm btn-primary" onclick="adsCarregar()">↻ Atualizar</button>
+        </div>
+      </div>
+      <div class="ec-progress" id="ads-progress"><span class="ec-prog-msg">Carregando…</span><div class="ec-prog-trk"><div class="ec-prog-fill"></div></div></div>
+      <div id="ads-body"><div class="card"><div class="card-body" style="text-align:center;padding:40px;color:var(--text2)">Abra esta aba para carregar as campanhas.</div></div></div>
     </div>
 
     <div class="page" id="page-competitors">
@@ -10428,6 +10445,448 @@ function miRender() {
   else if (MI.view === 'radar') corpo = miTelaRadar();
 
   el.innerHTML = nav + corpo;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   GESTÃO DE ADS — Product Ads do Mercado Livre
+
+   Faz no painel o que o roteiro de automação descreve: olha os últimos N
+   dias de cada anúncio patrocinado e aponta o que deve sair da campanha.
+
+   Regras de corte (padrão do roteiro, todas editáveis na tela):
+   - Regra 1: cliques ≥ MIN_CLIQUES e nenhuma venda na janela.
+   - Regra 2: ACOS > ACOS_MAX com pelo menos 1 venda.
+   Proteções (nunca pausar):
+   - anúncio que entrou na campanha há menos de N dias — medido pela
+     presença de impressões nos primeiros 3 dias da janela;
+   - menos de MIN_IMPRESSOES impressões (dado insuficiente);
+   - anúncio na lista de exceção.
+   Sem clique e sem venda: só registra, não pausa.
+
+   Segurança:
+   - Simulação ligada por padrão. Pausar exige desligar a simulação e
+     confirmar cada lote. Pausar, nunca excluir; todo pausado tem
+     "reativar" ao lado.
+   - Cada ação vai para um log com data, anúncio, regra, números e
+     resposta do Mercado Livre.
+   - ACOS é recalculado (custo ÷ receita) e comparado com o da API.
+
+   O que a documentação pública NÃO cobre (out/2026): a API de Product Ads
+   publicada para o Brasil é de leitura. A pausa usa o endpoint de escrita
+   que existia antes da migração; se o ML recusar, a tela mostra a resposta
+   e o anúncio fica marcado para pausa manual no Mercado Ads.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var ADS = { carregando: false, erro: null, msg: '', adv: null, campanhas: [], ads: [], inicio: {}, carregadoEm: null,
+            filtro: 'pausar', camp: '', sel: {}, diag: [] };
+var ADS_PADRAO = { janela: 20, minCliques: 1, acosMax: 20, minImpressoes: 100, simulacao: true };
+var ADS_METRICAS = 'clicks,prints,cost,acos,units_quantity,total_amount,direct_units_quantity,indirect_units_quantity';
+
+function adsParams() {
+  try { return Object.assign({}, ADS_PADRAO, JSON.parse(localStorage.getItem('ads_params') || '{}')); }
+  catch (e) { return Object.assign({}, ADS_PADRAO); }
+}
+function adsSetParam(k, v) {
+  var p = adsParams();
+  p[k] = k === 'simulacao' ? !!v : (v === '' ? ADS_PADRAO[k] : Number(v));
+  try { localStorage.setItem('ads_params', JSON.stringify(p)); } catch (e) {}
+  if (k === 'janela') { ADS.ads = []; adsCarregar(); return; }
+  adsRender();
+}
+function adsWhitelist() {
+  try { return JSON.parse(localStorage.getItem('ads_whitelist') || '[]'); } catch (e) { return []; }
+}
+function adsSetWhitelist(txt) {
+  var l = String(txt || '').toUpperCase().split(/[\s,;]+/).map(function (x) { return x.replace(/[^A-Z0-9]/g, ''); })
+    .filter(function (x) { return /^MLB\d+$/.test(x); });
+  l = l.filter(function (x, i) { return l.indexOf(x) === i; });
+  try { localStorage.setItem('ads_whitelist', JSON.stringify(l)); } catch (e) {}
+  adsRender();
+}
+function adsToggleWhitelist(id) {
+  var l = adsWhitelist(), i = l.indexOf(id);
+  if (i >= 0) l.splice(i, 1); else l.push(id);
+  try { localStorage.setItem('ads_whitelist', JSON.stringify(l)); } catch (e) {}
+  adsRender();
+}
+function adsLog() {
+  try { return JSON.parse(localStorage.getItem('ads_log') || '[]'); } catch (e) { return []; }
+}
+function adsLogAdd(reg) {
+  var l = adsLog(); l.unshift(reg);
+  try { localStorage.setItem('ads_log', JSON.stringify(l.slice(0, 1000))); } catch (e) {}
+}
+
+/* ─── chamadas à API (pelo Worker da conta) ───────────────────────────── */
+async function adsReq(path, opt) {
+  opt = opt || {};
+  var h = { 'Authorization': 'Bearer ' + state.token, 'Content-Type': 'application/json' };
+  h['Api-Version'] = String(opt.ver || 2);
+  var r = await mlFetch(path, { method: opt.method || 'GET', headers: h, body: opt.body ? JSON.stringify(opt.body) : undefined });
+  if (r.status === 401 && !opt.retried && state.refreshToken && await doRefreshToken()) {
+    return adsReq(path, Object.assign({}, opt, { retried: true }));
+  }
+  var txt = await r.text(), j = null;
+  try { j = JSON.parse(txt); } catch (e) {}
+  return { ok: r.ok, status: r.status, json: j, texto: txt.slice(0, 300) };
+}
+function adsErroTexto(r) {
+  var j = r.json || {};
+  return 'HTTP ' + r.status + (j.message || j.error ? ' — ' + (j.message || j.error) : (r.texto ? ' — ' + r.texto : ''));
+}
+function adsDatas(dias) {
+  /* janela fechada em ontem: o dia de hoje ainda não tem métricas completas */
+  return { de: ecDay(dias), ate: ecDay(1) };
+}
+async function adsPaginar(base, rotulo) {
+  var out = [], off = 0, total = null, lim = 50;
+  for (var guard = 0; guard < 200; guard++) {
+    var r = await adsReq(base + (base.indexOf('?') >= 0 ? '&' : '?') + 'limit=' + lim + '&offset=' + off);
+    if (!r.ok) { ADS.diag.push(rotulo + ': ' + adsErroTexto(r)); return null; }
+    var res = (r.json && (r.json.results || r.json.ads || r.json.campaigns)) || [];
+    out = out.concat(res);
+    total = r.json && r.json.paging ? r.json.paging.total : null;
+    off += lim;
+    ADS.msg = rotulo + ': ' + out.length + (total != null ? ' de ' + total : '');
+    adsProg();
+    if (!res.length || (total != null && off >= total)) break;
+  }
+  return out;
+}
+
+/* ─── carga ───────────────────────────────────────────────────────────── */
+async function adsOpen() { if (!ADS.carregadoEm && !ADS.carregando) adsCarregar(); else adsRender(); }
+
+async function adsCarregar() {
+  if (state.isDemo) { ADS.erro = 'Modo demonstração: conecte a conta para ler as campanhas.'; adsRender(); return; }
+  ADS.carregando = true; ADS.erro = null; ADS.diag = []; ADS.msg = 'Buscando anunciante…'; adsRender();
+  try {
+    var p = adsParams(), d = adsDatas(p.janela);
+    if (!ADS.adv) {
+      var a = await adsReq('/advertising/advertisers?product_id=PADS', { ver: 1 });
+      if (!a.ok) {
+        throw new Error(a.status === 404
+          ? 'A conta não tem Product Ads habilitado para a API (404). No ML: Meu perfil → Publicidade.'
+          : 'Não consegui ler o anunciante: ' + adsErroTexto(a) +
+            (a.status === 403 ? '. O app do ML precisa da permissão de Publicidade.' : ''));
+      }
+      var lista = (a.json && a.json.advertisers) || [];
+      ADS.adv = lista.filter(function (x) { return x.site_id === 'MLB'; })[0] || lista[0] || null;
+      if (!ADS.adv) throw new Error('Nenhum anunciante de Product Ads nesta conta.');
+    }
+    var site = ADS.adv.site_id || 'MLB', adv = ADS.adv.advertiser_id;
+    var q = '&date_from=' + d.de + '&date_to=' + d.ate + '&metrics=' + ADS_METRICAS;
+
+    ADS.msg = 'Lendo campanhas…'; adsProg();
+    var camps = await adsPaginar('/advertising/' + site + '/advertisers/' + adv + '/product_ads/campaigns/search?' + q.slice(1), 'Campanhas');
+    ADS.campanhas = camps || [];
+
+    ADS.msg = 'Lendo anúncios e métricas…'; adsProg();
+    var ads = await adsPaginar('/advertising/' + site + '/advertisers/' + adv + '/product_ads/ads/search?' + q.slice(1), 'Anúncios');
+    if (ads == null) throw new Error('Não consegui ler os anúncios. ' + (ADS.diag[ADS.diag.length - 1] || ''));
+    ADS.ads = ads;
+
+    /* proteção "menos de N dias na campanha": quem teve impressão nos 3
+       primeiros dias da janela já estava na campanha no início dela */
+    ADS.msg = 'Conferindo anúncios novos na campanha…'; adsProg();
+    var d0 = d.de, d2 = ecDay(Math.max(p.janela - 2, 1));
+    var ini = await adsPaginar('/advertising/' + site + '/advertisers/' + adv + '/product_ads/ads/search?date_from=' + d0 +
+      '&date_to=' + d2 + '&metrics=prints', 'Início da janela');
+    ADS.inicio = {};
+    (ini || []).forEach(function (x) { var m = adsM(x); if ((m.prints || 0) > 0) ADS.inicio[adsId(x)] = true; });
+    ADS.inicioOk = ini != null;
+    ADS.janelaUsada = d;
+    ADS.carregadoEm = new Date().toISOString();
+  } catch (e) { ADS.erro = e.message; }
+  ADS.carregando = false; ADS.msg = '';
+  adsRender();
+}
+
+function adsProg() {
+  var el = document.getElementById('ads-progress');
+  if (!el) return;
+  el.style.display = ADS.carregando ? 'flex' : 'none';
+  var m = el.querySelector('.ec-prog-msg'); if (m) m.textContent = ADS.msg || 'Carregando…';
+  var f = el.querySelector('.ec-prog-fill'); if (f) f.classList.add('ec-indet');
+}
+
+/* ─── leitura defensiva dos campos ────────────────────────────────────── */
+function adsId(x) { return x.item_id || x.id || (x.item && x.item.id) || ''; }
+function adsM(x) { return x.metrics || x.metrics_summary || x; }
+
+/* ─── regras ──────────────────────────────────────────────────────────── */
+function adsAvaliar(x, p, wl, margemPorItem) {
+  var m = adsM(x), id = adsId(x);
+  var cliques = +m.clicks || 0, imp = +m.prints || 0, custo = +m.cost || 0;
+  var vendas = m.units_quantity != null ? +m.units_quantity : ((+m.direct_units_quantity || 0) + (+m.indirect_units_quantity || 0));
+  var receita = +m.total_amount || 0;
+  var acosCalc = receita > 0 ? custo / receita * 100 : null;
+  var acosApi = m.acos != null && isFinite(m.acos) ? +m.acos : null;
+  var r = {
+    id: id, titulo: x.title || (x.item && x.item.title) || '', campanha: x.campaign_id || '', status: x.status || '',
+    cliques: cliques, imp: imp, custo: custo, vendas: vendas, receita: receita, acos: acosCalc, acosApi: acosApi,
+    acosDiverge: acosCalc != null && acosApi != null && Math.abs(acosCalc - acosApi) > 1,
+    regra: null, protecao: null, decisao: 'manter', motivo: '',
+    margem: margemPorItem[id] != null ? margemPorItem[id] : null,
+    thumb: x.thumbnail || '', link: x.permalink || '',
+  };
+  var pausado = /paus/i.test(r.status);
+  if (cliques >= p.minCliques && vendas === 0) r.regra = 'Regra 1';
+  else if (vendas >= 1 && acosCalc != null && acosCalc > p.acosMax) r.regra = 'Regra 2';
+
+  if (wl.indexOf(id) >= 0) r.protecao = 'lista de exceção';
+  else if (imp < p.minImpressoes) r.protecao = 'menos de ' + p.minImpressoes + ' impressões';
+  else if (ADS.inicioOk && !ADS.inicio[id]) r.protecao = 'na campanha há menos de ' + p.janela + ' dias';
+
+  if (pausado) { r.decisao = 'pausado'; r.motivo = 'já está pausado'; }
+  else if (cliques === 0 && vendas === 0) { r.decisao = 'registrar'; r.motivo = 'sem clique e sem venda — só registro'; }
+  else if (r.regra && r.protecao) { r.decisao = 'protegido'; r.motivo = r.regra + ', mas protegido: ' + r.protecao; }
+  else if (r.regra) {
+    r.decisao = 'pausar';
+    r.motivo = r.regra === 'Regra 1'
+      ? cliques + ' cliques e nenhuma venda em ' + p.janela + ' dias'
+      : 'ACOS ' + acosCalc.toFixed(1).replace('.', ',') + '% acima do limite de ' + p.acosMax + '%';
+  } else { r.motivo = vendas ? 'dentro do limite de ACOS' : 'abaixo do mínimo de cliques'; }
+  return r;
+}
+
+function adsAnalise() {
+  var p = adsParams(), wl = adsWhitelist();
+  /* margem de contribuição antes do Ads, por anúncio (Estoque & Compras):
+     ACOS acima dela significa que a venda patrocinada dá prejuízo */
+  var margemPorItem = {};
+  ((typeof EC !== 'undefined' && EC.rows) || []).forEach(function (r) {
+    if (r.margemPct != null) (r.mlIds || []).forEach(function (id) { margemPorItem[id] = r.margemPct * 100; });
+  });
+  return ADS.ads.map(function (x) { return adsAvaliar(x, p, wl, margemPorItem); })
+    .filter(function (r) { return !ADS.camp || String(r.campanha) === ADS.camp; });
+}
+
+/* ─── pausar / reativar ───────────────────────────────────────────────── */
+async function adsMudarStatus(id, status) {
+  var r = await adsReq('/advertising/product_ads/items/' + id, { method: 'PUT', ver: 1, body: { status: status } });
+  return r;
+}
+async function adsExecutar(ids, status) {
+  var p = adsParams();
+  var linhas = adsAnalise().filter(function (r) { return ids.indexOf(r.id) >= 0; });
+  if (!linhas.length) return;
+  if (status === 'paused' && p.simulacao) {
+    linhas.forEach(function (r) {
+      adsLogAdd({ em: new Date().toISOString(), id: r.id, titulo: r.titulo, campanha: r.campanha, regra: r.regra,
+        cliques: r.cliques, imp: r.imp, custo: r.custo, vendas: r.vendas, acos: r.acos, acao: 'simulação: seria pausado', resultado: '—' });
+    });
+    showToast(linhas.length + ' anúncio(s) registrados como "seria pausado". Nada mudou na conta (simulação ligada).', 'warn');
+    adsRender(); return;
+  }
+  var verbo = status === 'paused' ? 'PAUSAR' : 'REATIVAR';
+  if (!confirm(verbo + ' ' + linhas.length + ' anúncio(s) no Product Ads?\n\n' +
+      linhas.slice(0, 8).map(function (r) { return r.id + ' — ' + r.titulo.slice(0, 50); }).join('\n') +
+      (linhas.length > 8 ? '\n… e mais ' + (linhas.length - 8) : '') + '\n\nIsto altera a campanha de verdade.')) return;
+  var ok = 0, falha = 0;
+  for (var i = 0; i < linhas.length; i++) {
+    var r = linhas[i];
+    ADS.msg = (status === 'paused' ? 'Pausando ' : 'Reativando ') + (i + 1) + ' de ' + linhas.length; ADS.carregando = true; adsProg();
+    var resp;
+    try { resp = await adsMudarStatus(r.id, status); } catch (e) { resp = { ok: false, status: 0, texto: e.message }; }
+    if (resp.ok) { ok++; ADS.ads.forEach(function (x) { if (adsId(x) === r.id) x.status = status; }); }
+    else falha++;
+    adsLogAdd({ em: new Date().toISOString(), id: r.id, titulo: r.titulo, campanha: r.campanha, regra: r.regra,
+      cliques: r.cliques, imp: r.imp, custo: r.custo, vendas: r.vendas, acos: r.acos,
+      acao: status === 'paused' ? 'pausar' : 'reativar', resultado: resp.ok ? 'ok' : adsErroTexto(resp) });
+    await new Promise(function (res) { setTimeout(res, 350); });
+  }
+  ADS.carregando = false; ADS.sel = {};
+  showToast(ok + ' ok · ' + falha + ' com erro' + (falha ? ' — veja o log; os com erro precisam ser pausados no Mercado Ads' : ''), falha ? 'err' : 'ok');
+  adsRender();
+}
+function adsSelecionados() { return Object.keys(ADS.sel).filter(function (k) { return ADS.sel[k]; }); }
+function adsMarcar(id, v) { ADS.sel[id] = v; adsRenderResumoSel(); }
+function adsMarcarTodos(v) {
+  adsAnalise().filter(function (r) { return r.decisao === 'pausar'; }).forEach(function (r) { ADS.sel[r.id] = v; });
+  adsRender();
+}
+function adsRenderResumoSel() {
+  var el = document.getElementById('ads-nsel'); if (el) el.textContent = adsSelecionados().length;
+}
+
+/* ─── exportar ────────────────────────────────────────────────────────── */
+async function adsExportar() {
+  try { await fornGarantirXlsx(); } catch (e) { showToast(e.message, 'err'); return; }
+  var p = adsParams(), d = ADS.janelaUsada || adsDatas(p.janela);
+  var linhas = adsAnalise().map(function (r) {
+    return { 'Data análise': (ADS.carregadoEm || '').slice(0, 10), 'Janela': d.de + ' a ' + d.ate, 'MLB': r.id, 'Título': r.titulo,
+      'Campanha': r.campanha, 'Status': r.status, 'Cliques': r.cliques, 'Impressões': r.imp, 'Custo Ads (R$)': r.custo,
+      'Vendas (un)': r.vendas, 'Receita Ads (R$)': r.receita, 'ACOS calculado (%)': r.acos == null ? '' : +r.acos.toFixed(2),
+      'ACOS da API (%)': r.acosApi == null ? '' : r.acosApi, 'Margem antes do Ads (%)': r.margem == null ? '' : +r.margem.toFixed(1),
+      'Regra': r.regra || '', 'Proteção': r.protecao || '', 'Decisão': r.decisao, 'Motivo': r.motivo };
+  });
+  var log = adsLog().map(function (x) {
+    return { 'Data/hora': x.em, 'MLB': x.id, 'Título': x.titulo, 'Campanha': x.campanha, 'Regra': x.regra || '', 'Cliques': x.cliques,
+      'Impressões': x.imp, 'Custo': x.custo, 'Vendas': x.vendas, 'ACOS': x.acos == null ? '' : +(+x.acos).toFixed(2), 'Ação': x.acao, 'Resultado': x.resultado };
+  });
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas.length ? linhas : [{ vazio: '' }]), 'Análise');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(log.length ? log : [{ vazio: '' }]), 'Log de ações');
+  XLSX.writeFile(wb, 'ads_analise_' + ecDay() + '.xlsx');
+}
+
+/* ─── tela ────────────────────────────────────────────────────────────── */
+var ADS_DEC = {
+  pausar: ['Pausar', 'var(--red)'], protegido: ['Protegido', 'var(--orange)'], registrar: ['Só registro', 'var(--text2)'],
+  manter: ['Manter', 'var(--green)'], pausado: ['Pausado', 'var(--text2)'],
+};
+function adsMoney(v) { return ecMoney2(v); }
+function adsPct(v) { return v == null ? '—' : v.toFixed(1).replace('.', ',') + '%'; }
+
+function adsRender() {
+  var el = document.getElementById('ads-body');
+  if (!el) return;
+  adsProg();
+  var p = adsParams(), wl = adsWhitelist();
+  var meta = document.getElementById('ads-meta');
+  if (meta) meta.textContent = ADS.adv
+    ? 'Anunciante ' + (ADS.adv.advertiser_name || ADS.adv.advertiser_id) + ' · janela ' +
+      (ADS.janelaUsada ? ADS.janelaUsada.de.split('-').reverse().join('/') + ' a ' + ADS.janelaUsada.ate.split('-').reverse().join('/') : p.janela + ' dias') +
+      (ADS.carregadoEm ? ' · lido às ' + ADS.carregadoEm.slice(11, 16) + ' UTC' : '')
+    : 'Product Ads do Mercado Livre';
+
+  if (ADS.erro) {
+    el.innerHTML = '<div class="card ec-sec" style="border-left:3px solid var(--red)"><div class="card-body" style="font-size:13px;line-height:1.7">' +
+      '<b>Não consegui ler o Product Ads.</b><br>' + ecEsc(ADS.erro) +
+      (ADS.diag.length ? '<div class="ec-sub" style="margin-top:8px">' + ADS.diag.map(ecEsc).join('<br>') + '</div>' : '') +
+      '<div style="margin-top:10px"><button class="btn-sm btn-primary" onclick="adsCarregar()">Tentar de novo</button></div></div></div>';
+    return;
+  }
+  if (!ADS.carregadoEm) {
+    el.innerHTML = '<div class="card"><div class="card-body" style="text-align:center;padding:40px;color:var(--text2)">' +
+      (ADS.carregando ? 'Lendo campanhas…' : 'Abra esta aba para carregar as campanhas.') + '</div></div>';
+    return;
+  }
+
+  var A = adsAnalise();
+  var cont = { pausar: 0, protegido: 0, registrar: 0, manter: 0, pausado: 0 }, r1 = 0, r2 = 0, eco = 0, custoTot = 0, recTot = 0, diverg = 0;
+  A.forEach(function (r) {
+    cont[r.decisao]++; custoTot += r.custo; recTot += r.receita;
+    if (r.acosDiverge) diverg++;
+    if (r.decisao === 'pausar') { eco += r.custo; if (r.regra === 'Regra 1') r1++; else r2++; }
+  });
+  var card = function (t, v, s, cor) {
+    return '<div class="kpi"><div class="kpi-label">' + t + '</div><div class="kpi-value"' + (cor ? ' style="color:' + cor + '"' : '') + '>' + v + '</div>' +
+      (s ? '<div class="kpi-delta">' + s + '</div>' : '') + '</div>';
+  };
+  var kpis = '<div class="kpi-row">' +
+    card('Anúncios analisados', ecInt(A.length), ADS.campanhas.length + ' campanha(s)') +
+    card('Para pausar', ecInt(cont.pausar), r1 + ' pela Regra 1 · ' + r2 + ' pela Regra 2', cont.pausar ? 'var(--red)' : '') +
+    card('Custo que deixa de gastar', adsMoney(eco), 'gasto desses anúncios em ' + p.janela + ' dias') +
+    card('Protegidos', ecInt(cont.protegido), 'cairiam numa regra, mas estão protegidos') +
+    card('ACOS da conta', adsPct(recTot > 0 ? custoTot / recTot * 100 : null), adsMoney(custoTot) + ' em Ads · ' + adsMoney(recTot) + ' vendidos') +
+    '</div>';
+
+  var simul = p.simulacao;
+  var params = '<div class="card ec-sec"><div class="card-head"><span class="card-title">Regras de corte</span>' +
+    '<span class="ec-sub">editáveis · ficam salvas neste navegador</span></div><div class="card-body">' +
+    '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end">' +
+    [['janela', 'Janela (dias)'], ['minCliques', 'Regra 1: cliques mínimos'], ['acosMax', 'Regra 2: ACOS máximo (%)'], ['minImpressoes', 'Impressões mínimas']]
+      .map(function (c) {
+        return '<label class="ec-f" style="min-width:150px"><span>' + c[1] + '</span><input type="number" min="0" value="' + p[c[0]] +
+          '" onchange="adsSetParam(\'' + c[0] + '\', this.value)"></label>';
+      }).join('') +
+    '<label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:8px 12px;border-radius:8px;border:1px solid ' +
+      (simul ? 'var(--green)' : 'var(--red)') + '"><input type="checkbox" ' + (simul ? 'checked' : '') +
+      ' onchange="adsSetParam(\'simulacao\', this.checked)"> <b>' + (simul ? 'Simulação ligada' : 'Simulação DESLIGADA — pausa de verdade') + '</b></label>' +
+    '</div><div class="ec-sub" style="font-size:12px;margin-top:8px;line-height:1.6">' +
+    '<b>Regra 1</b>: ' + p.minCliques + '+ cliques e nenhuma venda em ' + p.janela + ' dias. ' +
+    '<b>Regra 2</b>: ACOS acima de ' + p.acosMax + '% com pelo menos 1 venda. ' +
+    '<b>Nunca pausa</b>: anúncio há menos de ' + p.janela + ' dias na campanha, com menos de ' + p.minImpressoes +
+    ' impressões ou na lista de exceção. Sem clique e sem venda: só registra.' +
+    (!ADS.inicioOk ? '<br><span style="color:var(--orange)">Não consegui medir quem entrou na campanha há pouco: a proteção de ' +
+      p.janela + ' dias está desligada nesta leitura.</span>' : '') +
+    (diverg ? '<br><span style="color:var(--orange)">' + diverg + ' anúncio(s) com ACOS calculado diferente do ACOS da API em mais de 1 ponto — ' +
+      'confira a janela de datas no painel do ML.</span>' : '') + '</div></div></div>';
+
+  var camps = '<select class="ec-sel" onchange="ADS.camp=this.value;adsRender()"><option value="">Todas as campanhas</option>' +
+    ADS.campanhas.map(function (c) {
+      return '<option value="' + ecEsc(c.id) + '"' + (ADS.camp === String(c.id) ? ' selected' : '') + '>' + ecEsc(c.name || c.id) +
+        (c.status ? ' (' + ecEsc(c.status) + ')' : '') + '</option>';
+    }).join('') + '</select>';
+  var filtros = [['pausar', 'Para pausar (' + cont.pausar + ')'], ['protegido', 'Protegidos (' + cont.protegido + ')'],
+    ['registrar', 'Sem clique e sem venda (' + cont.registrar + ')'], ['manter', 'Dentro das regras (' + cont.manter + ')'],
+    ['pausado', 'Já pausados (' + cont.pausado + ')'], ['', 'Todos']];
+  var chips = '<div class="ec-chips">' + filtros.map(function (f) {
+    return '<button class="ec-chip ' + (ADS.filtro === f[0] ? 'active' : '') + '" onclick="ADS.filtro=\'' + f[0] + '\';adsRender()">' + f[1] + '</button>';
+  }).join('') + '</div>';
+
+  var vis = A.filter(function (r) { return !ADS.filtro || r.decisao === ADS.filtro; })
+    .sort(function (a, b) { return b.custo - a.custo; });
+  var podePausar = ADS.filtro === 'pausar' && vis.length;
+  var acoes = podePausar
+    ? '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 18px 10px">' +
+      '<button class="btn-sm" onclick="adsMarcarTodos(true)">Marcar todos</button><button class="btn-sm" onclick="adsMarcarTodos(false)">Desmarcar</button>' +
+      '<button class="btn-sm" style="background:' + (simul ? 'var(--surface2,#333)' : 'var(--red)') + ';color:#fff;border:none" ' +
+      'onclick="adsExecutar(adsSelecionados(),\'paused\')">' + (simul ? 'Simular pausa' : 'Pausar') + ' dos marcados (<span id="ads-nsel">' +
+      adsSelecionados().length + '</span>)</button>' +
+      '<span class="ec-sub" style="font-size:12px">' + (simul ? 'Simulação: só registra no log, não muda nada na conta.' :
+        'Pede confirmação antes. Pausa, não exclui; dá para reativar.') + '</span></div>'
+    : '';
+
+  var linhas = vis.slice(0, 400).map(function (r) {
+    var dc = ADS_DEC[r.decisao] || ['', ''];
+    var naWl = wl.indexOf(r.id) >= 0;
+    var acosAcimaMargem = r.acos != null && r.margem != null && r.acos > r.margem;
+    return '<tr>' +
+      '<td>' + (r.decisao === 'pausar' ? '<input type="checkbox" ' + (ADS.sel[r.id] ? 'checked' : '') +
+        ' onchange="adsMarcar(\'' + r.id + '\', this.checked)">' : '') + '</td>' +
+      '<td><div style="max-width:340px"><b>' + ecEsc(r.titulo || r.id) + '</b></div><div class="ec-sub mono" style="font-size:11px">' + ecEsc(r.id) +
+        (r.campanha ? ' · campanha ' + ecEsc(r.campanha) : '') + '</div></td>' +
+      '<td class="r mono">' + ecInt(r.imp) + '</td><td class="r mono">' + ecInt(r.cliques) + '</td>' +
+      '<td class="r mono">' + adsMoney(r.custo) + '</td><td class="r mono">' + ecInt(r.vendas) + '</td>' +
+      '<td class="r mono">' + adsMoney(r.receita) + '</td>' +
+      '<td class="r mono"' + (r.acosDiverge ? ' title="ACOS da API: ' + adsPct(r.acosApi) + '"' : '') + '>' +
+        '<span style="color:' + (r.acos != null && r.acos > p.acosMax ? 'var(--red)' : 'inherit') + '">' + adsPct(r.acos) + '</span>' +
+        (r.acosDiverge ? '<div class="ec-sub" style="font-size:10px">API ' + adsPct(r.acosApi) + '</div>' : '') + '</td>' +
+      '<td class="r mono" title="Margem de contribuição antes do Ads (Estoque & Compras). ACOS acima dela = venda patrocinada no prejuízo.">' +
+        (r.margem == null ? '<span class="ec-sub">—</span>' : '<span style="color:' + (acosAcimaMargem ? 'var(--red)' : 'inherit') + '">' + adsPct(r.margem) + '</span>' +
+        (acosAcimaMargem ? '<div style="font-size:10px;color:var(--red)">ACOS acima</div>' : '')) + '</td>' +
+      '<td><span class="ec-tag" style="color:' + dc[1] + '">' + dc[0] + '</span><div class="ec-sub" style="font-size:11px">' + ecEsc(r.motivo) + '</div></td>' +
+      '<td style="white-space:nowrap">' +
+        '<button class="btn-sm" title="' + (naWl ? 'Tirar da lista de exceção' : 'Nunca pausar este anúncio') + '" onclick="adsToggleWhitelist(\'' + r.id + '\')">' +
+          (naWl ? '★ exceção' : '☆') + '</button> ' +
+        (r.decisao === 'pausado' ? '<button class="btn-sm" onclick="adsExecutar([\'' + r.id + '\'],\'active\')">reativar</button>' : '') +
+      '</td></tr>';
+  }).join('');
+
+  var tabela = '<div class="card ec-sec"><div class="card-head"><span class="card-title">Anúncios patrocinados</span>' +
+    '<span style="display:flex;gap:8px">' + camps + '</span></div>' +
+    '<div style="padding:0 18px 10px">' + chips + '</div>' + acoes +
+    '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr><th></th><th>Anúncio</th><th class="r">Impressões</th>' +
+    '<th class="r">Cliques</th><th class="r">Custo</th><th class="r">Vendas</th><th class="r">Receita</th><th class="r">ACOS</th>' +
+    '<th class="r">Margem antes do Ads</th><th>Decisão</th><th></th></tr></thead><tbody>' +
+    (linhas || '<tr><td colspan="11" class="ec-sub" style="padding:16px">Nada neste filtro.</td></tr>') +
+    '</tbody></table></div></div>';
+
+  var log = adsLog();
+  var logHtml = '<div class="card ec-sec"><div class="card-head"><span class="card-title">Log de ações</span>' +
+    '<span class="ec-sub">' + log.length + ' registro(s) neste navegador</span></div>' +
+    (log.length ? '<div class="ec-table-wrap"><table class="t ec-table" style="font-size:12px"><thead><tr><th>Quando</th><th>Anúncio</th>' +
+      '<th>Regra</th><th class="r">Cliques</th><th class="r">Custo</th><th class="r">Vendas</th><th class="r">ACOS</th><th>Ação</th><th>Resultado</th></tr></thead><tbody>' +
+      log.slice(0, 50).map(function (x) {
+        return '<tr><td class="mono">' + ecEsc(String(x.em).slice(0, 16).replace('T', ' ')) + '</td><td>' + ecEsc(x.id) +
+          '<div class="ec-sub" style="font-size:11px">' + ecEsc(String(x.titulo || '').slice(0, 60)) + '</div></td><td>' + ecEsc(x.regra || '—') +
+          '</td><td class="r mono">' + ecInt(x.cliques) + '</td><td class="r mono">' + adsMoney(x.custo) + '</td><td class="r mono">' + ecInt(x.vendas) +
+          '</td><td class="r mono">' + adsPct(x.acos == null ? null : +x.acos) + '</td><td>' + ecEsc(x.acao) + '</td><td style="color:' +
+          (x.resultado === 'ok' ? 'var(--green)' : x.resultado === '—' ? 'var(--text2)' : 'var(--red)') + '">' + ecEsc(x.resultado) + '</td></tr>';
+      }).join('') + '</tbody></table></div>'
+      : '<div class="card-body ec-sub">Nenhuma ação ainda. Comece em simulação: marque os anúncios e use "Simular pausa".</div>') + '</div>';
+
+  var wlHtml = '<div class="card ec-sec"><div class="card-head"><span class="card-title">Lista de exceção</span>' +
+    '<span class="ec-sub">anúncios que nunca são pausados: lançamentos, sazonais, carro-chefe</span></div><div class="card-body">' +
+    '<textarea style="width:100%;min-height:60px;font-family:monospace;font-size:12px" placeholder="Um MLB por linha" ' +
+    'onchange="adsSetWhitelist(this.value)">' + ecEsc(wl.join('\n')) + '</textarea>' +
+    '<div class="ec-sub" style="font-size:12px">' + wl.length + ' anúncio(s). Também dá para marcar pela estrela ☆ na tabela.</div></div></div>';
+
+  el.innerHTML = kpis + params + tabela + logHtml + wlHtml;
 }
 
 if (typeof module !== 'undefined') module.exports = {
