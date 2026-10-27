@@ -905,6 +905,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
       <div class="sync-info">Sync: <span id="last-sync">--:--:--</span></div>
       <div class="token-status token-ok" id="token-topbar-chip" onclick="manualRefresh()" style="cursor:pointer" title="Clique para renovar token">🔑 <span id="token-countdown">6h00</span></div>
       <button class="btn-refresh" onclick="refreshAll()">↻ Atualizar</button>
+      <button class="btn-logout" id="btn-equipe" onclick="equipeChaves()" title="Valores para configurar a versão de equipe na Cloudflare">👥 Equipe</button>
       <button class="btn-logout" onclick="logout()">Sair</button>
     </div>
   </div>
@@ -1335,7 +1336,7 @@ const LS_KEY = 'ml_intel_creds_v2';
 // PERSIST / RESTORE CREDENTIALS
 // ════════════════════════════════════════════
 function saveCreds(){
-  if(state.isDemo) return;
+  if(state.isDemo || window.EQUIPE_MODO) return;
   try {
     localStorage.setItem(LS_KEY, JSON.stringify({
       token: state.token,
@@ -1431,9 +1432,10 @@ function logout(){
    Com o painel e o Worker renovando, um derruba o outro. Desde 12/10/2026 o
    dono do refresh é o Worker mercado-intel; o painel só pede o access token.
    Isso também tira appSecret e refresh do localStorage no uso normal.      */
-const MI_URL = 'https://mercado-intel.rafael-custodio.workers.dev';
+const MI_URL = (typeof window !== 'undefined' && window.EQUIPE_MODO) ? location.origin + '/m' : 'https://mercado-intel.rafael-custodio.workers.dev';
 
 function miChave() {
+  if (typeof window !== 'undefined' && window.EQUIPE_MODO) return 'equipe';
   try {
     const m = JSON.parse(localStorage.getItem('mi_cfg') || '{}');
     if (m.key) return m.key;
@@ -1460,6 +1462,8 @@ async function miPedirToken() {
 
 async function doRefreshToken(){
   if(state.isDemo) return false;
+  /* versão de equipe: o token nunca chega ao navegador; quem renova é o servidor */
+  if (window.EQUIPE_MODO) { state.tokenExpiresAt = Date.now() + 6 * 3600e3; updateTokenUI(); scheduleAutoRefresh(); return true; }
 
   /* 1. Caminho novo: o Worker é o dono do refresh. */
   const viaWorker = await miPedirToken();
@@ -1660,7 +1664,10 @@ function goTab(el, page){
 // ════════════════════════════════════════════
 const BASE = 'https://api.mercadolibre.com';
 
-const WORKER = 'https://square-hill-d05c.rafael-custodio.workers.dev';
+/* Versão de equipe: servida pelo Worker painel-equipe, atrás do Cloudflare
+   Access. Lá as chaves ficam no servidor e tudo passa pelo mesmo endereço. */
+const EQUIPE = typeof window !== 'undefined' && !!window.EQUIPE_MODO;
+const WORKER = EQUIPE ? location.origin + '/ml' : 'https://square-hill-d05c.rafael-custodio.workers.dev';
 
 // Único caminho de saída: o Worker da própria conta.
 // Os proxies públicos (corsproxy.io, allorigins.win, cors-anywhere) foram
@@ -2248,7 +2255,10 @@ async function loadStockDataML(){
 // O ML entra só com anúncios, vendas 30d e estoque Full.
 // ════════════════════════════════════════════
 const BLING_CFG_KEY = 'bling_cfg_v1';
-function blingCfg(){ try { return JSON.parse(localStorage.getItem(BLING_CFG_KEY) || '{}'); } catch(e){ return {}; } }
+function blingCfg(){
+  if (window.EQUIPE_MODO) return { url: location.origin + '/b', key: 'equipe', source: 'bling', addFull: true };
+  try { return JSON.parse(localStorage.getItem(BLING_CFG_KEY) || '{}'); } catch(e){ return {}; }
+}
 function saveBlingCfg(c){ try { localStorage.setItem(BLING_CFG_KEY, JSON.stringify(c)); } catch(e){} }
 function stockSource(){ return blingCfg().source || 'ml'; }
 
@@ -6669,7 +6679,66 @@ setInterval(()=>{
 // ════════════════════════════════════════════
 // INIT — restore session from localStorage
 // ════════════════════════════════════════════
+/* ─── administrador: valores para cadastrar como secrets do painel-equipe ─
+   Mostra só na tela do próprio administrador, com as chaves que já estão
+   neste navegador. Nada é enviado para lugar nenhum. */
+function equipeChaves(){
+  if (window.EQUIPE_MODO) return;
+  let mi = '', bl = {}, pv = {};
+  try { mi = miChave(); } catch (e) {}
+  try { bl = JSON.parse(localStorage.getItem(BLING_CFG_KEY) || '{}'); } catch (e) {}
+  try { pv = JSON.parse(localStorage.getItem('pv_cfg') || '{}'); } catch (e) {}
+  const linhas = [['MI_KEY', mi], ['BLING_URL', bl.url || ''], ['BLING_KEY', bl.key || ''], ['PV_URL', pv.url || ''], ['PV_KEY', pv.key || '']];
+  const fundo = document.createElement('div');
+  fundo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove(); };
+  fundo.innerHTML = '<div style="background:var(--surface,#111);border:1px solid var(--border2,#333);border-radius:12px;padding:20px;max-width:640px;width:100%;font-size:13px;line-height:1.6">' +
+    '<b>Valores para a versão de equipe</b><div class="ec-sub" style="margin:4px 0 12px">Cadastre cada um como <b>Secret</b> no Worker painel-equipe ' +
+    '(Settings → Variables and Secrets). Não mande esses valores por chat ou e-mail.</div>' +
+    linhas.map(([k, v]) => '<div style="margin-bottom:8px"><div class="mono" style="font-size:11px;color:var(--text2)">' + k + '</div>' +
+      '<input readonly style="width:100%;font-family:monospace;font-size:12px" value="' + ecEsc(v) + '" onclick="this.select()">' +
+      (v ? '' : '<div style="color:var(--orange);font-size:11px">vazio neste navegador</div>') + '</div>').join('') +
+    '<button class="btn-sm btn-primary" style="margin-top:6px" onclick="this.closest(\'div[style*=fixed]\').remove()">Fechar</button></div>';
+  document.body.appendChild(fundo);
+}
+
+/* ─── versão de equipe: entra direto, só consulta ─────────────────────── */
+async function equipeIniciar(){
+  /* Qualquer alteração (POST/PUT/DELETE) é recusada aqui e de novo no servidor. */
+  const _fetch = window.fetch.bind(window);
+  window.fetch = function (url, opt) {
+    const m = String((opt && opt.method) || 'GET').toUpperCase();
+    if (m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS') {
+      showToast('Acesso de consulta: alterações ficam bloqueadas nesta versão do painel.', 'warn');
+      return Promise.resolve(new Response(JSON.stringify({ erro: 'Acesso de consulta: alteração bloqueada.' }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } }));
+    }
+    return _fetch(url, opt);
+  };
+  const css = document.createElement('style');
+  css.textContent = '#token-bar-wrap,#token-topbar-chip,#btn-equipe{display:none!important}' +
+    '.equipe-faixa{background:#1d3a5f;color:#cfe3ff;font-size:12px;padding:6px 16px;text-align:center}';
+  document.head.appendChild(css);
+  const faixa = document.createElement('div');
+  faixa.className = 'equipe-faixa';
+  faixa.textContent = 'Acesso de consulta' + (window.EQUIPE_EMAIL ? ' — ' + window.EQUIPE_EMAIL : '') +
+    ' · os dados são da conta Titanium; pausar, alterar preço ou promoção só pelo administrador.';
+  document.body.insertBefore(faixa, document.body.firstChild);
+  try {
+    const r = await fetch(WORKER + '/?path=' + encodeURIComponent('/users/me'));
+    const me = await r.json();
+    if (!r.ok || !me.id) throw new Error((me && (me.erro || me.message)) || ('HTTP ' + r.status));
+    Object.assign(state, { token: 'EQUIPE', refreshToken: null, appId: null, appSecret: null,
+      sellerId: String(me.id), site: me.site_id || 'MLB', isDemo: false, tokenExpiresAt: Date.now() + 6 * 3600e3 });
+    startApp();
+  } catch (e) {
+    show('auth-screen');
+    showToast('Não consegui abrir o painel de equipe: ' + ecEsc(e.message), 'err');
+  }
+}
+
 (function init(){
+  if (window.EQUIPE_MODO) { equipeIniciar(); return; }
   const restored = loadCreds();
   if(restored){
     console.log('[Init] Restoring session from localStorage');
@@ -7172,6 +7241,7 @@ var PV = {
 
 /* ─── Configuração ───────────────────────────────────────────────────────── */
 function pvCfg() {
+  if (window.EQUIPE_MODO) return { url: location.origin + '/p', key: 'equipe' };
   if (PV.cfg) return PV.cfg;
   try { PV.cfg = JSON.parse(localStorage.getItem('pv_cfg') || '{}'); } catch (e) { PV.cfg = {}; }
   return PV.cfg;
