@@ -4774,9 +4774,12 @@ async function ccSync(from, force) {
     const r = await ccGet(d);
     const age = Math.round((new Date(today) - new Date(d)) / 864e5);
     if (!r || r.seller !== state.sellerId || age <= 2 || force) need.push([d, r]);
-    else if (ctx.ok && r.items.some(x => x.c == null && x.st !== 'cancelled')) {
-      // custo ausente (Bling não estava carregado na leitura): completa sem reler o ML
-      r.items.forEach(x => { if (x.c == null) { const [c, cf] = ccCostAt(ctx, x.s, d, today); x.c = c; x.cf = cf; } });
+    else if (ctx.ok && r.items.some(x => x.st !== 'cancelled' && (x.c == null || (x.ipf !== 'Bling' && taxMap[x.s] != null)))) {
+      // custo ou % de imposto ausentes (Bling fora do ar na leitura): completa sem reler o ML
+      r.items.forEach(x => {
+        if (x.c == null) { const [c, cf] = ccCostAt(ctx, x.s, d, today); x.c = c; x.cf = cf; }
+        if (x.ipf !== 'Bling' && taxMap[x.s] != null) { x.ip = ecTaxPct(x.s, taxMap); x.ipf = 'Bling'; }
+      });
       await ccPut(r);
     }
   }
