@@ -3073,6 +3073,8 @@ function ecCompute() {
     // recomendação
     if (r.isKit) { /* definida acima */ }
     else if (!r.ativo && r.total > 0) r.rec = EC_REC.DESC;
+    // inativo no Bling nunca entra em compra (lista, cesta, valor sugerido)
+    else if (!r.ativo) { r.sugInativo = r.sugCompra; r.sugCompra = 0; r.rec = EC_REC.NAO; }
     else if (r.total > 0 && r.diasSemVenda > 180) r.rec = EC_REC.DESC;
     else if (r.total > 0 && r.diasSemVenda > 90) r.rec = EC_REC.NAO;
     else if (r.sugCompra > 0 && (r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO)) r.rec = EC_REC.COMPRAR;
@@ -3318,13 +3320,14 @@ function ecConfCard() {
 function ecBloqMotivo(r) {
   if (!r.bloqueado) return '';
   if (!r.ativo && r.total > 0) return 'inativo com estoque';
+  if (!r.ativo) return 'inativo no Bling';
   if (r.total > 0 && r.diasSemVenda > 180) return 'sem venda há mais de 180 dias';
   if (r.total > 0 && r.diasSemVenda > 90) return 'sem venda há mais de 90 dias';
   return 'excesso acima de 2× a faixa saudável';
 }
 function ecBloqResumo() {
   const g = {}; EC.rows.filter(r => r.bloqueado).forEach(r => { const k = ecBloqMotivo(r); g[k] = (g[k] || 0) + 1; });
-  const ab = { 'inativo com estoque': 'inativos', 'sem venda há mais de 180 dias': 'sem venda +180d', 'sem venda há mais de 90 dias': 'sem venda +90d', 'excesso acima de 2× a faixa saudável': 'excesso' };
+  const ab = { 'inativo com estoque': 'inativos', 'inativo no Bling': 'inativos sem estoque', 'sem venda há mais de 180 dias': 'sem venda +180d', 'sem venda há mais de 90 dias': 'sem venda +90d', 'excesso acima de 2× a faixa saudável': 'excesso' };
   return Object.entries(g).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${ab[k]}`).join(' · ') || 'SKUs';
 }
 
@@ -3554,7 +3557,7 @@ function ecComo() {
 const EC_SEM_FORN = '(sem fornecedor no cadastro)';
 function ecCesta() {
   const g = {};
-  EC.rows.filter(r => !r.isKit && (r.rec === EC_REC.COMPRAR || r.rec === EC_REC.PROGRAMAR)).forEach(r => {
+  EC.rows.filter(r => !r.isKit && r.ativo && (r.rec === EC_REC.COMPRAR || r.rec === EC_REC.PROGRAMAR)).forEach(r => {
     const k = r.fornecedor || EC_SEM_FORN;
     const f = g[k] || (g[k] = { nome: k, itens: [], qtd: 0, vCusto: 0, vCompra: 0, semPreco: 0, transito: 0, agora: 0, vAgora: 0, ate: null, est: 0, rate: 0, margem: 0, semMargem: 0, baixa: 0, vBaixa: 0, semPrev: 0, semCusto: 0 });
     const c = ecConf(r);
