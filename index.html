@@ -2624,7 +2624,23 @@ async function ecShipCost(id) {
   if (!r || !Array.isArray(r.senders)) return null;
   const me = r.senders.find(x => String(x.user_id) === String(state.sellerId)) || r.senders[0];
   const v = me ? Math.max(0, +me.cost || 0) : 0;
-  c[id] = [v, Date.now()]; return v;
+  c[id] = [v, Date.now(), +r.gross_amount || 0]; return v;
+}
+/* Bônus por envio do Flex (self_service): o ML credita ao vendedor o valor do
+   frete (gross_amount) e o vendedor faz a entrega. Só envios sem custo para o
+   vendedor podem ser Flex; nesses o tipo é confirmado em /shipments/{id}.
+   Fica no mesmo cache do frete: [custo, quando, gross, bônus]. */
+async function ecShipBonus(id) {
+  const c = ecShipCache();
+  if (!c[id]) { const v = await ecShipCost(id); if (v == null) return null; }
+  const e = c[id]; if (!e) return null;
+  if (e[3] != null) return e[3];
+  if (e[0] > 0) { e[3] = 0; return 0; }
+  if (e[2] == null) { const r = await prGet(`/shipments/${id}/costs`); if (!r) return null; e[2] = +r.gross_amount || 0; }
+  if (!(e[2] > 0)) { e[3] = 0; return 0; }
+  const s = await prGet(`/shipments/${id}`); if (!s) return null;
+  e[3] = s.logistic_type === 'self_service' ? Math.round((e[2] - e[0]) * 100) / 100 : 0;
+  return e[3];
 }
 // registro diário por SKU: [qtd, receita, tarifa, cancelados, qtd Full, imposto R$, frete R$ (null = sem leitura), imposto do Bling? 1/0]
 // imposto e frete ficam CONGELADOS no dia da venda: mudar o % no cadastro depois não altera o passado
@@ -4692,21 +4708,27 @@ async function ccFetchDay(day, idx, prev, ctx, taxMap, today, shipOk) {
         if (ol && ol.c != null) { rec.c = ol.c; rec.cf = ol.cf; } else { const [c, cf] = ctx.ok ? ccCostAt(ctx, sku, day, today) : [null, null]; rec.c = c; rec.cf = cf; }
         if (ol && ol.ip != null && ol.ipf === 'Bling') { rec.ip = ol.ip; rec.ipf = ol.ipf; } else { rec.ip = ecTaxPct(sku, taxMap); rec.ipf = taxMap[sku] != null ? 'Bling' : 'padrão'; }
         if (ol && ol.fr != null) rec.fr = ol.fr;
+        if (ol && ol.bn != null) rec.bn = ol.bn;
         items.push(rec);
       }
     }
     offset += 50;
   }
-  // frete real do envio (rateado pelo valor dos itens do envio)
-  if (shipOk) {
-    const bySh = {}; items.forEach(x => { if (x.sh && x.st !== 'cancelled' && x.fr == null) (bySh[x.sh] = bySh[x.sh] || []).push(x); });
-    await prPool(Object.keys(bySh), 6, async id => {
-      const cost = await ecShipCost(id); if (cost == null) return;
-      const parts = bySh[id]; const tot = parts.reduce((a, x) => a + x.q * x.u, 0) || 1;
-      parts.forEach(x => { x.fr = Math.round(cost * (x.q * x.u / tot) * 100) / 100; });
-    });
-  }
+  await ccShipFill(items);
   return { date: day, at: Date.now(), seller: state.sellerId, items };
+}
+// frete real e bônus Flex do envio, rateados pelo valor dos itens do envio (só o que ainda falta)
+function ccShipFalta(x) { return x.sh && x.st !== 'cancelled' && (x.fr == null || x.bn == null); }
+async function ccShipFill(items) {
+  const bySh = {}; items.forEach(x => { if (ccShipFalta(x)) (bySh[x.sh] = bySh[x.sh] || []).push(x); });
+  await prPool(Object.keys(bySh), 6, async id => {
+    const cost = await ecShipCost(id); if (cost == null) return;
+    const bonus = await ecShipBonus(id);
+    const parts = bySh[id]; const tot = parts.reduce((a, x) => a + x.q * x.u, 0) || 1;
+    parts.forEach(x => { const sh = x.q * x.u / tot;
+      if (x.fr == null) x.fr = Math.round(cost * sh * 100) / 100;
+      if (bonus != null) x.bn = Math.round(bonus * sh * 100) / 100; });
+  });
 }
 async function ccSync(from, force) {
   const today = ecDay(); const idx = ecItemIndex();
@@ -4729,6 +4751,18 @@ async function ccSync(from, force) {
     if (rec) await ccPut(rec);
     done++; ccProgress(`Lendo pedidos do Mercado Livre: ${done}/${need.length} dias`, (done / need.length) * 100);
   });
+  // dias já guardados sem frete real ou sem bônus Flex: completa uma vez (fica gravado)
+  const falta = [];
+  for (let d = from; d <= today; d = ecAddDays(d, 1)) {
+    if (need.some(n => n[0] === d)) continue;
+    const r = await ccGet(d); if (r && r.seller === state.sellerId && r.items.some(ccShipFalta)) falta.push(r);
+  }
+  let feito = 0;
+  for (const r of falta) {
+    ccProgress(`Lendo frete real e bônus Flex dos pedidos: ${feito}/${falta.length} dias`, feito / falta.length * 100);
+    await ccShipFill(r.items).catch(() => {}); await ccPut(r); feito++;
+    if (feito % 5 === 0) try { ecSaveShipCache(); } catch (e) {}
+  }
   try { ecSaveShipCache(); } catch (e) {}
   CC.syncedAt = Date.now();
 }
@@ -4803,7 +4837,8 @@ function ccItem(x) {
   const imposto = receita * (x.ip || 0) / 100;
   const custo = x.c != null ? x.c * x.q : null;
   const margem = custo != null && frete != null && x.f != null ? receita - x.f - frete - imposto - custo : null;
-  return { receita, tarifa: x.f || 0, frete, freteF, imposto, custo, margem };
+  const bonus = x.bn || 0; // bônus por envio Flex: crédito do ML, fora da margem (igual à MC do ML)
+  return { receita, tarifa: x.f || 0, frete, freteF, imposto, custo, margem, bonus };
 }
 function ccEcRow(sku) { if (!CC._ecIdx || CC._ecIdxAt !== EC.loadedAt) { CC._ecIdx = {}; EC.rows.forEach(r => { CC._ecIdx[r.sku] = r; }); CC._ecIdxAt = EC.loadedAt; } return CC._ecIdx[sku] || null; }
 function ccAgg(rows) {
@@ -5697,7 +5732,7 @@ async function ccRelatorio() {
     if (x.f == null) obs.push('tarifa não informada');
     if (x.ipf !== 'Bling') obs.push('imposto % padrão');
     return { x, sku: x.s, desc: x.t, data: ecDayOf(x.d), q: x.q, fat, custo: it.custo, imp: it.imposto, frete: it.frete, tarifa: x.f,
-      mc: ok ? fat - cmv : null, cmv, canal: ccCanal(x).toUpperCase(), ped: x.src === 'bling' ? 'Bling ' + (x.num || x.o) : String(x.o),
+      mc: ok ? fat - cmv : null, cmv, bonus: it.bonus, canal: ccCanal(x).toUpperCase(), ped: x.src === 'bling' ? 'Bling ' + (x.num || x.o) : String(x.o),
       unit: x.u, ip: x.ip, cf: x.cf || 'sem custo', uf: (B[x.b] || {}).uf || '', obs: obs.join('; ') };
   }).sort((a, b) => a.data.localeCompare(b.data) || a.canal.localeCompare(b.canal));
 
@@ -5705,17 +5740,17 @@ async function ccRelatorio() {
   const agrega = chave => {
     const m = {};
     linhas.forEach(l => {
-      const k = chave(l); const a = m[k] || (m[k] = { k, ped: new Set(), q: 0, fat: 0, fatOk: 0, custo: 0, imp: 0, frete: 0, tarifa: 0, mc: 0, cmv: 0, l });
-      a.ped.add(l.ped); a.q += l.q; a.fat += l.fat; a.imp += l.imp || 0; a.frete += l.frete || 0; a.tarifa += l.tarifa || 0; a.custo += l.custo || 0;
+      const k = chave(l); const a = m[k] || (m[k] = { k, ped: new Set(), q: 0, fat: 0, fatOk: 0, custo: 0, imp: 0, frete: 0, tarifa: 0, mc: 0, cmv: 0, bonus: 0, l });
+      a.ped.add(l.ped); a.q += l.q; a.fat += l.fat; a.bonus += l.bonus || 0; a.imp += l.imp || 0; a.frete += l.frete || 0; a.tarifa += l.tarifa || 0; a.custo += l.custo || 0;
       if (l.mc != null) { a.fatOk += l.fat; a.mc += l.mc; a.cmv += l.cmv; }
     });
     return Object.values(m);
   };
   const totFat = linhas.reduce((s, l) => s + l.fat, 0);
   const linhaAgg = a => [a.ped.size, a.q, r2(a.fat), r2(a.custo), r2(a.imp), r2(a.frete), r2(a.tarifa), r2(a.mc), a.fatOk ? a.mc / a.fatOk : null,
-    r2(a.cmv), a.fatOk ? a.cmv / a.fatOk : null, totFat ? a.fat / totFat : null, a.fat ? a.fatOk / a.fat : null];
-  const cabAgg = ['Pedidos', 'Qtd Vendida', 'R$ Valor Faturado', 'R$ Custo', 'R$ Imposto', 'R$ Frete Pago', 'R$ Tarifa de Venda', 'R$ MC', '% MC', '$ CMV', '% CMV', '% do Faturamento', 'Cobertura de custo'];
-  const fmtAgg = ['n', 'n', 'r', 'r', 'r', 'r', 'r', 'r', 'p', 'r', 'p', 'p', 'p'];
+    r2(a.cmv), a.fatOk ? a.cmv / a.fatOk : null, totFat ? a.fat / totFat : null, a.fat ? a.fatOk / a.fat : null, r2(a.bonus), r2(a.mc + a.bonus), a.fatOk ? (a.mc + a.bonus) / a.fatOk : null];
+  const cabAgg = ['Pedidos', 'Qtd Vendida', 'R$ Valor Faturado', 'R$ Custo', 'R$ Imposto', 'R$ Frete Pago', 'R$ Tarifa de Venda', 'R$ MC', '% MC', '$ CMV', '% CMV', '% do Faturamento', 'Cobertura de custo', 'R$ Bônus envio Flex', 'R$ MC + bônus', '% MC + bônus'];
+  const fmtAgg = ['n', 'n', 'r', 'r', 'r', 'r', 'r', 'r', 'p', 'r', 'p', 'p', 'p', 'r', 'r', 'p'];
 
   const R = '"R$" #,##0.00', P = '0.00%';
   const aba = (cab, dados, fmts, larg) => {
@@ -5734,13 +5769,13 @@ async function ccRelatorio() {
   const wb = XLSX.utils.book_new();
   // 1) detalhado — mesmo layout da planilha de MC/CMV
   const cab1 = ['SKU', 'Descrição', 'Data', 'Qtd Vendida', 'R$ Valor Faturado', 'R$ Custo', 'R$ Imposto', 'R$ Frete Pago', 'R$ Tarifa de Venda', 'R$ MC', '% MC', '$ CMV', '% CMV', 'Canal de venda',
-    'Pedido', 'Preço unitário', '% Imposto', 'Origem do custo', 'UF', 'Observação'];
+    'Pedido', 'Preço unitário', '% Imposto', 'Origem do custo', 'UF', 'Observação', 'R$ Bônus envio Flex', 'R$ MC + bônus', '% MC + bônus'];
   const d1 = linhas.map(l => [l.sku, l.desc, l.data, l.q, r2(l.fat), r2(l.custo), r2(l.imp), r2(l.frete), r2(l.tarifa), r2(l.mc), l.mc != null && l.fat ? l.mc / l.fat : null,
-    r2(l.cmv), l.cmv != null && l.fat ? l.cmv / l.fat : null, l.canal, l.ped, r2(l.unit), l.ip != null ? l.ip / 100 : null, l.cf, l.uf, l.obs]);
+    r2(l.cmv), l.cmv != null && l.fat ? l.cmv / l.fat : null, l.canal, l.ped, r2(l.unit), l.ip != null ? l.ip / 100 : null, l.cf, l.uf, l.obs, r2(l.bonus), l.mc != null ? r2(l.mc + l.bonus) : null, l.mc != null && l.fat ? (l.mc + l.bonus) / l.fat : null]);
   const tg = agrega(() => 'Total')[0];
-  d1.push(['TOTAL', '', '', tg.q, r2(tg.fat), r2(tg.custo), r2(tg.imp), r2(tg.frete), r2(tg.tarifa), r2(tg.mc), tg.fatOk ? tg.mc / tg.fatOk : null, r2(tg.cmv), tg.fatOk ? tg.cmv / tg.fatOk : null, '', tg.ped.size + ' pedidos', '', '', '', '', '']);
-  XLSX.utils.book_append_sheet(wb, aba(cab1, d1, ['', '', 'd', 'n', 'r', 'r', 'r', 'r', 'r', 'r', 'p', 'r', 'p', '', '', 'r', 'p', '', '', ''],
-    [14, 55, 11, 8, 14, 12, 12, 12, 14, 12, 8, 12, 8, 22, 18, 12, 9, 14, 5, 40]), 'Vendas detalhadas');
+  d1.push(['TOTAL', '', '', tg.q, r2(tg.fat), r2(tg.custo), r2(tg.imp), r2(tg.frete), r2(tg.tarifa), r2(tg.mc), tg.fatOk ? tg.mc / tg.fatOk : null, r2(tg.cmv), tg.fatOk ? tg.cmv / tg.fatOk : null, '', tg.ped.size + ' pedidos', '', '', '', '', '', r2(tg.bonus), r2(tg.mc + tg.bonus), tg.fatOk ? (tg.mc + tg.bonus) / tg.fatOk : null]);
+  XLSX.utils.book_append_sheet(wb, aba(cab1, d1, ['', '', 'd', 'n', 'r', 'r', 'r', 'r', 'r', 'r', 'p', 'r', 'p', '', '', 'r', 'p', '', '', '', 'r', 'r', 'p'],
+    [14, 55, 11, 8, 14, 12, 12, 12, 14, 12, 8, 12, 8, 22, 18, 12, 9, 14, 5, 40, 14, 13, 10]), 'Vendas detalhadas');
 
   // 2) por canal
   const porCanal = agrega(l => l.canal).sort((a, b) => b.fat - a.fat);
@@ -5754,7 +5789,7 @@ async function ccRelatorio() {
     const canais = [...new Set(linhas.filter(l => l.sku === a.k).map(l => l.canal))].join(', ');
     return [a.k, a.l.desc, pa <= 0.8 ? 'A' : pa <= 0.95 ? 'B' : 'C', ...linhaAgg(a), canais]; });
   XLSX.utils.book_append_sheet(wb, aba(['SKU', 'Descrição', 'Curva', ...cabAgg, 'Canais'], linSku, ['', '', '', ...fmtAgg, ''],
-    [14, 50, 6, 9, 10, 15, 13, 12, 12, 14, 13, 8, 13, 8, 12, 12, 30]), 'Por SKU');
+    [14, 50, 6, 9, 10, 15, 13, 12, 12, 14, 13, 8, 13, 8, 12, 12, 14, 13, 10, 30]), 'Por SKU');
 
   // 4) por dia e 5) por mês
   const porDia = agrega(l => l.data).sort((a, b) => a.k.localeCompare(b.k));
@@ -5773,9 +5808,11 @@ async function ccRelatorio() {
     ['R$ Valor Faturado', 'quantidade × preço de venda (cancelados não entram)'],
     ['R$ Custo', 'custo do produto no Bling (kits = soma dos componentes); vendas antigas usam o custo reconstruído pelo histórico de compras'],
     ['R$ Imposto', 'faturado × % Tributos do cadastro do Bling (sem % no cadastro: % padrão, indicado na Observação)'],
-    ['R$ Frete Pago', 'Mercado Livre: custo real do envio pago pelo vendedor, rateado entre os itens do pacote; demais canais: frete informado no pedido do Bling'],
+    ['R$ Frete Pago', 'Mercado Livre: custo real do envio pago pelo vendedor (lido do envio, todo o período), rateado entre os itens do pacote; demais canais: frete informado no pedido do Bling'],
     ['R$ Tarifa de Venda', 'Mercado Livre: tarifa real do pedido; Shopee e outros: comissão informada no Bling ou % + R$ fixo por unidade configurados em ⚙ Canais (sem configuração, a linha fica sem MC)'],
-    ['$ CMV', 'Custo + Imposto + Frete Pago + Tarifa de Venda'], ['R$ MC', 'Valor Faturado − CMV'], ['% MC / % CMV', 'sobre o Valor Faturado'],
+    ['$ CMV', 'Custo + Imposto + Frete Pago + Tarifa de Venda'], ['R$ MC', 'Valor Faturado − CMV (mesma conta da Margem de Contribuição do Mercado Livre)'],
+    ['R$ Bônus envio Flex', 'crédito que o ML paga nas vendas Flex ("Estorno · Bônus por envio" no detalhe da venda); a MC acima não inclui, como no ML. O custo da sua entrega Flex (motoboy) não está no sistema'],
+    ['R$ MC + bônus', 'MC somando o bônus Flex'], ['% MC / % CMV', 'sobre o Valor Faturado'],
     ['Cobertura de custo', 'parte do faturamento com custo, frete e tarifa conhecidos; os % de MC e CMV das abas de resumo usam só essa parte'],
     ['Curva', 'A = itens que somam os primeiros 80% do faturamento, B = até 95%, C = restante']];
   const wl = XLSX.utils.aoa_to_sheet(leia); wl['!cols'] = [{ wch: 20 }, { wch: 110 }];
