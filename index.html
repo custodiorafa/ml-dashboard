@@ -5448,7 +5448,7 @@ function ccCadastroHtml(c, cad) {
   return ecStat('Nome', ecEsc(cad.nome || bl.nome || '—'), cad.fantasia ? ecEsc(cad.fantasia) : '') +
     ecStat(cad.tipo === 'J' ? 'CNPJ' : 'CPF', '<span class="mono">' + ecEsc(cad.doc || '—') + '</span>', cad.ie ? 'IE ' + ecEsc(cad.ie) : '') +
     ecStat('Telefone', '<span class="mono">' + ecEsc(fone || '—') + '</span>', '') +
-    ecStat('E-mail', ecEsc(cad.email || '—'), '');
+    ecStat('E-mail', ecEsc(cad.email || '—'), !cad.email && !fone ? 'marketplace não repassa ao Bling' : '');
 }
 async function ccCadastroCarregar(c) {
   const bl = ccContatoBl(c); const el = () => document.getElementById('cc-cadastro');
@@ -5457,7 +5457,7 @@ async function ccCadastroCarregar(c) {
     try {
       const r = await ccBlRaw('/contatos/' + bl.cid); const x = (r && r.data) || {};
       CC_CAD[bl.cid] = { nome: x.nome || '', fantasia: x.fantasia || '', doc: x.numeroDocumento || '', tipo: x.tipo || '', ie: x.ie || '',
-        telefone: x.telefone || '', celular: x.celular || '', email: x.email || '' };
+        telefone: x.telefone || '', celular: x.celular || '', email: x.email || x.emailNotaFiscal || '' };
     } catch (e) { CC_CAD[bl.cid] = { erro: e.message }; }
   }
   if (el()) el().innerHTML = ccCadastroHtml(c, CC_CAD[bl.cid]);
