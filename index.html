@@ -11120,18 +11120,11 @@ async function avPedidosBling(dia) {
 
 /* visitas por hora (hoje e ontem); se a API não devolver por hora, usa o total do dia */
 async function avVisitas() {
-  try {
-    var r = await mlGet('/users/' + state.sellerId + '/items_visits/time_window?last=48&unit=hour');
-    var res = r && (r.results || r.visits);
-    if (Array.isArray(res) && res.length) {
-      var porDiaHora = {};
-      res.forEach(function (x) { var L = avLocal(x.date); (porDiaHora[L.dia] = porDiaHora[L.dia] || {})[L.h] = (x.total || x.visits || 0); });
-      return { horaria: true, porDiaHora: porDiaHora };
-    }
-  } catch (e) {}
-  var hoje = avDia(), ontem = avDia(1), out = { horaria: false, porDia: {} };
-  for (var k = 0; k < 2; k++) {
-    var dia = k ? ontem : hoje;
+  /* o ML só entrega visitas por dia (unit=hour volta agrupado por dia),
+     então hoje = total até agora; ontem e semana passada são proporcionais à hora */
+  var dias = [avDia(), avDia(1), avDia(7)], out = { horaria: false, porDia: {} };
+  for (var k = 0; k < dias.length; k++) {
+    var dia = dias[k];
     try {
       var v = await mlGet('/users/' + state.sellerId + '/items_visits?date_from=' + dia + '&date_to=' + dia);
       out.porDia[dia] = v && typeof v.total_visits === 'number' ? v.total_visits : null;
@@ -11251,7 +11244,7 @@ function avRender() {
   var D = AV.dados, hl = avHoraAgora();
   var vH = avVendas(D.hoje, 'hoje', null), vO = avVendas(D.ontem, 'ontem', hl), vS = avVendas(D.sem, 'sem', hl), vOdia = avVendas(D.ontem, 'ontem', null);
   var soML = AV.canal === 'todos' || AV.canal === 'ml' || AV.canal === 'full';
-  var visH = soML ? avVisitasAte(D.hoje, null) : null, visO = soML ? avVisitasAte(D.ontem, hl) : null, visS = null;
+  var visH = soML ? avVisitasAte(D.hoje, null) : null, visO = soML ? avVisitasAte(D.ontem, hl) : null, visS = soML ? avVisitasAte(D.sem, hl) : null;
   var R = avResumo(vH, visH), Ro = avResumo(vO, visO), Rs = avResumo(vS, visS);
   /* conversão: só pedidos do ML sobre visitas do ML, mesmo com "todos" selecionado */
   var card = function (rot, val, a, b, c, nota) {
@@ -11259,8 +11252,8 @@ function avRender() {
       '<div class="av-kpi-d">vs ontem ' + a + ' · vs semana passada ' + b + '</div>' + (nota ? '<div class="ec-sub" style="font-size:10px">' + nota + '</div>' : '') + '</div>';
   };
   var kpis = '<div class="av-kpis">' +
-    card('Visitas únicas', soML ? avFmtN(R.vis) : 'N.D.', soML ? avDelta(R.vis, Ro.vis) : '—', '—', null, soML ? 'Mercado Livre' + (D.vis && !D.vis.horaria ? ' · ontem proporcional à hora' : '') : 'canal sem visitas') +
-    card('Conversão', soML && R.conv != null ? (R.conv * 100).toFixed(2).replace('.', ',') + '%' : 'N.D.', soML ? avDelta(R.conv, Ro.conv) : '—', '—', null, soML ? 'pedidos ML ÷ visitas ML' : '') +
+    card('Visitas únicas', soML ? avFmtN(R.vis) : 'N.D.', soML ? avDelta(R.vis, Ro.vis) : '—', soML ? avDelta(R.vis, Rs.vis) : '—', null, soML ? 'conta ML inteira · o ML conta visitas com algumas horas de atraso; dias anteriores proporcionais à hora' : 'canal sem visitas') +
+    card('Conversão', soML && R.conv != null ? (R.conv * 100).toFixed(2).replace('.', ',') + '%' : 'N.D.', soML ? avDelta(R.conv, Ro.conv) : '—', soML ? avDelta(R.conv, Rs.conv) : '—', null, soML ? 'pedidos ML ÷ visitas ML' : '') +
     card('Compradores', avFmtN(R.comp), avDelta(R.comp, Ro.comp), avDelta(R.comp, Rs.comp)) +
     card('Vendas', avFmtN(R.ped), avDelta(R.ped, Ro.ped), avDelta(R.ped, Rs.ped)) +
     card('Unidades', avFmtN(R.un) + ' u.', avDelta(R.un, Ro.un), avDelta(R.un, Rs.un)) +
