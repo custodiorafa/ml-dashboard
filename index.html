@@ -4628,6 +4628,11 @@ function ecExportConc() {
 // ════════════════════════════════════════════════════════════════
 const CC = { nf: { map: {}, loaded: false, listed: false, busy: false, again: false, done: 0, tot: 0, err: null }, naoFat: [], loading: false, view: { dias: 30, from: null, to: null, q: '', curva: '', tab: 'vendas', uf: '', pj: '', canal: '' }, facts: [], prev: [], agg: null, drill: null, syncedAt: null };
 const CC_DB = 'ml_intel_cc', CC_STORE = 'days', CC_MAX_DIAS = 180;
+/* Histórico de vendas que pode ser pedido no período (relatórios do ano).
+   A base de clientes continua em CC_MAX_DIAS. Período longo (> 92 dias) não
+   lê o período anterior inteiro só para a comparação: ela fica "sem base". */
+const CC_HIST_DIAS = 400;
+function ccSyncIni(p) { const min = ecDay(CC_HIST_DIAS); const ini = p.len > 92 ? p.from : p.pFrom; return ini < min ? min : ini; }
 
 // ───────── IndexedDB ─────────
 function ccDb() {
@@ -4826,10 +4831,11 @@ async function ccOpen(force) {
       }
     } catch (e) {}
     const p = ccPeriod();
-    const minDay = ecDay(CC_MAX_DIAS);
-    await ccSync(p.pFrom < minDay ? minDay : p.pFrom, force);
+    const ini = ccSyncIni(p); CC.syncIni = ini;
+    if (p.from < ini) showToast('O histórico vai até ' + ini.split('-').reverse().join('/') + '; antes disso não há pedidos lidos', 'warn');
+    await ccSync(ini, force);
     if (!CC.buyers) await ccBuyersLoad();
-    await ccBlSync(p.pFrom < minDay ? minDay : p.pFrom);
+    await ccBlSync(ini);
     if (!CC.nf.loaded) await ccNfLoad();
     await ccLoadFacts();
     ccNfStart();
@@ -4844,7 +4850,8 @@ async function ccLoadFacts() {
   const flat = await ccFactsRange(p.pFrom, p.to);
   const day = x => ecDayOf(x.d);
   CC.facts = flat.filter(x => day(x) >= p.from && day(x) <= p.to);
-  CC.prev = flat.filter(x => day(x) >= p.pFrom && day(x) <= p.pTo);
+  // comparação só com o período anterior inteiro lido; senão fica "sem base"
+  CC.prev = CC.syncIni && CC.syncIni > p.pFrom ? [] : flat.filter(x => day(x) >= p.pFrom && day(x) <= p.pTo);
   ccRender();
 }
 // data do pedido no fuso de Brasília
@@ -4977,7 +4984,7 @@ function ccRender() {
     </div></details></div>
   <div class="cc-filters">
     <div class="ec-chips">${[7, 30, 90].map(d => `<button class="ec-chip ${!CC.view.from && CC.view.dias === d ? 'active' : ''}" onclick="ccSetDias(${d})">${d} dias</button>`).join('')}
-      <span class="cc-custom"><input type="date" id="cc-from" value="${p.from}" min="${ecDay(CC_MAX_DIAS - 1)}" max="${ecDay()}"> a <input type="date" id="cc-to" value="${p.to}" max="${ecDay()}"> <button class="ec-chip ${CC.view.from ? 'active' : ''}" onclick="ccSetCustom()">Aplicar</button></span></div>
+      <span class="cc-custom"><input type="date" id="cc-from" value="${p.from}" min="${ecDay(CC_HIST_DIAS - 1)}" max="${ecDay()}"> a <input type="date" id="cc-to" value="${p.to}" max="${ecDay()}"> <button class="ec-chip ${CC.view.from ? 'active' : ''}" onclick="ccSetCustom()">Aplicar</button></span></div>
     <div class="ec-tools"><select id="cc-curva" onchange="CC.view.curva=this.value;ccRender()"><option value="">Todas as curvas</option>${['A', 'B', 'C'].map(c => `<option ${CC.view.curva === c ? 'selected' : ''}>${c}</option>`).join('')}</select>
       <input id="cc-q" placeholder="Filtrar por SKU, produto ou nº do pedido…" value="${ecEsc(CC.view.q)}" onchange="CC.view.q=this.value;ccRender()">
       <select onchange="CC.view.uf=this.value;ccRender()" title="UF de faturamento (depende da leitura do cadastro dos clientes)"><option value="">Todas as UFs</option>${ufs.map(u => `<option ${CC.view.uf === u ? 'selected' : ''}>${u}</option>`).join('')}</select>
@@ -5174,7 +5181,7 @@ async function ccNfStart() {
 async function ccNfRun() {
   const bc = blingCfg(); if (!bc.url || !bc.key) { CC.nf.err = 'Bling não conectado'; return; }
   CC.nf.err = null;
-  const p = ccPeriod(); const minDay = ecDay(CC_MAX_DIAS); const from = p.pFrom < minDay ? minDay : p.pFrom; const today = ecDay();
+  const p = ccPeriod(); const from = ccSyncIni(p); const today = ecDay();
   let meta = {}; try { meta = JSON.parse(localStorage.getItem(CC_NF_META) || '{}'); } catch (e) {}
   const mine = meta.seller === state.sellerId; const covered = mine && meta.from <= from;
   if (!(covered && Date.now() - meta.at < 30 * 60e3)) {
