@@ -1323,6 +1323,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
           <div class="page-meta" id="cc-meta">Vendas, margem e pedidos — Titanium Power Parts</div>
         </div>
         <div class="ec-head-actions">
+          <button class="btn-sm" onclick="ccRelatorio()" title="Relatório de vendas por item no formato MC/CMV, com abas por canal, SKU, dia e mês">📊 Relatório de vendas</button>
           <button class="btn-sm" onclick="ccExport()">⬇ Excel</button>
           <button class="btn-sm btn-primary" onclick="ccOpen()">↻ Atualizar</button>
         </div>
@@ -5058,7 +5059,7 @@ async function ccBlFacts(from, to, mlIds) {
       const share = i.q * i.u / tot;
       // tarifa: a do Bling quando informada; senão o % configurado para o canal (tarifa estimada ou comissão);
       // loja própria / venda direta não tem tarifa de venda (zero); marketplace sem % informado = indisponível
-      const f = det.com > 0 ? det.com * share : (cfg.taxaPct > 0 ? i.q * i.u * cfg.taxaPct / 100 : (cfg.tipo === 'outro' || !lojas[det.loja] ? (cfg.tipo === 'outro' ? 0 : null) : null));
+      const f = det.com > 0 ? det.com * share : (cfg.taxaPct > 0 || cfg.taxaFixa > 0 ? i.q * i.u * (cfg.taxaPct || 0) / 100 + i.q * (cfg.taxaFixa || 0) : (cfg.tipo === 'outro' || !lojas[det.loja] ? (cfg.tipo === 'outro' ? 0 : null) : null));
       facts.push({ o: 'BL' + det.id, num: det.num, pk: null, d: dia + 'T12:00:00-03:00', st: det.sit === 12 ? 'cancelled' : 'paid', i: null, s: i.s, t: i.t, q: i.q, u: i.u, f: f == null ? null : Math.round(f * 100) / 100, ff: det.com > 0 ? 'Bling' : f > 0 ? (cfg.tipo === 'outro' ? 'comissão' : 'estimada') : f === 0 ? 'sem tarifa' : 'ausente',
         sh: null, fr: Math.round(det.frete * share * 100) / 100, b: bid, n: '', b2b: false, full: false, c: i.c, cf: i.cf, ip: i.ip, ipf: i.ipf, ch: det.loja, src: 'bling' });
     });
@@ -5225,15 +5226,15 @@ function ccOpenLojas() {
   const m = document.getElementById('cc-modal'); if (!m) return;
   const lojas = ccLojas(); const ids = new Set(Object.keys(lojas)); (CC.facts || []).concat(CC.prev || []).forEach(x => { if (x.ch) ids.add(x.ch); });
   m.innerHTML = `<div class="ec-modal-box" style="width:min(760px,100%)"><div class="card-head"><span class="card-title">⚙ Canais de venda</span><button class="btn-sm" onclick="ccClose()">✕</button></div>
-    <div style="padding:14px 18px"><div class="ec-muted" style="margin-bottom:10px">Cada loja do Bling é um canal. Dê o nome e o tipo. Marketplace que não informa a tarifa (ex.: Shopee): preencha um % estimado para o painel calcular a margem. Loja própria / venda direta: não tem tarifa de venda; preencha o % só se houver comissão.</div>
-    <table class="t ec-t"><thead><tr><th>Loja (Bling)</th><th>Nome do canal</th><th>Tipo</th><th class="r">Tarifa / comissão %</th></tr></thead><tbody>
-    ${[...ids].map(id => { const l = lojas[id] || { nome: 'Loja ' + id, tipo: 'outro' }; return `<tr data-loja="${ecEsc(id)}"><td class="mono">${ecEsc(id)}</td><td><input class="cc-in" value="${ecEsc(l.nome)}"></td><td><select class="cc-in"><option value="ml" ${l.tipo === 'ml' ? 'selected' : ''}>Mercado Livre</option><option value="mkt" ${l.tipo === 'mkt' ? 'selected' : ''}>Outro marketplace</option><option value="outro" ${l.tipo === 'outro' ? 'selected' : ''}>Loja própria / venda direta</option></select></td><td class="r"><input class="cc-in" type="number" step="0.1" style="width:80px;text-align:right" value="${l.taxaPct || ''}" ${l.tipo === 'ml' ? 'disabled title="tarifa real do ML"' : ''}></td></tr>`; }).join('')}
+    <div style="padding:14px 18px"><div class="ec-muted" style="margin-bottom:10px">Cada loja do Bling é um canal. Dê o nome e o tipo. Marketplace que não informa a tarifa (ex.: Shopee): preencha o % de comissão e a taxa fixa por unidade (confira os valores na Central do Vendedor) para o painel calcular a margem. Loja própria / venda direta: não tem tarifa de venda; preencha o % só se houver comissão.</div>
+    <table class="t ec-t"><thead><tr><th>Loja (Bling)</th><th>Nome do canal</th><th>Tipo</th><th class="r">Tarifa / comissão %</th><th class="r">R$ fixo por unidade</th></tr></thead><tbody>
+    ${[...ids].map(id => { const l = lojas[id] || { nome: 'Loja ' + id, tipo: 'outro' }; return `<tr data-loja="${ecEsc(id)}"><td class="mono">${ecEsc(id)}</td><td><input class="cc-in" value="${ecEsc(l.nome)}"></td><td><select class="cc-in"><option value="ml" ${l.tipo === 'ml' ? 'selected' : ''}>Mercado Livre</option><option value="mkt" ${l.tipo === 'mkt' ? 'selected' : ''}>Outro marketplace</option><option value="outro" ${l.tipo === 'outro' ? 'selected' : ''}>Loja própria / venda direta</option></select></td><td class="r"><input class="cc-in" type="number" step="0.1" style="width:80px;text-align:right" value="${l.taxaPct || ''}" ${l.tipo === 'ml' ? 'disabled title="tarifa real do ML"' : ''}></td><td class="r"><input class="cc-in" type="number" step="0.01" style="width:80px;text-align:right" value="${l.taxaFixa || ''}" ${l.tipo === 'ml' ? 'disabled title="tarifa real do ML"' : 'title="taxa fixa cobrada por unidade vendida (ex.: Shopee)"'}></td></tr>`; }).join('')}
     </tbody></table></div>
     <div class="ec-modal-foot"><button class="btn-sm btn-primary" onclick="ccSaveLojas()">Salvar</button></div></div>`;
   m.style.display = 'flex';
 }
 function ccSaveLojas() {
-  const out = {}; document.querySelectorAll('#cc-modal tr[data-loja]').forEach(tr => { const [n, t, p] = tr.querySelectorAll('.cc-in'); out[tr.dataset.loja] = { nome: n.value.trim() || 'Loja ' + tr.dataset.loja, tipo: t.value, taxaPct: parseFloat(p.value) || 0 }; });
+  const out = {}; document.querySelectorAll('#cc-modal tr[data-loja]').forEach(tr => { const [n, t, p, fx] = tr.querySelectorAll('.cc-in'); out[tr.dataset.loja] = { nome: n.value.trim() || 'Loja ' + tr.dataset.loja, tipo: t.value, taxaPct: parseFloat(p.value) || 0, taxaFixa: parseFloat(fx && fx.value) || 0 }; });
   try { localStorage.setItem(CC_LOJAS_KEY, JSON.stringify(out)); } catch (e) {}
   ccClose(); ccOpen();
 }
@@ -5672,6 +5673,116 @@ async function ccExportDrill() {
     'Comprador': ccMask(x.n, x.b), 'Tipo': ccTipo(ccB(x)), 'ICMS': ccContribX(ccB(x)), 'UF': (ccB(x) || {}).uf || '', 'Cidade': (ccB(x) || {}).city || '', 'Sinal b2b ML': x.b2b ? 'Sim' : '', 'Full': x.full ? 'Sim' : '' }; });
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), 'Itens');
   XLSX.writeFile(wb, `central_comercial_${D.kind}_${ecDay()}.xlsx`);
+}
+/* ───────── Relatório de vendas estratificado (layout MC / CMV) ─────────
+   Uma linha por item vendido, no período e filtros da tela.
+   CMV = custo + imposto + frete pago + tarifa de venda · MC = faturado − CMV.
+   Linha sem custo no Bling fica com MC/CMV em branco e fora dos % (coluna Observação). */
+async function ccRelatorio() {
+  if (!CC.facts.length) { showToast('Carregue a Central Comercial primeiro', 'warn'); return; }
+  if (!(await ccLoadXlsx())) return;
+  const p = ccPeriod();
+  const rows = ccFilter(CC.facts).filter(x => x.st !== 'cancelled');
+  if (!rows.length) { showToast('Nenhuma venda no período e filtros atuais', 'warn'); return; }
+  const r2 = v => v == null ? null : Math.round(v * 100) / 100;
+  const B = CC.buyers || {};
+  const linhas = rows.map(x => {
+    const it = ccItem(x); const fat = it.receita;
+    const ok = it.custo != null && it.frete != null && x.f != null;
+    const cmv = ok ? it.custo + it.imposto + it.frete + it.tarifa : null;
+    const obs = [];
+    if (it.custo == null) obs.push('sem custo no Bling');
+    if (it.frete == null) obs.push('frete não informado');
+    else if (it.freteF === 'estimado') obs.push('frete estimado');
+    if (x.f == null) obs.push('tarifa não informada');
+    if (x.ipf !== 'Bling') obs.push('imposto % padrão');
+    return { x, sku: x.s, desc: x.t, data: ecDayOf(x.d), q: x.q, fat, custo: it.custo, imp: it.imposto, frete: it.frete, tarifa: x.f,
+      mc: ok ? fat - cmv : null, cmv, canal: ccCanal(x).toUpperCase(), ped: x.src === 'bling' ? 'Bling ' + (x.num || x.o) : String(x.o),
+      unit: x.u, ip: x.ip, cf: x.cf || 'sem custo', uf: (B[x.b] || {}).uf || '', obs: obs.join('; ') };
+  }).sort((a, b) => a.data.localeCompare(b.data) || a.canal.localeCompare(b.canal));
+
+  // agregador comum às abas de estratificação
+  const agrega = chave => {
+    const m = {};
+    linhas.forEach(l => {
+      const k = chave(l); const a = m[k] || (m[k] = { k, ped: new Set(), q: 0, fat: 0, fatOk: 0, custo: 0, imp: 0, frete: 0, tarifa: 0, mc: 0, cmv: 0, l });
+      a.ped.add(l.ped); a.q += l.q; a.fat += l.fat; a.imp += l.imp || 0; a.frete += l.frete || 0; a.tarifa += l.tarifa || 0; a.custo += l.custo || 0;
+      if (l.mc != null) { a.fatOk += l.fat; a.mc += l.mc; a.cmv += l.cmv; }
+    });
+    return Object.values(m);
+  };
+  const totFat = linhas.reduce((s, l) => s + l.fat, 0);
+  const linhaAgg = a => [a.ped.size, a.q, r2(a.fat), r2(a.custo), r2(a.imp), r2(a.frete), r2(a.tarifa), r2(a.mc), a.fatOk ? a.mc / a.fatOk : null,
+    r2(a.cmv), a.fatOk ? a.cmv / a.fatOk : null, totFat ? a.fat / totFat : null, a.fat ? a.fatOk / a.fat : null];
+  const cabAgg = ['Pedidos', 'Qtd Vendida', 'R$ Valor Faturado', 'R$ Custo', 'R$ Imposto', 'R$ Frete Pago', 'R$ Tarifa de Venda', 'R$ MC', '% MC', '$ CMV', '% CMV', '% do Faturamento', 'Cobertura de custo'];
+  const fmtAgg = ['n', 'n', 'r', 'r', 'r', 'r', 'r', 'r', 'p', 'r', 'p', 'p', 'p'];
+
+  const R = '"R$" #,##0.00', P = '0.00%';
+  const aba = (cab, dados, fmts, larg) => {
+    const ws = XLSX.utils.aoa_to_sheet([cab, ...dados]);
+    dados.forEach((d, i) => d.forEach((v, j) => {
+      const c = ws[XLSX.utils.encode_cell({ r: i + 1, c: j })]; if (!c) return;
+      if (fmts[j] === 'r' && typeof v === 'number') c.z = R;
+      else if (fmts[j] === 'p' && typeof v === 'number') c.z = P;
+      else if (fmts[j] === 'd' && v) { const [y, mo, da] = v.split('-').map(Number); c.t = 'n'; c.v = (Date.UTC(y, mo - 1, da) / 864e5) + 25569; c.z = 'dd/mm/yyyy'; }
+    }));
+    ws['!cols'] = larg.map(w => ({ wch: w }));
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: dados.length, c: cab.length - 1 } }) };
+    return ws;
+  };
+
+  const wb = XLSX.utils.book_new();
+  // 1) detalhado — mesmo layout da planilha de MC/CMV
+  const cab1 = ['SKU', 'Descrição', 'Data', 'Qtd Vendida', 'R$ Valor Faturado', 'R$ Custo', 'R$ Imposto', 'R$ Frete Pago', 'R$ Tarifa de Venda', 'R$ MC', '% MC', '$ CMV', '% CMV', 'Canal de venda',
+    'Pedido', 'Preço unitário', '% Imposto', 'Origem do custo', 'UF', 'Observação'];
+  const d1 = linhas.map(l => [l.sku, l.desc, l.data, l.q, r2(l.fat), r2(l.custo), r2(l.imp), r2(l.frete), r2(l.tarifa), r2(l.mc), l.mc != null && l.fat ? l.mc / l.fat : null,
+    r2(l.cmv), l.cmv != null && l.fat ? l.cmv / l.fat : null, l.canal, l.ped, r2(l.unit), l.ip != null ? l.ip / 100 : null, l.cf, l.uf, l.obs]);
+  const tg = agrega(() => 'Total')[0];
+  d1.push(['TOTAL', '', '', tg.q, r2(tg.fat), r2(tg.custo), r2(tg.imp), r2(tg.frete), r2(tg.tarifa), r2(tg.mc), tg.fatOk ? tg.mc / tg.fatOk : null, r2(tg.cmv), tg.fatOk ? tg.cmv / tg.fatOk : null, '', tg.ped.size + ' pedidos', '', '', '', '', '']);
+  XLSX.utils.book_append_sheet(wb, aba(cab1, d1, ['', '', 'd', 'n', 'r', 'r', 'r', 'r', 'r', 'r', 'p', 'r', 'p', '', '', 'r', 'p', '', '', ''],
+    [14, 55, 11, 8, 14, 12, 12, 12, 14, 12, 8, 12, 8, 22, 18, 12, 9, 14, 5, 40]), 'Vendas detalhadas');
+
+  // 2) por canal
+  const porCanal = agrega(l => l.canal).sort((a, b) => b.fat - a.fat);
+  const linCanal = porCanal.map(a => [a.k, ...linhaAgg(a)]); linCanal.push(['TOTAL', ...linhaAgg(tg)]);
+  XLSX.utils.book_append_sheet(wb, aba(['Canal de venda', ...cabAgg], linCanal, ['', ...fmtAgg], [24, 9, 10, 15, 13, 12, 12, 14, 13, 8, 13, 8, 12, 12]), 'Por canal');
+
+  // 3) por SKU com curva ABC (pelo faturamento)
+  const porSku = agrega(l => l.sku).sort((a, b) => b.fat - a.fat);
+  let acum = 0;
+  const linSku = porSku.map(a => { acum += a.fat; const pa = totFat ? acum / totFat : 0;
+    const canais = [...new Set(linhas.filter(l => l.sku === a.k).map(l => l.canal))].join(', ');
+    return [a.k, a.l.desc, pa <= 0.8 ? 'A' : pa <= 0.95 ? 'B' : 'C', ...linhaAgg(a), canais]; });
+  XLSX.utils.book_append_sheet(wb, aba(['SKU', 'Descrição', 'Curva', ...cabAgg, 'Canais'], linSku, ['', '', '', ...fmtAgg, ''],
+    [14, 50, 6, 9, 10, 15, 13, 12, 12, 14, 13, 8, 13, 8, 12, 12, 30]), 'Por SKU');
+
+  // 4) por dia e 5) por mês
+  const porDia = agrega(l => l.data).sort((a, b) => a.k.localeCompare(b.k));
+  XLSX.utils.book_append_sheet(wb, aba(['Data', ...cabAgg], porDia.map(a => [a.k, ...linhaAgg(a)]), ['d', ...fmtAgg], [11, 9, 10, 15, 13, 12, 12, 14, 13, 8, 13, 8, 12, 12]), 'Por dia');
+  const porMes = agrega(l => l.data.slice(0, 7)).sort((a, b) => a.k.localeCompare(b.k));
+  XLSX.utils.book_append_sheet(wb, aba(['Mês', ...cabAgg], porMes.map(a => [a.k.split('-').reverse().join('/'), ...linhaAgg(a)]), ['', ...fmtAgg], [9, 9, 10, 15, 13, 12, 12, 14, 13, 8, 13, 8, 12, 12]), 'Por mês');
+
+  // 6) canal × mês
+  const porCM = agrega(l => l.canal + '|' + l.data.slice(0, 7)).sort((a, b) => a.k.localeCompare(b.k));
+  XLSX.utils.book_append_sheet(wb, aba(['Canal de venda', 'Mês', ...cabAgg], porCM.map(a => { const [c, m] = a.k.split('|'); return [c, m.split('-').reverse().join('/'), ...linhaAgg(a)]; }),
+    ['', '', ...fmtAgg], [24, 9, 9, 10, 15, 13, 12, 12, 14, 13, 8, 13, 8, 12, 12]), 'Canal x mês');
+
+  // 7) como ler
+  const v = CC.view; const filtros = [v.q && 'busca "' + v.q + '"', v.canal && 'canal ' + v.canal, v.curva && 'curva ' + v.curva, v.uf && 'UF ' + v.uf, v.pj && v.pj].filter(Boolean).join(', ') || 'nenhum';
+  const leia = [['Relatório de vendas — Titanium Power Parts'], [''], ['Período', p.from.split('-').reverse().join('/') + ' a ' + p.to.split('-').reverse().join('/')], ['Filtros da tela', filtros], ['Gerado em', new Date().toLocaleString('pt-BR')], [''],
+    ['R$ Valor Faturado', 'quantidade × preço de venda (cancelados não entram)'],
+    ['R$ Custo', 'custo do produto no Bling (kits = soma dos componentes); vendas antigas usam o custo reconstruído pelo histórico de compras'],
+    ['R$ Imposto', 'faturado × % Tributos do cadastro do Bling (sem % no cadastro: % padrão, indicado na Observação)'],
+    ['R$ Frete Pago', 'Mercado Livre: custo real do envio pago pelo vendedor, rateado entre os itens do pacote; demais canais: frete informado no pedido do Bling'],
+    ['R$ Tarifa de Venda', 'Mercado Livre: tarifa real do pedido; Shopee e outros: comissão informada no Bling ou % + R$ fixo por unidade configurados em ⚙ Canais (sem configuração, a linha fica sem MC)'],
+    ['$ CMV', 'Custo + Imposto + Frete Pago + Tarifa de Venda'], ['R$ MC', 'Valor Faturado − CMV'], ['% MC / % CMV', 'sobre o Valor Faturado'],
+    ['Cobertura de custo', 'parte do faturamento com custo, frete e tarifa conhecidos; os % de MC e CMV das abas de resumo usam só essa parte'],
+    ['Curva', 'A = itens que somam os primeiros 80% do faturamento, B = até 95%, C = restante']];
+  const wl = XLSX.utils.aoa_to_sheet(leia); wl['!cols'] = [{ wch: 20 }, { wch: 110 }];
+  XLSX.utils.book_append_sheet(wb, wl, 'Como ler');
+
+  XLSX.writeFile(wb, `relatorio_vendas_${p.from}_a_${p.to}.xlsx`);
+  showToast('Relatório gerado: ' + linhas.length + ' itens vendidos', 'ok');
 }
 async function ccExport() {
   if (!CC.facts.length) { showToast('Carregue a Central Comercial primeiro', 'warn'); return; }
