@@ -766,6 +766,32 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .pv-step.ok::before{background:#C8792B;border-color:#C8792B}
 .pv-step.pend span,.pv-step.pend em{color:var(--text2)}
 .pv-step em{font-style:normal;font-variant-numeric:tabular-nums;color:var(--text2)}
+
+/* ═══ Ao vivo ═══ */
+#av-root{margin-bottom:18px}
+#av-root:fullscreen{background:var(--bg,#0b0f17);padding:24px;overflow:auto}
+.av-card{overflow:hidden}
+.av-topo{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 18px 6px}
+.av-titulo{font-size:20px;font-weight:800}.av-titulo span{color:var(--accent)}
+.av-grande{text-align:center;padding:10px 18px 14px}
+.av-total{font-size:44px;font-weight:800;letter-spacing:.5px;margin:4px 0;font-family:var(--mono,inherit)}
+#av-root:fullscreen .av-total{font-size:64px}
+.av-canais{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:0 18px 14px}
+.av-canal{display:flex;flex-direction:column;gap:2px;align-items:flex-start;padding:10px 12px;border-radius:10px;border:1px solid var(--border2,#2a3242);background:var(--surface2,rgba(255,255,255,.02));color:inherit;cursor:pointer;text-align:left}
+.av-canal b{font-size:17px}.av-canal.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.av-grid{display:grid;grid-template-columns:minmax(260px,1fr) minmax(320px,1.6fr) minmax(280px,1.1fr);gap:14px;padding:0 18px 14px}
+.av-col{border:1px solid var(--border2,#2a3242);border-radius:10px;padding:12px;min-width:0}
+.av-sub{font-weight:700;margin-bottom:8px}
+.av-kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.av-kpi{padding:8px 4px;border-bottom:1px solid var(--border2,#2a3242)}
+.av-kpi-l{font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.4px}
+.av-kpi-v{font-size:22px;font-weight:800;margin:2px 0}
+.av-kpi-d{font-size:11px;color:var(--text2)}
+.av-prod{display:flex;gap:10px;align-items:center;padding:8px 6px;border-bottom:1px solid var(--border2,#2a3242)}
+.av-prod-1{background:rgba(255,230,0,.08);border-radius:8px}
+.av-pos{font-size:18px;font-weight:800;width:18px;text-align:center}
+.av-prod-t{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
+@media (max-width:1100px){.av-grid{grid-template-columns:1fr}.av-canais{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
 <body>
@@ -937,6 +963,9 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
         </div>
         <div class="token-status token-ok" id="token-status">● Token ativo</div>
       </div>
+
+      <!-- ═══ AO VIVO — movimento do dia, todos os canais ═══ -->
+      <div id="av-root"></div>
 
       <!-- ═══ FILTRO DE PERÍODO ═══ -->
       <div class="period-bar">
@@ -11012,6 +11041,294 @@ function adsRender() {
 
   el.innerHTML = kpis + params + tabela + logHtml + wlHtml;
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   AO VIVO — movimento do dia, todos os canais
+
+   Tela para ficar aberta (TV/monitor) mostrando o dia em andamento:
+   - faturamento de hoje, todos os canais ou um só;
+   - visitas, conversão, compradores, vendas, unidades e ticket, cada um
+     comparado com ONTEM ATÉ A MESMA HORA e com o mesmo dia da semana
+     passada até a mesma hora (comparar o dia parcial com o dia cheio de
+     ontem seria enganoso);
+   - vendas por hora, hoje × ontem;
+   - produtos mais vendidos hoje, com estoque.
+
+   Fontes: Mercado Livre e ML Full pelos pedidos do ML (têm hora); Shopee e
+   venda direta pelos pedidos de venda do Bling — o Bling não informa a hora
+   do pedido, então esses canais entram nos totais e nos produtos, mas não
+   na curva por hora. Visitas e conversão só existem para o Mercado Livre.
+   Atualiza sozinha a cada 2 minutos.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var AV = { canal: 'todos', dados: null, carregando: false, erro: null, at: null, timer: null, det: {} };
+var AV_CANAIS = [['todos', 'Todos os canais'], ['ml', 'Mercado Livre'], ['full', 'ML Full'], ['shopee', 'Shopee'], ['direta', 'Venda direta']];
+
+function avDia(off) { return ecDay(off || 0); }
+function avHoraAgora() { var d = new Date(); return d.getHours() + d.getMinutes() / 60; }
+function avLocal(iso) { var d = new Date(iso); return { dia: d.toLocaleDateString('en-CA'), hora: d.getHours() + d.getMinutes() / 60, h: d.getHours() }; }
+
+async function avPedidosML(dia) {
+  var de = dia + 'T00:00:00.000-03:00', ate = dia + 'T23:59:59.999-03:00', out = [];
+  for (var off = 0; off < 1000; off += 50) {
+    var r = await mlGet('/orders/search?seller=' + state.sellerId + '&order.date_created.from=' + encodeURIComponent(de) +
+      '&order.date_created.to=' + encodeURIComponent(ate) + '&sort=date_desc&limit=50&offset=' + off);
+    var res = (r && r.results) || [];
+    out = out.concat(res);
+    if (res.length < 50) break;
+  }
+  return out;
+}
+
+function avFullDoItem(id) {
+  var it = (state.items || []).find(function (i) { return i.id === id; });
+  return !!(it && it.shipping && it.shipping.logistic_type === 'fulfillment');
+}
+
+/* pedidos de outros canais (Shopee, venda direta) do Bling, com itens */
+async function avPedidosBling(dia) {
+  var bc = blingCfg(); if (!bc.url || !bc.key) return { ok: false, lista: [] };
+  var lojas = ccLojas(), lista = [];
+  for (var pg = 1; pg <= 20; pg++) {
+    var r = await ccBlRaw('/pedidos/vendas?limite=100&pagina=' + pg + '&dataInicial=' + dia + '&dataFinal=' + dia);
+    var l = (r && r.data) || [];
+    l.forEach(function (o) {
+      var loja = String((o.loja && o.loja.id) || 0), cfg = lojas[loja];
+      if (cfg && cfg.tipo === 'ml') return;                       // ML já vem da API do ML
+      if (o.situacao && o.situacao.id === 12) return;              // cancelado
+      lista.push({ id: o.id, loja: loja, total: o.total || 0, cid: (o.contato && o.contato.id) || 0,
+        canal: cfg && cfg.tipo === 'mkt' ? 'shopee' : 'direta' });
+    });
+    if (l.length < 100) break;
+  }
+  for (var i = 0; i < lista.length; i++) {
+    var o = lista[i];
+    if (!AV.det[o.id]) {
+      try {
+        var d = await ccBlRaw('/pedidos/vendas/' + o.id), x = (d && d.data) || {};
+        AV.det[o.id] = (x.itens || []).map(function (it) {
+          return { sku: normSku(it.codigo || ''), t: String(it.descricao || ''), q: it.quantidade || 0,
+            v: (it.quantidade || 0) * (it.valor || 0) * (1 - (it.desconto || 0) / 100) };
+        });
+      } catch (e) { AV.det[o.id] = []; }
+    }
+    o.itens = AV.det[o.id];
+  }
+  return { ok: true, lista: lista };
+}
+
+/* visitas por hora (hoje e ontem); se a API não devolver por hora, usa o total do dia */
+async function avVisitas() {
+  try {
+    var r = await mlGet('/users/' + state.sellerId + '/items_visits/time_window?last=48&unit=hour');
+    var res = r && (r.results || r.visits);
+    if (Array.isArray(res) && res.length) {
+      var porDiaHora = {};
+      res.forEach(function (x) { var L = avLocal(x.date); (porDiaHora[L.dia] = porDiaHora[L.dia] || {})[L.h] = (x.total || x.visits || 0); });
+      return { horaria: true, porDiaHora: porDiaHora };
+    }
+  } catch (e) {}
+  var hoje = avDia(), ontem = avDia(1), out = { horaria: false, porDia: {} };
+  for (var k = 0; k < 2; k++) {
+    var dia = k ? ontem : hoje;
+    try {
+      var v = await mlGet('/users/' + state.sellerId + '/items_visits?date_from=' + dia + '&date_to=' + dia);
+      out.porDia[dia] = v && typeof v.total_visits === 'number' ? v.total_visits : null;
+    } catch (e) { out.porDia[dia] = null; }
+  }
+  return out;
+}
+
+async function avCarregar() {
+  if (AV.carregando || !state.sellerId || state.isDemo) return;
+  AV.carregando = true; AV.erro = null; avRender();
+  try {
+    var hoje = avDia(), ontem = avDia(1), sem = avDia(7);
+    var res = await Promise.all([avPedidosML(hoje), avPedidosML(ontem), avPedidosML(sem),
+      avPedidosBling(hoje).catch(function () { return { ok: false, lista: [] }; }),
+      avPedidosBling(ontem).catch(function () { return { ok: false, lista: [] }; }),
+      avPedidosBling(sem).catch(function () { return { ok: false, lista: [] }; }),
+      avVisitas()]);
+    AV.dados = { hoje: hoje, ontem: ontem, sem: sem, ml: { hoje: res[0], ontem: res[1], sem: res[2] },
+      bl: { hoje: res[3], ontem: res[4], sem: res[5] }, vis: res[6] };
+    AV.at = new Date();
+  } catch (e) { AV.erro = e.message; }
+  AV.carregando = false; avRender();
+}
+
+/* junta os pedidos de um dia num formato só, já filtrado pelo canal e pela hora limite */
+function avVendas(dia, chave, horaLim) {
+  var D = AV.dados, out = [];
+  (D.ml[chave] || []).forEach(function (o) {
+    if (o.status === 'cancelled') return;
+    var L = avLocal(o.date_created);
+    if (L.dia !== dia || (horaLim != null && L.hora > horaLim)) return;
+    var full = (o.order_items || []).some(function (oi) { return oi.item && avFullDoItem(oi.item.id); });
+    var canal = full ? 'full' : 'ml';
+    out.push({ canal: canal, hora: L.h, total: o.total_amount || 0, comprador: 'ML' + ((o.buyer && o.buyer.id) || o.id),
+      itens: (o.order_items || []).map(function (oi) {
+        return { id: oi.item && oi.item.id, sku: normSku((oi.item && oi.item.seller_sku) || ''), t: (oi.item && oi.item.title) || '',
+          q: oi.quantity || 0, v: (oi.unit_price || 0) * (oi.quantity || 0) };
+      }) });
+  });
+  /* Bling não tem hora: no comparativo "até a mesma hora" os dias anteriores entram
+     proporcionais à fração do dia já passada — e isso fica dito na tela */
+  var bl = D.bl[chave] || { lista: [] };
+  var frac = horaLim != null && chave !== 'hoje' ? Math.min(1, horaLim / 24) : 1;
+  bl.lista.forEach(function (o) {
+    out.push({ canal: o.canal, hora: null, total: o.total * frac, comprador: 'BL' + (o.cid || o.id), peso: frac,
+      itens: (o.itens || []).map(function (i) { return { id: null, sku: i.sku, t: i.t, q: i.q * frac, v: i.v * frac }; }) });
+  });
+  if (AV.canal !== 'todos') out = out.filter(function (x) { return x.canal === AV.canal; });
+  return out;
+}
+
+function avResumo(vendas, visitas) {
+  var rec = 0, un = 0, ped = 0, comp = {};
+  vendas.forEach(function (v) { rec += v.total; ped += (v.peso != null ? v.peso : 1); comp[v.comprador] = 1;
+    v.itens.forEach(function (i) { un += i.q; }); });
+  var pedML = vendas.filter(function (v) { return v.canal === 'ml' || v.canal === 'full'; }).length;
+  return { rec: rec, ped: ped, un: un, comp: Object.keys(comp).length, ticket: ped ? rec / ped : null,
+    vis: visitas, conv: visitas ? pedML / visitas : null };
+}
+
+function avVisitasAte(dia, horaLim) {
+  var V = AV.dados.vis;
+  if (!V) return null;
+  if (V.horaria) {
+    var m = V.porDiaHora[dia]; if (!m) return null;
+    return Object.keys(m).reduce(function (s, h) { return s + (horaLim == null || +h <= horaLim ? m[h] : 0); }, 0);
+  }
+  var t = V.porDia[dia];
+  if (t == null) return null;
+  return horaLim == null || dia === avDia() ? t : t * Math.min(1, horaLim / 24);
+}
+
+function avDelta(a, b, inverso) {
+  if (a == null || b == null || !b) return '<span class="ec-sub">—</span>';
+  var d = (a - b) / Math.abs(b), bom = inverso ? d < 0 : d > 0;
+  return '<span style="color:' + (Math.abs(d) < 0.005 ? 'var(--text2)' : bom ? 'var(--green)' : 'var(--red)') + '">' +
+    (d > 0 ? '▲' : d < 0 ? '▼' : '=') + ' ' + Math.abs(d * 100).toFixed(0) + '%</span>';
+}
+
+function avFmtR(v) { return v == null ? '—' : 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function avFmtN(v, c) { return v == null ? '—' : v.toLocaleString('pt-BR', { maximumFractionDigits: c || 0 }); }
+
+function avGrafico(hj, on) {
+  var porH = function (vs) { var a = new Array(24).fill(0); vs.forEach(function (v) { if (v.hora != null) a[v.hora] += v.total; }); return a; };
+  var A = porH(hj), B = porH(on), hAgora = new Date().getHours();
+  var max = Math.max(1, Math.max.apply(null, A.concat(B)));
+  var W = 640, H = 220, pl = 46, pb = 24, pt = 10, pr = 10, w = W - pl - pr, h = H - pt - pb;
+  var x = function (i) { return pl + i * w / 23; }, y = function (v) { return pt + h - v / max * h; };
+  var linha = function (arr, ate) { return arr.slice(0, ate + 1).map(function (v, i) { return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1); }).join(' '); };
+  var grade = [0, 0.25, 0.5, 0.75, 1].map(function (f) {
+    var v = max * f; return '<line x1="' + pl + '" x2="' + (W - pr) + '" y1="' + y(v) + '" y2="' + y(v) + '" stroke="currentColor" stroke-opacity=".08"/>' +
+      '<text x="' + (pl - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end" font-size="10" fill="currentColor" fill-opacity=".5">' + (v >= 1000 ? (v / 1000).toFixed(1).replace('.', ',') + ' mil' : Math.round(v)) + '</text>';
+  }).join('');
+  var eixo = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22].map(function (i) {
+    return '<text x="' + x(i) + '" y="' + (H - 6) + '" text-anchor="middle" font-size="10" fill="currentColor" fill-opacity=".5">' + (i < 10 ? '0' : '') + i + 'h</text>';
+  }).join('');
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;color:var(--text1,#ddd)">' + grade + eixo +
+    '<path d="' + linha(B, 23) + '" fill="none" stroke="#e05297" stroke-width="2"/>' +
+    '<path d="' + linha(A, hAgora) + '" fill="none" stroke="#3b82f6" stroke-width="2.5"/>' +
+    '<circle cx="' + x(hAgora) + '" cy="' + y(A[hAgora]) + '" r="4" fill="#3b82f6"/></svg>' +
+    '<div style="display:flex;gap:14px;font-size:12px;justify-content:flex-end"><span><b style="color:#3b82f6">●</b> Hoje</span><span><b style="color:#e05297">●</b> Ontem</span></div>';
+}
+
+function avRender() {
+  var el = document.getElementById('av-root'); if (!el) return;
+  var chips = '<div class="ec-chips">' + AV_CANAIS.map(function (c) {
+    return '<button class="ec-chip ' + (AV.canal === c[0] ? 'active' : '') + '" onclick="AV.canal=\'' + c[0] + '\';avRender()">' + c[1] + '</button>';
+  }).join('') + '</div>';
+  var topo = '<div class="av-topo"><div><div class="av-titulo">Vendas de hoje <span>ao vivo</span></div>' +
+    '<div class="ec-sub">' + (AV.at ? '● atualizado às ' + AV.at.toLocaleTimeString('pt-BR').slice(0, 5) + ' · atualiza a cada 2 min' : (AV.carregando ? 'carregando…' : '')) + '</div></div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' + chips +
+    '<button class="btn-sm" onclick="avCarregar()">↻</button><button class="btn-sm" onclick="avTelaCheia()" title="Tela cheia para TV">⛶ Tela cheia</button></div></div>';
+  if (AV.erro) { el.innerHTML = '<div class="card av-card">' + topo + '<div class="card-body" style="color:var(--red)">Não consegui ler o dia: ' + ecEsc(AV.erro) + '</div></div>'; return; }
+  if (!AV.dados) { el.innerHTML = '<div class="card av-card">' + topo + '<div class="card-body ec-sub">Lendo as vendas de hoje…</div></div>'; return; }
+
+  var D = AV.dados, hl = avHoraAgora();
+  var vH = avVendas(D.hoje, 'hoje', null), vO = avVendas(D.ontem, 'ontem', hl), vS = avVendas(D.sem, 'sem', hl), vOdia = avVendas(D.ontem, 'ontem', null);
+  var soML = AV.canal === 'todos' || AV.canal === 'ml' || AV.canal === 'full';
+  var visH = soML ? avVisitasAte(D.hoje, null) : null, visO = soML ? avVisitasAte(D.ontem, hl) : null, visS = null;
+  var R = avResumo(vH, visH), Ro = avResumo(vO, visO), Rs = avResumo(vS, visS);
+  /* conversão: só pedidos do ML sobre visitas do ML, mesmo com "todos" selecionado */
+  var card = function (rot, val, a, b, c, nota) {
+    return '<div class="av-kpi"><div class="av-kpi-l">' + rot + '</div><div class="av-kpi-v">' + val + '</div>' +
+      '<div class="av-kpi-d">vs ontem ' + a + ' · vs semana passada ' + b + '</div>' + (nota ? '<div class="ec-sub" style="font-size:10px">' + nota + '</div>' : '') + '</div>';
+  };
+  var kpis = '<div class="av-kpis">' +
+    card('Visitas únicas', soML ? avFmtN(R.vis) : 'N.D.', soML ? avDelta(R.vis, Ro.vis) : '—', '—', null, soML ? 'Mercado Livre' + (D.vis && !D.vis.horaria ? ' · ontem proporcional à hora' : '') : 'canal sem visitas') +
+    card('Conversão', soML && R.conv != null ? (R.conv * 100).toFixed(2).replace('.', ',') + '%' : 'N.D.', soML ? avDelta(R.conv, Ro.conv) : '—', '—', null, soML ? 'pedidos ML ÷ visitas ML' : '') +
+    card('Compradores', avFmtN(R.comp), avDelta(R.comp, Ro.comp), avDelta(R.comp, Rs.comp)) +
+    card('Vendas', avFmtN(R.ped), avDelta(R.ped, Ro.ped), avDelta(R.ped, Rs.ped)) +
+    card('Unidades', avFmtN(R.un) + ' u.', avDelta(R.un, Ro.un), avDelta(R.un, Rs.un)) +
+    card('Ticket médio', avFmtR(R.ticket), avDelta(R.ticket, Ro.ticket), avDelta(R.ticket, Rs.ticket)) +
+    '</div>';
+
+  /* por canal (sempre todos, para ver a divisão) */
+  var porCanal = {};
+  var canalSalvo = AV.canal; AV.canal = 'todos';
+  avVendas(D.hoje, 'hoje', null).forEach(function (v) { var k = v.canal; porCanal[k] = porCanal[k] || { r: 0, n: 0 }; porCanal[k].r += v.total; porCanal[k].n++; });
+  AV.canal = canalSalvo;
+  var nomeC = { ml: 'Mercado Livre', full: 'ML Full', shopee: 'Shopee', direta: 'Venda direta' };
+  var canais = '<div class="av-canais">' + ['ml', 'full', 'shopee', 'direta'].map(function (k) {
+    var c = porCanal[k] || { r: 0, n: 0 };
+    return '<button class="av-canal ' + (AV.canal === k ? 'sel' : '') + '" onclick="AV.canal=AV.canal===\'' + k + '\'?\'todos\':\'' + k + '\';avRender()">' +
+      '<span>' + nomeC[k] + '</span><b>' + avFmtR(c.r) + '</b><span class="ec-sub">' + c.n + ' pedido' + (c.n === 1 ? '' : 's') + '</span></button>';
+  }).join('') + '</div>';
+
+  /* produtos do dia */
+  var prod = {};
+  vH.forEach(function (v) { v.itens.forEach(function (i) {
+    var k = i.sku || i.id || i.t; var p = prod[k] || (prod[k] = { t: i.t, id: i.id, sku: i.sku, q: 0, v: 0 }); p.q += i.q; p.v += i.v; if (!p.id && i.id) p.id = i.id;
+  }); });
+  var ecPorSku = {}; ((typeof EC !== 'undefined' && EC.rows) || []).forEach(function (r) { ecPorSku[r.sku] = r; });
+  var top = Object.values(prod).sort(function (a, b) { return b.v - a.v; }).slice(0, 8);
+  var produtos = top.length ? top.map(function (p, i) {
+    var it = p.id ? (state.items || []).find(function (x) { return x.id === p.id; }) : null;
+    var r = p.sku && ecPorSku[p.sku];
+    var est = r ? r.total : (it ? it.available_quantity : null);
+    var thumb = it && it.thumbnail ? '<img src="' + ecEsc(it.thumbnail) + '" alt="" style="width:40px;height:40px;object-fit:cover;border-radius:6px">' : '<div style="width:40px;height:40px"></div>';
+    return '<div class="av-prod' + (i === 0 ? ' av-prod-1' : '') + '"><div class="av-pos">' + (i + 1) + '</div>' + thumb +
+      '<div style="min-width:0"><div class="av-prod-t">' + ecEsc(p.t || p.sku || p.id) + '</div>' +
+      '<div class="ec-sub">Vendas do dia: <b>' + avFmtR(p.v) + '</b> · ' + avFmtN(p.q) + ' u.</div>' +
+      '<div class="ec-sub">Estoque: ' + (est == null ? '—' : '<b style="color:' + (est <= 3 ? 'var(--red)' : 'inherit') + '">' + avFmtN(est) + ' unidade' + (est === 1 ? '' : 's') + '</b>' + (r ? ' (Bling)' : ' (ML)')) + '</div></div></div>';
+  }).join('') : '<div class="ec-sub" style="padding:12px">Nenhuma venda hoje ainda.</div>';
+
+  var semHora = vH.filter(function (v) { return v.hora == null; }).length;
+  var notaBling = !D.bl.hoje.ok ? 'Bling não conectado: Shopee e venda direta fora da conta.' :
+    (semHora ? semHora + ' pedido(s) de Shopee/venda direta entram nos totais, mas não na curva por hora (o Bling não informa o horário). No comparativo, os dias anteriores desses canais entram proporcionais à hora.' : '');
+
+  el.innerHTML = '<div class="card av-card">' + topo +
+    '<div class="av-grande"><div class="ec-sub">' + (AV.canal === 'todos' ? 'Todos os canais' : nomeC[AV.canal]) + ' · ' + new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' }) + '</div>' +
+    '<div class="av-total">' + avFmtR(R.rec) + '</div>' +
+    '<div class="av-kpi-d">vs ontem até ' + new Date().toLocaleTimeString('pt-BR').slice(0, 5) + ' ' + avDelta(R.rec, Ro.rec) + ' (' + avFmtR(Ro.rec) + ') · ontem fechou em ' + avFmtR(avResumo(vOdia, null).rec) + '</div></div>' +
+    canais +
+    '<div class="av-grid"><div class="av-col">' + kpis + '</div>' +
+    '<div class="av-col"><div class="av-sub">Vendas por hora</div>' + avGrafico(vH, vOdia) + '</div>' +
+    '<div class="av-col"><div class="av-sub">Produtos mais vendidos hoje</div>' + produtos + '</div></div>' +
+    (notaBling ? '<div class="ec-sub" style="padding:0 18px 12px;font-size:11px">' + ecEsc(notaBling) + '</div>' : '') +
+    '</div>';
+}
+
+function avTelaCheia() {
+  var el = document.getElementById('av-root'); if (!el) return;
+  if (document.fullscreenElement) document.exitFullscreen(); else if (el.requestFullscreen) el.requestFullscreen();
+}
+
+function avIniciar() {
+  if (AV.timer) return;
+  avCarregar();
+  AV.timer = setInterval(function () { if (!document.hidden) avCarregar(); }, 120000);
+  setInterval(function () { if (AV.dados && !AV.carregando) avRender(); }, 30000);   // relógio e "até a mesma hora"
+}
+/* começa sozinho quando a conta estiver carregada */
+(function avEsperar() {
+  if (typeof state !== 'undefined' && state.sellerId && !state.isDemo && (state.items || []).length) { avIniciar(); return; }
+  setTimeout(avEsperar, 3000);
+})();
 
 if (typeof module !== 'undefined') module.exports = {
   miDelta, miFaixa, miTelaVisao, miTelaProdutos, miTelaMarcas, miRender,
