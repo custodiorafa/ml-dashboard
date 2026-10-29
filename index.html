@@ -10805,6 +10805,9 @@ function miRender() {
    Regras de corte (padrão do roteiro, todas editáveis na tela):
    - Regra 1: cliques ≥ MIN_CLIQUES e nenhuma venda na janela.
    - Regra 2: ACOS > ACOS_MAX com pelo menos 1 venda.
+   - Alerta TACOS: TACOS > TACOS_MAX (padrão 8%). Só alerta, não pausa.
+     TACOS = custo ÷ (vendas atribuídas ao Ads + vendas orgânicas dos itens
+     anunciados) — a mesma conta do Mercado Ads (métrica "tacos" da API).
    Proteções (nunca pausar):
    - anúncio que entrou na campanha há menos de N dias — medido pela
      presença de impressões nos primeiros 3 dias da janela;
@@ -10828,8 +10831,8 @@ function miRender() {
 
 var ADS = { carregando: false, erro: null, msg: '', adv: null, campanhas: [], ads: [], inicio: {}, carregadoEm: null,
             filtro: 'pausar', camp: '', sel: {}, diag: [] };
-var ADS_PADRAO = { janela: 20, minCliques: 1, acosMax: 20, minImpressoes: 100, simulacao: true };
-var ADS_METRICAS = 'clicks,prints,cost,acos,units_quantity,total_amount,direct_units_quantity,indirect_units_quantity';
+var ADS_PADRAO = { janela: 20, minCliques: 1, acosMax: 20, tacosMax: 8, minImpressoes: 100, simulacao: true };
+var ADS_METRICAS = 'clicks,prints,cost,acos,tacos,units_quantity,total_amount,direct_amount,indirect_amount,organic_units_amount,direct_units_quantity,indirect_units_quantity';
 
 function adsParams() {
   try { return Object.assign({}, ADS_PADRAO, JSON.parse(localStorage.getItem('ads_params') || '{}')); }
@@ -10971,9 +10974,14 @@ function adsAvaliar(x, p, wl, margemPorItem) {
   var receita = +m.total_amount || 0;
   var acosCalc = receita > 0 ? custo / receita * 100 : null;
   var acosApi = m.acos != null && isFinite(m.acos) ? +m.acos : null;
+  var direta = +m.direct_amount || 0, indireta = +m.indirect_amount || 0, organico = +m.organic_units_amount || 0;
+  var tacos = receita + organico > 0 ? custo / (receita + organico) * 100 : null;
   var r = {
     id: id, titulo: x.title || (x.item && x.item.title) || '', campanha: x.campaign_id || '', status: x.status || '',
     cliques: cliques, imp: imp, custo: custo, vendas: vendas, receita: receita, acos: acosCalc, acosApi: acosApi,
+    direta: direta, indireta: indireta, organico: organico, tacos: tacos,
+    tacosApi: m.tacos != null && isFinite(m.tacos) ? +m.tacos : null,
+    alertaTacos: tacos != null && tacos > p.tacosMax,
     acosDiverge: acosCalc != null && acosApi != null && Math.abs(acosCalc - acosApi) > 1,
     regra: null, protecao: null, decisao: 'manter', motivo: '',
     margem: margemPorItem[id] != null ? margemPorItem[id] : null,
@@ -11010,6 +11018,7 @@ function adsAnalise() {
   return ADS.ads.map(function (x) { return adsAvaliar(x, p, wl, margemPorItem); })
     .filter(function (r) { return !ADS.camp || String(r.campanha) === ADS.camp; });
 }
+function adsNoFiltro(r) { return !ADS.filtro || (ADS.filtro === 'tacos' ? r.alertaTacos && r.decisao !== 'pausado' : r.decisao === ADS.filtro); }
 
 /* ─── pausar / reativar ───────────────────────────────────────────────── */
 async function adsMudarStatus(id, status) {
@@ -11067,7 +11076,9 @@ async function adsExportar() {
     return { 'Data análise': (ADS.carregadoEm || '').slice(0, 10), 'Janela': d.de + ' a ' + d.ate, 'MLB': r.id, 'Título': r.titulo,
       'Campanha': r.campanha, 'Status': r.status, 'Cliques': r.cliques, 'Impressões': r.imp, 'Custo Ads (R$)': r.custo,
       'Vendas (un)': r.vendas, 'Receita Ads (R$)': r.receita, 'ACOS calculado (%)': r.acos == null ? '' : +r.acos.toFixed(2),
-      'ACOS da API (%)': r.acosApi == null ? '' : r.acosApi, 'Margem antes do Ads (%)': r.margem == null ? '' : +r.margem.toFixed(1),
+      'ACOS da API (%)': r.acosApi == null ? '' : r.acosApi, 'Vendas diretas (R$)': r.direta, 'Vendas indiretas (R$)': r.indireta,
+      'Vendas orgânicas (R$)': r.organico, 'TACOS (%)': r.tacos == null ? '' : +r.tacos.toFixed(2), 'Alerta TACOS': r.alertaTacos ? 'acima de ' + p.tacosMax + '%' : '',
+      'Margem antes do Ads (%)': r.margem == null ? '' : +r.margem.toFixed(1),
       'Regra': r.regra || '', 'Proteção': r.protecao || '', 'Decisão': r.decisao, 'Motivo': r.motivo };
   });
   var log = adsLog().map(function (x) {
@@ -11115,8 +11126,11 @@ function adsRender() {
 
   var A = adsAnalise();
   var cont = { pausar: 0, protegido: 0, registrar: 0, manter: 0, pausado: 0 }, r1 = 0, r2 = 0, eco = 0, custoTot = 0, recTot = 0, diverg = 0;
+  var dirTot = 0, indTot = 0, orgTot = 0, nTacos = 0, custoTacos = 0;
   A.forEach(function (r) {
     cont[r.decisao]++; custoTot += r.custo; recTot += r.receita;
+    dirTot += r.direta; indTot += r.indireta; orgTot += r.organico;
+    if (r.alertaTacos && r.decisao !== 'pausado') { nTacos++; custoTacos += r.custo; }
     if (r.acosDiverge) diverg++;
     if (r.decisao === 'pausar') { eco += r.custo; if (r.regra === 'Regra 1') r1++; else r2++; }
   });
@@ -11129,14 +11143,26 @@ function adsRender() {
     card('Para pausar', ecInt(cont.pausar), r1 + ' pela Regra 1 · ' + r2 + ' pela Regra 2', cont.pausar ? 'var(--red)' : '') +
     card('Custo que deixa de gastar', adsMoney(eco), 'gasto desses anúncios em ' + p.janela + ' dias') +
     card('Protegidos', ecInt(cont.protegido), 'cairiam numa regra, mas estão protegidos') +
-    card('ACOS da conta', adsPct(recTot > 0 ? custoTot / recTot * 100 : null), adsMoney(custoTot) + ' em Ads · ' + adsMoney(recTot) + ' vendidos') +
+    '</div>';
+  var acosConta = recTot > 0 ? custoTot / recTot * 100 : null;
+  var tacosConta = recTot + orgTot > 0 ? custoTot / (recTot + orgTot) * 100 : null;
+  var resultado = '<div class="card ec-sec"><div class="card-head"><span class="card-title">Resultado do Ads</span>' +
+    '<span class="ec-sub">' + p.janela + ' dias' + (ADS.camp ? ' · campanha filtrada' : ' · todas as campanhas') + '</span></div>' +
+    '<div class="kpi-row" style="padding:0 18px 14px">' +
+    card('Investimento', adsMoney(custoTot), 'custo do Product Ads') +
+    card('Vendas atribuídas', adsMoney(recTot), 'diretas ' + adsMoney(dirTot) + ' · indiretas ' + adsMoney(indTot)) +
+    card('ACOS', adsPct(acosConta), 'investimento ÷ vendas atribuídas', acosConta != null && acosConta > p.acosMax ? 'var(--red)' : '') +
+    card('TACOS', adsPct(tacosConta), 'investimento ÷ (atribuídas + orgânicas ' + adsMoney(orgTot) + ')', tacosConta != null && tacosConta > p.tacosMax ? 'var(--red)' : 'var(--green)') +
+    card('Alerta TACOS', ecInt(nTacos), 'anúncios acima de ' + adsPct(p.tacosMax) + ' · ' + adsMoney(custoTacos) + ' investidos', nTacos ? 'var(--orange)' : '') +
+    '</div>' + (tacosConta != null && tacosConta > p.tacosMax
+      ? '<div style="padding:0 18px 14px;color:var(--red);font-size:13px"><b>⚠ TACOS da conta em ' + adsPct(tacosConta) + ', acima do limite de ' + adsPct(p.tacosMax) + '.</b> O Ads está pesando demais sobre o faturamento dos itens anunciados.</div>' : '') +
     '</div>';
 
   var simul = p.simulacao;
   var params = '<div class="card ec-sec"><div class="card-head"><span class="card-title">Regras de corte</span>' +
     '<span class="ec-sub">editáveis · ficam salvas neste navegador</span></div><div class="card-body">' +
     '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end">' +
-    [['janela', 'Janela (dias)'], ['minCliques', 'Regra 1: cliques mínimos'], ['acosMax', 'Regra 2: ACOS máximo (%)'], ['minImpressoes', 'Impressões mínimas']]
+    [['janela', 'Janela (dias)'], ['minCliques', 'Regra 1: cliques mínimos'], ['acosMax', 'Regra 2: ACOS máximo (%)'], ['tacosMax', 'Alerta: TACOS máximo (%)'], ['minImpressoes', 'Impressões mínimas']]
       .map(function (c) {
         return '<label class="ec-f" style="min-width:150px"><span>' + c[1] + '</span><input type="number" min="0" value="' + p[c[0]] +
           '" onchange="adsSetParam(\'' + c[0] + '\', this.value)"></label>';
@@ -11147,6 +11173,7 @@ function adsRender() {
     '</div><div class="ec-sub" style="font-size:12px;margin-top:8px;line-height:1.6">' +
     '<b>Regra 1</b>: ' + p.minCliques + '+ cliques e nenhuma venda em ' + p.janela + ' dias. ' +
     '<b>Regra 2</b>: ACOS acima de ' + p.acosMax + '% com pelo menos 1 venda. ' +
+    '<b>Alerta</b>: TACOS acima de ' + p.tacosMax + '% (investimento ÷ vendas atribuídas + orgânicas do anúncio) — só sinaliza, não pausa. ' +
     '<b>Nunca pausa</b>: anúncio há menos de ' + p.janela + ' dias na campanha, com menos de ' + p.minImpressoes +
     ' impressões ou na lista de exceção. Sem clique e sem venda: só registra.' +
     (!ADS.inicioOk ? '<br><span style="color:var(--orange)">Não consegui medir quem entrou na campanha há pouco: a proteção de ' +
@@ -11161,12 +11188,12 @@ function adsRender() {
     }).join('') + '</select>';
   var filtros = [['pausar', 'Para pausar (' + cont.pausar + ')'], ['protegido', 'Protegidos (' + cont.protegido + ')'],
     ['registrar', 'Sem clique e sem venda (' + cont.registrar + ')'], ['manter', 'Dentro das regras (' + cont.manter + ')'],
-    ['pausado', 'Já pausados (' + cont.pausado + ')'], ['', 'Todos']];
+    ['tacos', '⚠ TACOS acima de ' + p.tacosMax + '% (' + nTacos + ')'], ['pausado', 'Já pausados (' + cont.pausado + ')'], ['', 'Todos']];
   var chips = '<div class="ec-chips">' + filtros.map(function (f) {
     return '<button class="ec-chip ' + (ADS.filtro === f[0] ? 'active' : '') + '" onclick="ADS.filtro=\'' + f[0] + '\';adsRender()">' + f[1] + '</button>';
   }).join('') + '</div>';
 
-  var vis = A.filter(function (r) { return !ADS.filtro || r.decisao === ADS.filtro; })
+  var vis = A.filter(adsNoFiltro)
     .sort(function (a, b) { return b.custo - a.custo; });
   var podePausar = ADS.filtro === 'pausar' && vis.length;
   var acoes = podePausar
@@ -11194,6 +11221,9 @@ function adsRender() {
       '<td class="r mono"' + (r.acosDiverge ? ' title="ACOS da API: ' + adsPct(r.acosApi) + '"' : '') + '>' +
         '<span style="color:' + (r.acos != null && r.acos > p.acosMax ? 'var(--red)' : 'inherit') + '">' + adsPct(r.acos) + '</span>' +
         (r.acosDiverge ? '<div class="ec-sub" style="font-size:10px">API ' + adsPct(r.acosApi) + '</div>' : '') + '</td>' +
+      '<td class="r mono" title="Investimento ÷ (vendas atribuídas + orgânicas ' + adsMoney(r.organico) + ')">' +
+        '<span style="color:' + (r.alertaTacos ? 'var(--orange)' : 'inherit') + '">' + adsPct(r.tacos) + '</span>' +
+        (r.alertaTacos ? '<div style="font-size:10px;color:var(--orange)">⚠ acima de ' + adsPct(p.tacosMax) + '</div>' : '') + '</td>' +
       '<td class="r mono" title="Margem de contribuição antes do Ads (Estoque & Compras). ACOS acima dela = venda patrocinada no prejuízo.">' +
         (r.margem == null ? '<span class="ec-sub">—</span>' : '<span style="color:' + (acosAcimaMargem ? 'var(--red)' : 'inherit') + '">' + adsPct(r.margem) + '</span>' +
         (acosAcimaMargem ? '<div style="font-size:10px;color:var(--red)">ACOS acima</div>' : '')) + '</td>' +
@@ -11209,9 +11239,9 @@ function adsRender() {
     '<span style="display:flex;gap:8px">' + camps + '</span></div>' +
     '<div style="padding:0 18px 10px">' + chips + '</div>' + acoes +
     '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr><th></th><th>Anúncio</th><th class="r">Impressões</th>' +
-    '<th class="r">Cliques</th><th class="r">Custo</th><th class="r">Vendas</th><th class="r">Receita</th><th class="r">ACOS</th>' +
+    '<th class="r">Cliques</th><th class="r">Custo</th><th class="r">Vendas</th><th class="r">Vendas atribuídas</th><th class="r">ACOS</th><th class="r">TACOS</th>' +
     '<th class="r">Margem antes do Ads</th><th>Decisão</th><th></th></tr></thead><tbody>' +
-    (linhas || '<tr><td colspan="11" class="ec-sub" style="padding:16px">Nada neste filtro.</td></tr>') +
+    (linhas || '<tr><td colspan="12" class="ec-sub" style="padding:16px">Nada neste filtro.</td></tr>') +
     '</tbody></table></div></div>';
 
   var log = adsLog();
@@ -11234,7 +11264,7 @@ function adsRender() {
     'onchange="adsSetWhitelist(this.value)">' + ecEsc(wl.join('\n')) + '</textarea>' +
     '<div class="ec-sub" style="font-size:12px">' + wl.length + ' anúncio(s). Também dá para marcar pela estrela ☆ na tabela.</div></div></div>';
 
-  el.innerHTML = kpis + params + tabela + logHtml + wlHtml;
+  el.innerHTML = kpis + resultado + params + tabela + logHtml + wlHtml;
 }
 
 
