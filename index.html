@@ -662,6 +662,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .ads-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; padding:16px 18px 20px; margin:0; }
 .ads-regras { display:flex; flex-wrap:wrap; gap:14px 30px; align-items:center; }
 .ads-regras .ec-f { margin:0; gap:10px; justify-content:flex-start; }
+.ads-link { color:inherit; text-decoration:none; } .ads-link:hover { color:var(--accent); text-decoration:underline; }
 .ads-log td, .ads-log th { padding:9px 16px!important; }
 .ec-table.ads-log { min-width:900px; }
 .ec-table th { position:sticky; top:0; background:var(--surface); z-index:2; cursor:pointer; white-space:nowrap; user-select:none; }
@@ -11072,6 +11073,20 @@ async function adsExecutar(ids, status) {
   showToast(ok + ' ok · ' + falha + ' com erro' + (falha ? ' — veja o log; os com erro precisam ser pausados no Mercado Ads' : ''), falha ? 'err' : 'ok');
   adsRender();
 }
+/* abre a campanha do anúncio no Mercado Ads, no mesmo período do painel.
+   O Mercado Ads não aceita o anúncio na URL da busca: o MLB vai para a área
+   de transferência para colar em "Procurar por # ou título". */
+function adsUrlCampanha(camp) {
+  var d = ADS.janelaUsada || adsDatas(adsParams().janela);
+  var base = 'https://ads.mercadolivre.com.br/product-ads/admin/';
+  return camp ? base + 'campaigns/' + encodeURIComponent(camp) + '/dashboard?date_from=' + d.de + '&date_to=' + d.ate : base + 'ads';
+}
+function adsAbrirMercadoAds(id, camp) {
+  window.open(adsUrlCampanha(camp), '_blank', 'noopener');
+  if (!id) return;
+  var aviso = function (ok) { showToast(ok ? id + ' copiado — cole na busca "Procurar por # ou título" da campanha' : 'Na campanha, procure por ' + id, 'ok'); };
+  try { navigator.clipboard.writeText(id).then(function () { aviso(true); }, function () { aviso(false); }); } catch (e) { aviso(false); }
+}
 function adsSelecionados() { return Object.keys(ADS.sel).filter(function (k) { return ADS.sel[k]; }); }
 function adsMarcar(id, v) { ADS.sel[id] = v; adsRenderResumoSel(); }
 function adsMarcarTodos(v) {
@@ -11195,6 +11210,7 @@ function adsRender() {
     (diverg ? '<br><span style="color:var(--orange)">' + diverg + ' anúncio(s) com ACOS calculado diferente do ACOS da API em mais de 1 ponto — ' +
       'confira a janela de datas no painel do ML.</span>' : '') + '</div></div></div>';
 
+  var abrirCamp = '<button class="btn-sm" title="Abrir no Mercado Ads" onclick="window.open(adsUrlCampanha(ADS.camp),\'_blank\',\'noopener\')">↗ ' + (ADS.camp ? 'Abrir campanha no Mercado Ads' : 'Abrir Mercado Ads') + '</button>';
   var camps = '<select class="ec-sel" onchange="ADS.camp=this.value;adsRender()"><option value="">Todas as campanhas</option>' +
     ADS.campanhas.map(function (c) {
       return '<option value="' + ecEsc(c.id) + '"' + (ADS.camp === String(c.id) ? ' selected' : '') + '>' + ecEsc(c.name || c.id) +
@@ -11227,8 +11243,9 @@ function adsRender() {
     return '<tr>' +
       '<td>' + (r.decisao === 'pausar' ? '<input type="checkbox" ' + (ADS.sel[r.id] ? 'checked' : '') +
         ' onchange="adsMarcar(\'' + r.id + '\', this.checked)">' : '') + '</td>' +
-      '<td><div><b>' + ecEsc(r.titulo || r.id) + '</b></div><div class="ec-sub mono" style="font-size:11px">' + ecEsc(r.id) +
-        (r.campanha ? ' · campanha ' + ecEsc(r.campanha) : '') + '</div></td>' +
+      '<td><div><a href="#" class="ads-link" title="Abrir a campanha no Mercado Ads (o MLB é copiado para a busca)" onclick="event.preventDefault();adsAbrirMercadoAds(\'' + r.id + '\',\'' + ecEsc(r.campanha) + '\')"><b>' + ecEsc(r.titulo || r.id) + '</b> ↗</a></div>' +
+        '<div class="ec-sub mono" style="font-size:11px">' + ecEsc(r.id) + (r.campanha ? ' · campanha ' + ecEsc(r.campanha) : '') +
+        (r.link ? ' · <a href="' + ecEsc(r.link) + '" target="_blank" rel="noopener" class="ads-link">ver anúncio</a>' : '') + '</div></td>' +
       '<td class="r mono">' + ecInt(r.imp) + '</td><td class="r mono">' + ecInt(r.cliques) + '</td>' +
       '<td class="r mono">' + adsMoney(r.custo) + '</td><td class="r mono">' + ecInt(r.vendas) + '</td>' +
       '<td class="r mono">' + adsMoney(r.receita) + '</td>' +
@@ -11243,6 +11260,7 @@ function adsRender() {
         (acosAcimaMargem ? '<div style="font-size:10px;color:var(--red)">ACOS acima</div>' : '')) + '</td>' +
       '<td><span class="ec-tag" style="color:' + dc[1] + '">' + dc[0] + '</span><div class="ec-sub" style="font-size:11px">' + ecEsc(r.motivo) + '</div></td>' +
       '<td style="white-space:nowrap">' +
+        '<button class="btn-sm" title="Abrir a campanha deste anúncio no Mercado Ads para ajustar (o MLB é copiado para a busca)" onclick="adsAbrirMercadoAds(\'' + r.id + '\',\'' + ecEsc(r.campanha) + '\')">↗ Mercado Ads</button> ' +
         '<button class="btn-sm" title="' + (naWl ? 'Tirar da lista de exceção' : 'Nunca pausar este anúncio') + '" onclick="adsToggleWhitelist(\'' + r.id + '\')">' +
           (naWl ? '★ exceção' : '☆') + '</button> ' +
         (r.decisao === 'pausado' ? '<button class="btn-sm" onclick="adsExecutar([\'' + r.id + '\'],\'active\')">reativar</button>' : '') +
@@ -11250,7 +11268,7 @@ function adsRender() {
   }).join('');
 
   var tabela = '<div class="card ec-sec"><div class="card-head"><span class="card-title">Anúncios patrocinados</span>' +
-    '<span style="display:flex;gap:8px">' + camps + '</span></div>' +
+    '<span style="display:flex;gap:8px;align-items:center">' + camps + abrirCamp + '</span></div>' +
     '<div style="padding:4px 18px 12px">' + chips + '</div>' + acoes +
     '<div class="ec-table-wrap"><table class="t ec-table ads-table"><thead><tr><th></th><th>Anúncio</th><th class="r">Impressões</th>' +
     '<th class="r">Cliques</th><th class="r">Custo</th><th class="r">Vendas</th><th class="r">Vendas atribuídas</th><th class="r">ACOS</th><th class="r">TACOS</th>' +
