@@ -5352,8 +5352,8 @@ async function ccEnrich(facts) {
     const todo = {}; // comprador → pedido mais recente
     facts.forEach(x => { if (x.b && x.src !== 'bling' && !CC.buyers[x.b] && x.st !== 'cancelled' && (!todo[x.b] || x.d > todo[x.b].d)) todo[x.b] = x; });
     const list = Object.values(todo).sort((a, b) => String(b.d).localeCompare(String(a.d)));
-    let done = 0; CC.enrich = { done: 0, total: list.length };
-    await prPool(list, 6, async x => {
+    let done = 0; CC.enrich = { done: 0, total: list.length }; if (list.length) ccEnrichNote();
+    await prPool(list, 8, async x => {
       const r = await prGet(`/orders/${x.o}/billing_info`);
       const bi = r && (r.billing_info || r);
       if (bi && (bi.doc_type || bi.additional_info)) {
@@ -5363,11 +5363,16 @@ async function ccEnrich(facts) {
         CC.buyers[x.b] = rec; await ccBuyerPut(rec);
       }
       done++; CC.enrich.done = done;
-      if (done % 150 === 0) { ccEnrichNote(); }
+      if (done % 50 === 0) { ccEnrichNote(); }
     });
-  } finally { CC.enriching = false; CC.enrich = null; ccRender(); }
+  } finally { CC.enriching = false; CC.enrich = null; if (!CC.loading) ccProgress(null); ccRender(); }
 }
-function ccEnrichNote() { const el = document.getElementById('cc-enrich'); if (el && CC.enrich) el.textContent = `Lendo UF e PF/PJ dos clientes: ${CC.enrich.done}/${CC.enrich.total}…`; }
+function ccEnrichNote() {
+  if (!CC.enrich) return;
+  const el = document.getElementById('cc-enrich'); if (el) el.textContent = `Lendo UF e PF/PJ dos clientes: ${CC.enrich.done}/${CC.enrich.total}…`;
+  // barra de progresso visível em qualquer aba (a leitura é feita uma vez por cliente e fica gravada)
+  if (!CC.loading) ccProgress(`Lendo situação de ICMS, UF, nome e CPF/CNPJ dos clientes: ${ecInt(CC.enrich.done)} de ${ecInt(CC.enrich.total)} (só na primeira vez)`, CC.enrich.total ? CC.enrich.done / CC.enrich.total * 100 : null);
+}
 const ccB = x => (CC.buyers && CC.buyers[x.b]) || null;
 const ccTipo = b => !b ? '—' : b.dt === 'CNPJ' ? 'PJ' : b.dt === 'CPF' ? 'PF' : '—';
 const ccContribX = b => !b ? '' : b.dt === 'CPF' ? 'Não contribuinte' : ccContrib(b); // para exportação (PF = não contribuinte)
@@ -5800,7 +5805,7 @@ async function ccRelatorioPrep() {
   alvo.forEach(x => { const b = CC.buyers[x.b]; if (!b || b.doc !== undefined) return; if (!falta[x.b] || x.d > falta[x.b].d) falta[x.b] = x; });
   const lista = Object.values(falta);
   if (!lista.length) return;
-  if (lista.length > 4000) { showToast('Muitos clientes sem CPF/CNPJ lido (' + lista.length + '): o relatório sai sem o documento desses. Reduza o período para completar.', 'warn'); return; }
+  if (lista.length > 20000) { showToast('Muitos clientes sem CPF/CNPJ lido (' + lista.length + '): o relatório sai sem o documento desses. Reduza o período para completar.', 'warn'); return; }
   let feito = 0; ccProgress('Lendo nome e CPF/CNPJ dos clientes: 0/' + lista.length, 0);
   const ml = lista.filter(x => x.src !== 'bling'), bl = lista.filter(x => x.src === 'bling');
   await prPool(ml, 6, async x => {
