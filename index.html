@@ -4885,7 +4885,7 @@ function ccFilter(rows) {
   const B = CC.buyers || {};
   return rows.filter(x => (!q || (x.s + ' ' + x.t + ' ' + x.o).toLowerCase().includes(q)) && (!v.curva || curvaOf[x.s] === v.curva)
     && (!v.uf || (B[x.b] && B[x.b].uf === v.uf)) && (!v.pj || ccTipo(B[x.b]) === v.pj)
-    && (!v.icms || (B[x.b] && (ccContrib(B[x.b]) === 'Contribuinte ICMS') === (v.icms === 'c')))
+    && (!v.icms || ccIcmsCls(B[x.b]) === v.icms)
     && (!v.canal || ccCanal(x) === v.canal));
 }
 function ccItem(x) {
@@ -5010,7 +5010,7 @@ function ccRender() {
       <input id="cc-q" placeholder="Filtrar por SKU, produto ou nº do pedido…" value="${ecEsc(CC.view.q)}" onchange="CC.view.q=this.value;ccRender()">
       <select onchange="CC.view.uf=this.value;ccRender()" title="UF de faturamento (depende da leitura do cadastro dos clientes)"><option value="">Todas as UFs</option>${ufs.map(u => `<option ${CC.view.uf === u ? 'selected' : ''}>${u}</option>`).join('')}</select>
       <select onchange="CC.view.pj=this.value;ccRender()"><option value="">PF e PJ</option><option ${CC.view.pj === 'PF' ? 'selected' : ''}>PF</option><option ${CC.view.pj === 'PJ' ? 'selected' : ''}>PJ</option></select>
-      <select onchange="CC.view.icms=this.value;ccRender()"><option value="">ICMS: todos</option><option value="c" ${CC.view.icms === 'c' ? 'selected' : ''}>Contribuinte</option><option value="n" ${CC.view.icms === 'n' ? 'selected' : ''}>Não contribuinte</option></select>
+      <select onchange="CC.view.icms=this.value;ccRender();if(this.value)ccEnrich(CC.facts)" title="Situação do cliente no ICMS, lida do faturamento do pedido (ML) ou do cadastro (Bling). Pessoa física é sempre não contribuinte."><option value="">ICMS: todos</option><option value="c" ${CC.view.icms === 'c' ? 'selected' : ''}>Contribuinte</option><option value="n" ${CC.view.icms === 'n' ? 'selected' : ''}>Não contribuinte (inclui PF)</option><option value="ni" ${CC.view.icms === 'ni' ? 'selected' : ''}>ICMS não informado</option></select>
       <select onchange="CC.view.canal=this.value;ccRender()"><option value="">Todos os canais</option>${[...new Set(CC.facts.concat(CC.prev).map(ccCanal))].sort().map(c => `<option ${CC.view.canal === c ? 'selected' : ''}>${ecEsc(c)}</option>`).join('')}</select>
       <button class="btn-sm" onclick="ccOpenLojas()" title="Nomes dos canais e tarifa estimada">⚙ Canais</button></div>
   </div>
@@ -5358,7 +5358,8 @@ async function ccEnrich(facts) {
       const bi = r && (r.billing_info || r);
       if (bi && (bi.doc_type || bi.additional_info)) {
         const g = k => ((bi.additional_info || []).find(a => a.type === k) || {}).value || '';
-        const rec = { id: x.b, dt: bi.doc_type || g('DOC_TYPE') || '', uf: String(g('STATE_CODE')).replace(/^BR-/, ''), city: g('CITY_NAME'), contrib: g('TAXPAYER_TYPE_ID'), ie: !!g('STATE_REGISTRATION'), at: Date.now() };
+        const rec = { id: x.b, dt: bi.doc_type || g('DOC_TYPE') || '', uf: String(g('STATE_CODE')).replace(/^BR-/, ''), city: g('CITY_NAME'), contrib: g('TAXPAYER_TYPE_ID'), ie: !!g('STATE_REGISTRATION'),
+          nm: (g('FIRST_NAME') + ' ' + g('LAST_NAME')).trim(), doc: bi.doc_number || g('DOC_NUMBER') || '', at: Date.now() };
         CC.buyers[x.b] = rec; await ccBuyerPut(rec);
       }
       done++; CC.enrich.done = done;
@@ -5370,6 +5371,8 @@ function ccEnrichNote() { const el = document.getElementById('cc-enrich'); if (e
 const ccB = x => (CC.buyers && CC.buyers[x.b]) || null;
 const ccTipo = b => !b ? '—' : b.dt === 'CNPJ' ? 'PJ' : b.dt === 'CPF' ? 'PF' : '—';
 const ccContribX = b => !b ? '' : b.dt === 'CPF' ? 'Não contribuinte' : ccContrib(b); // para exportação (PF = não contribuinte)
+/* classe de ICMS para filtro e relatório: c = contribuinte; n = não contribuinte (PF sempre é); ni = não informado / sem cadastro */
+const ccIcmsCls = b => { const t = ccContribX(b); return t === 'Contribuinte ICMS' ? 'c' : t === 'Não contribuinte' ? 'n' : 'ni'; };
 const ccContrib = b => !b || b.dt !== 'CNPJ' ? '' : /n[aã]o/i.test(b.contrib || '') ? 'Não contribuinte' : b.contrib ? 'Contribuinte ICMS' : 'não informado';
 
 // base completa (até 180 dias) para análises de cliente
@@ -5457,7 +5460,7 @@ function ccRenderClientes(el, head) {
   const q = v.q.trim().toLowerCase();
   if (v.uf) cs = cs.filter(c => c.b && c.b.uf === v.uf);
   if (v.pj) cs = cs.filter(c => c.tipo === v.pj);
-  if (v.icms) cs = cs.filter(c => c.b && (ccContrib(c.b) === 'Contribuinte ICMS') === (v.icms === 'c'));
+  if (v.icms) cs = cs.filter(c => ccIcmsCls(c.b) === v.icms);
   const per = cs.filter(c => c.pedP > 0);
   const cnt = s => cs.filter(c => c.status === s).length;
   const recTot = per.reduce((s, c) => s + c.recP, 0);
@@ -5773,9 +5776,59 @@ async function ccExportDrill() {
    Uma linha por item vendido, no período e filtros da tela.
    CMV = custo + imposto + frete pago + tarifa de venda · MC = faturado − CMV.
    Linha sem custo no Bling fica com MC/CMV em branco e fora dos % (coluna Observação). */
+function ccRelCliente(x) {
+  const b = (CC.buyers || {})[x.b] || {}; const m = CC.blCont || {};
+  const bl = (x.src === 'bling' && m[x.b]) || m['P' + x.o] || m['P' + x.pk] || null;
+  return ccMask((bl && bl.nome) || b.nm || x.n || '', x.b);
+}
+/* Antes do relatório: garante a situação de ICMS de todos os clientes do
+   período (sem ela o filtro deixaria pedidos de fora) e completa nome e
+   CPF/CNPJ dos clientes que vão para a planilha. ML: faturamento do pedido;
+   Bling (Shopee, venda direta): cadastro do contato. Tudo fica gravado. */
+async function ccRelatorioPrep() {
+  if (!CC.buyers) await ccBuyersLoad();
+  const base = CC.facts.filter(x => x.st !== 'cancelled');
+  if (base.some(x => x.b && x.src !== 'bling' && !CC.buyers[x.b])) {
+    showToast('Lendo a situação de ICMS dos clientes do período…', 'warn');
+    while (CC.enriching) await sleep(500);
+    await ccEnrich(base);
+  }
+  // lê antes de aplicar o filtro de ICMS: o cadastro lido pode mudar a classe do cliente
+  const icms = CC.view.icms; CC.view.icms = ''; let alvo;
+  try { alvo = ccFilter(CC.facts).filter(x => x.st !== 'cancelled' && x.b); } finally { CC.view.icms = icms; }
+  const falta = {};
+  alvo.forEach(x => { const b = CC.buyers[x.b]; if (!b || b.doc !== undefined) return; if (!falta[x.b] || x.d > falta[x.b].d) falta[x.b] = x; });
+  const lista = Object.values(falta);
+  if (!lista.length) return;
+  if (lista.length > 4000) { showToast('Muitos clientes sem CPF/CNPJ lido (' + lista.length + '): o relatório sai sem o documento desses. Reduza o período para completar.', 'warn'); return; }
+  let feito = 0; ccProgress('Lendo nome e CPF/CNPJ dos clientes: 0/' + lista.length, 0);
+  const ml = lista.filter(x => x.src !== 'bling'), bl = lista.filter(x => x.src === 'bling');
+  await prPool(ml, 6, async x => {
+    const r = await prGet(`/orders/${x.o}/billing_info`); const bi = r && (r.billing_info || r);
+    const b = CC.buyers[x.b];
+    if (bi) { const g = k => ((bi.additional_info || []).find(a => a.type === k) || {}).value || '';
+      b.nm = (g('FIRST_NAME') + ' ' + g('LAST_NAME')).trim(); b.doc = bi.doc_number || g('DOC_NUMBER') || ''; if (!b.city) b.city = g('CITY_NAME'); await ccBuyerPut(b); }
+    if (++feito % 25 === 0) ccProgress('Lendo nome e CPF/CNPJ dos clientes: ' + feito + '/' + lista.length, feito / lista.length * 100);
+  });
+  for (const x of bl) {
+    const cid = String(x.b).replace(/^B/, ''); const b = CC.buyers[x.b];
+    try {
+      const r = await ccBlRaw('/contatos/' + cid); const c = (r && r.data) || {};
+      b.nm = c.nome || ''; b.doc = c.numeroDocumento || '';
+      const ind = +c.indicadorIe; // 1 contribuinte · 2 isento · 9 não contribuinte
+      if (ind === 1) b.contrib = 'Contribuinte'; else if (ind === 2 || ind === 9) b.contrib = 'Não contribuinte';
+      if (!b.uf && c.endereco && c.endereco.geral) { b.uf = c.endereco.geral.uf || ''; b.city = c.endereco.geral.municipio || b.city; }
+      await ccBuyerPut(b);
+    } catch (e) {}
+    if (++feito % 10 === 0) ccProgress('Lendo nome e CPF/CNPJ dos clientes: ' + feito + '/' + lista.length, feito / lista.length * 100);
+    await sleep(350);
+  }
+  ccProgress(null);
+}
 async function ccRelatorio() {
   if (!CC.facts.length) { showToast('Carregue a Central Comercial primeiro', 'warn'); return; }
   if (!(await ccLoadXlsx())) return;
+  try { await ccRelatorioPrep(); } catch (e) { ccProgress(null); }
   const p = ccPeriod();
   const rows = ccFilter(CC.facts).filter(x => x.st !== 'cancelled');
   if (!rows.length) { showToast('Nenhuma venda no período e filtros atuais', 'warn'); return; }
@@ -5793,7 +5846,8 @@ async function ccRelatorio() {
     if (x.ipf !== 'Bling') obs.push('imposto % padrão');
     return { x, sku: x.s, desc: x.t, data: ecDayOf(x.d), q: x.q, fat, custo: it.custo, imp: it.imposto, frete: it.frete, tarifa: x.f,
       mc: ok ? fat - cmv : null, cmv, bonus: it.bonus, cupom: it.cupom, canal: ccCanal(x).toUpperCase(), ped: x.src === 'bling' ? 'Bling ' + (x.num || x.o) : String(x.o),
-      unit: x.u, ip: x.ip, cf: x.cf || 'sem custo', uf: (B[x.b] || {}).uf || '', obs: obs.join('; ') };
+      unit: x.u, ip: x.ip, cf: x.cf || 'sem custo', uf: (B[x.b] || {}).uf || '', obs: obs.join('; '),
+      cli: ccRelCliente(x), doc: ccOculto() ? '' : ((B[x.b] || {}).doc || ''), tipo: ccTipo(B[x.b]), icms: ccContribX(B[x.b]) || 'não informado', cidade: (B[x.b] || {}).city || '', cid: x.b || x.o };
   }).sort((a, b) => a.data.localeCompare(b.data) || a.canal.localeCompare(b.canal));
 
   // agregador comum às abas de estratificação
@@ -5829,13 +5883,26 @@ async function ccRelatorio() {
   const wb = XLSX.utils.book_new();
   // 1) detalhado — mesmo layout da planilha de MC/CMV
   const cab1 = ['SKU', 'Descrição', 'Data', 'Qtd Vendida', 'R$ Valor Faturado', 'R$ Custo', 'R$ Imposto', 'R$ Frete Pago', 'R$ Tarifa de Venda', 'R$ MC', '% MC', '$ CMV', '% CMV', 'Canal de venda',
-    'Pedido', 'Preço unitário', '% Imposto', 'Origem do custo', 'UF', 'Observação', 'R$ Bônus envio Flex', 'R$ MC + bônus', '% MC + bônus', 'R$ Cupom do vendedor'];
+    'Pedido', 'Preço unitário', '% Imposto', 'Origem do custo', 'UF', 'Observação', 'R$ Bônus envio Flex', 'R$ MC + bônus', '% MC + bônus', 'R$ Cupom do vendedor',
+    'Cliente', 'CPF/CNPJ', 'PF/PJ', 'Situação ICMS', 'Cidade'];
   const d1 = linhas.map(l => [l.sku, l.desc, l.data, l.q, r2(l.fat), r2(l.custo), r2(l.imp), r2(l.frete), r2(l.tarifa), r2(l.mc), l.mc != null && l.fat ? l.mc / l.fat : null,
-    r2(l.cmv), l.cmv != null && l.fat ? l.cmv / l.fat : null, l.canal, l.ped, r2(l.unit), l.ip != null ? l.ip / 100 : null, l.cf, l.uf, l.obs, r2(l.bonus), l.mc != null ? r2(l.mc + l.bonus) : null, l.mc != null && l.fat ? (l.mc + l.bonus) / l.fat : null, r2(l.cupom)]);
+    r2(l.cmv), l.cmv != null && l.fat ? l.cmv / l.fat : null, l.canal, l.ped, r2(l.unit), l.ip != null ? l.ip / 100 : null, l.cf, l.uf, l.obs, r2(l.bonus), l.mc != null ? r2(l.mc + l.bonus) : null, l.mc != null && l.fat ? (l.mc + l.bonus) / l.fat : null, r2(l.cupom), l.cli, l.doc, l.tipo, l.icms, l.cidade]);
   const tg = agrega(() => 'Total')[0];
-  d1.push(['TOTAL', '', '', tg.q, r2(tg.fat), r2(tg.custo), r2(tg.imp), r2(tg.frete), r2(tg.tarifa), r2(tg.mc), tg.fatOk ? tg.mc / tg.fatOk : null, r2(tg.cmv), tg.fatOk ? tg.cmv / tg.fatOk : null, '', tg.ped.size + ' pedidos', '', '', '', '', '', r2(tg.bonus), r2(tg.mc + tg.bonus), tg.fatOk ? (tg.mc + tg.bonus) / tg.fatOk : null, r2(tg.cupom)]);
-  XLSX.utils.book_append_sheet(wb, aba(cab1, d1, ['', '', 'd', 'n', 'r', 'r', 'r', 'r', 'r', 'r', 'p', 'r', 'p', '', '', 'r', 'p', '', '', '', 'r', 'r', 'p', 'r'],
-    [14, 55, 11, 8, 14, 12, 12, 12, 14, 12, 8, 12, 8, 22, 18, 12, 9, 14, 5, 40, 14, 13, 10]), 'Vendas detalhadas');
+  d1.push(['TOTAL', '', '', tg.q, r2(tg.fat), r2(tg.custo), r2(tg.imp), r2(tg.frete), r2(tg.tarifa), r2(tg.mc), tg.fatOk ? tg.mc / tg.fatOk : null, r2(tg.cmv), tg.fatOk ? tg.cmv / tg.fatOk : null, '', tg.ped.size + ' pedidos', '', '', '', '', '', r2(tg.bonus), r2(tg.mc + tg.bonus), tg.fatOk ? (tg.mc + tg.bonus) / tg.fatOk : null, r2(tg.cupom), '', '', '', '', '']);
+  XLSX.utils.book_append_sheet(wb, aba(cab1, d1, ['', '', 'd', 'n', 'r', 'r', 'r', 'r', 'r', 'r', 'p', 'r', 'p', '', '', 'r', 'p', '', '', '', 'r', 'r', 'p', 'r', '', '', '', '', ''],
+    [14, 55, 11, 8, 14, 12, 12, 12, 14, 12, 8, 12, 8, 22, 18, 12, 9, 14, 5, 40, 14, 13, 10, 14, 36, 18, 6, 17, 22]), 'Vendas detalhadas');
+
+  // 1b) por cliente e por UF de destino (relatório para a contabilidade: use o filtro de ICMS da tela)
+  const porCli = agrega(l => l.cid).sort((a, b) => b.fat - a.fat);
+  const linCli = porCli.map(a => [a.l.cli, a.l.doc, a.l.tipo, a.l.icms, a.l.uf, a.l.cidade, ...linhaAgg(a).slice(0, 3)]);
+  linCli.push(['TOTAL', '', '', '', '', '', ...linhaAgg(tg).slice(0, 3)]);
+  XLSX.utils.book_append_sheet(wb, aba(['Cliente', 'CPF/CNPJ', 'PF/PJ', 'Situação ICMS', 'UF', 'Cidade', 'Pedidos', 'Qtd Vendida', 'R$ Valor Faturado'], linCli,
+    ['', '', '', '', '', '', 'n', 'n', 'r'], [36, 18, 6, 17, 5, 22, 9, 10, 15]), 'Por cliente');
+  const porUf = agrega(l => l.uf || '(sem UF)').sort((a, b) => b.fat - a.fat);
+  const linUf = porUf.map(a => [a.k, new Set(linhas.filter(l => (l.uf || '(sem UF)') === a.k).map(l => l.cid)).size, ...linhaAgg(a).slice(0, 3), totFat ? a.fat / totFat : null]);
+  linUf.push(['TOTAL', new Set(linhas.map(l => l.cid)).size, ...linhaAgg(tg).slice(0, 3), 1]);
+  XLSX.utils.book_append_sheet(wb, aba(['UF de destino', 'Clientes', 'Pedidos', 'Qtd Vendida', 'R$ Valor Faturado', '% do Faturamento'], linUf,
+    ['', 'n', 'n', 'n', 'r', 'p'], [14, 10, 10, 11, 16, 14]), 'Por UF');
 
   // 2) por canal
   const porCanal = agrega(l => l.canal).sort((a, b) => b.fat - a.fat);
@@ -5863,7 +5930,8 @@ async function ccRelatorio() {
     ['', '', ...fmtAgg], [24, 9, 9, 10, 15, 13, 12, 12, 14, 13, 8, 13, 8, 12, 12]), 'Canal x mês');
 
   // 7) como ler
-  const v = CC.view; const filtros = [v.q && 'busca "' + v.q + '"', v.canal && 'canal ' + v.canal, v.curva && 'curva ' + v.curva, v.uf && 'UF ' + v.uf, v.pj && v.pj].filter(Boolean).join(', ') || 'nenhum';
+  const v = CC.view; const filtros = [v.q && 'busca "' + v.q + '"', v.canal && 'canal ' + v.canal, v.curva && 'curva ' + v.curva, v.uf && 'UF ' + v.uf, v.pj && v.pj,
+    v.icms && ({ c: 'contribuintes do ICMS', n: 'não contribuintes do ICMS (inclui pessoa física)', ni: 'ICMS não informado' })[v.icms]].filter(Boolean).join(', ') || 'nenhum';
   const leia = [['Relatório de vendas — Titanium Power Parts'], [''], ['Período', p.from.split('-').reverse().join('/') + ' a ' + p.to.split('-').reverse().join('/')], ['Filtros da tela', filtros], ['Gerado em', new Date().toLocaleString('pt-BR')], [''],
     ['R$ Valor Faturado', 'quantidade × preço de venda (cancelados não entram)'],
     ['R$ Custo', 'custo do produto no Bling (kits = soma dos componentes); vendas antigas usam o custo reconstruído pelo histórico de compras'],
@@ -5876,11 +5944,14 @@ async function ccRelatorio() {
     ['R$ Cupom do vendedor', 'cupom que você bancou (o pedido mostra o preço cheio, o comprador pagou menos); entra no CMV. Cupom pago pelo ML não entra'],
     ['Campanhas', 'desconto bancado por você já vem no preço de venda; coparticipação do ML em campanha já vem abatida na tarifa de venda (como no faturamento do ML)'], ['% MC / % CMV', 'sobre o Valor Faturado'],
     ['Cobertura de custo', 'parte do faturamento com custo, frete e tarifa conhecidos; os % de MC e CMV das abas de resumo usam só essa parte'],
-    ['Curva', 'A = itens que somam os primeiros 80% do faturamento, B = até 95%, C = restante']];
+    ['Curva', 'A = itens que somam os primeiros 80% do faturamento, B = até 95%, C = restante'],
+    ['Situação ICMS', 'Mercado Livre: tipo de contribuinte informado pelo comprador no faturamento do pedido; Shopee e venda direta: indicador de IE do cadastro do contato no Bling. Pessoa física é sempre não contribuinte. "não informado" = PJ sem a informação'],
+    ['Cliente / CPF/CNPJ', 'nome e documento do faturamento do pedido (ML) ou do cadastro do contato (Bling)'],
+    ['UF de destino', 'UF do endereço de faturamento do cliente']];
   const wl = XLSX.utils.aoa_to_sheet(leia); wl['!cols'] = [{ wch: 20 }, { wch: 110 }];
   XLSX.utils.book_append_sheet(wb, wl, 'Como ler');
 
-  XLSX.writeFile(wb, `relatorio_vendas_${p.from}_a_${p.to}.xlsx`);
+  XLSX.writeFile(wb, `relatorio_vendas_${p.from}_a_${p.to}${v.icms ? '_' + ({ c: 'contribuintes', n: 'nao_contribuintes', ni: 'icms_nao_informado' })[v.icms] : ''}.xlsx`);
   showToast('Relatório gerado: ' + linhas.length + ' itens vendidos', 'ok');
 }
 async function ccExport() {
