@@ -12000,6 +12000,7 @@ function rcaCalcular(porItem) {
     else r.sinal = 'estavel';
     r.entrou = r.ehA && !r.eraA;
     r.perda7 = r.r7 - r.r7p;
+    r.perda30 = r.r30 - r.r30p;   // R$ ganhos/perdidos no mês vs mês anterior
     return r;
   });
   var soA = linhas.filter(function (r) { return r.ehA; });
@@ -12081,11 +12082,8 @@ function rcaDiagnostico(D) {
     }
     r.acoes = acoes;
   });
-  var ordem = { saiu: 0, queda: 1, atencao: 2, alta: 3, estavel: 4 };
-  D.linhas.sort(function (a, b) {
-    return (b.ehA ? b.ruptura : 0) - (a.ehA ? a.ruptura : 0) || ordem[a.sinal] - ordem[b.sinal] ||
-      (a.sinal === 'alta' ? b.perda7 - a.perda7 : a.perda7 - b.perda7) || b.r30 - a.r30;
-  });
+  /* ordem: quem mais perdeu faturamento em R$ no mês (30d × 30d anteriores) primeiro */
+  D.linhas.sort(function (a, b) { return a.perda30 - b.perda30 || b.rJ - a.rJ; });
   D.temBling = D.linhas.some(function (r) { return r.est.fonte === 'Bling'; });
 }
 
@@ -12156,6 +12154,7 @@ function rcaRender() {
     '<div class="rca-box"><div class="av-kpi-l">Vendas</div><div class="av-kpi-v"><span style="color:var(--red)">' + cnt(function (r) { return r.sinal === 'queda' || r.sinal === 'saiu'; }) + '</span> · <span style="color:var(--orange)">' + cnt(function (r) { return r.sinal === 'atencao'; }) + '</span> · <span style="color:var(--green)">' + cnt(function (r) { return r.sinal === 'alta'; }) + '</span></div><div class="av-kpi-d">queda · atenção · em alta</div></div>' +
     '</div>';
   var rows = L.filter(fAtual[2]);
+  if (RCA.filtro === 'alta' || RCA.filtro === 'cand' || RCA.filtro === 'entrou') rows = rows.slice().sort(function (a, b) { return b.perda30 - a.perda30; });   // ganhos: maior ganho primeiro
   var corpo = rows.length ? rows.map(function (r) {
     var s = RCA_SINAL[r.sinal];
     var pos = r.pos ? '<b>' + r.pos + 'º</b>' : '—';
@@ -12171,7 +12170,7 @@ function rcaRender() {
       '<td><span class="ec-pill" style="--tone:' + s[1] + '">' + s[0] + '</span></td>' +
       '<td class="r mono nw">' + avFmtR(r.rJ) + '<div class="ec-sub">' + (r.share * 100).toFixed(1).replace('.', ',') + '% da conta</div></td>' +
       '<td class="r mono nw">' + avFmtR(r.r7) + '<div class="ec-sub">' + rcaVar(r.d7) + '</div></td>' +
-      '<td class="r mono nw">' + avFmtR(r.r30) + '<div class="ec-sub">' + rcaVar(r.d30) + '</div></td>' +
+      '<td class="r mono nw">' + avFmtR(r.r30) + '<div class="ec-sub">' + rcaVar(r.d30) + '</div>' + (Math.abs(r.perda30) >= 1 ? '<div class="ec-sub" style="color:' + (r.perda30 < 0 ? 'var(--red)' : 'var(--green)') + '">' + (r.perda30 < 0 ? '−' : '+') + avFmtR(Math.abs(r.perda30)) + '</div>' : '') + '</td>' +
       '<td>' + rcaSpark(r.sem) + '</td>' +
       '<td class="r mono nw">' + vis + '</td>' +
       '<td class="r mono nw">' + conv + '</td>' +
@@ -12180,8 +12179,8 @@ function rcaRender() {
   }).join('') : '<tr><td colspan="11" style="text-align:center;padding:18px" class="ec-sub">Nenhum item neste filtro — curva A sob controle.</td></tr>';
   var R = RCA_REGRA;
   el.innerHTML = '<div class="card av-card">' + topo + resumo + chips +
-    '<div class="scroll" style="padding:0 18px"><table class="t rca-tab"><thead><tr><th>Posição</th><th>Anúncio</th><th>Sinal</th><th class="r">Fat. ' + RCA_JANELA + 'd</th><th class="r">7 dias × ant.</th><th class="r">30 dias × ant.</th><th>26 semanas</th><th class="r">Visitas 7d</th><th class="r">Conversão 7d</th><th>Estoque & ruptura</th><th>Ação sugerida</th></tr></thead><tbody>' + corpo + '</tbody></table></div>' +
-    '<div class="ec-sub" style="padding:10px 18px 14px;font-size:11px;line-height:1.5">Curva A = anúncios que somam ' + Math.round(RCA_CORTE * 100) + '% do faturamento ML nos últimos ' + RCA_JANELA + ' dias fechados (até ontem); posição comparada com a mesma curva 30 dias atrás. Candidato a A = seria A pelos últimos 30 dias, mas ainda não é pelos ' + RCA_JANELA + '. ' + (D.nDias < RCA_HIST ? '<b>Histórico com ' + D.nDias + ' de ' + (RCA_HIST + 1) + ' dias — complete com ↻.</b> ' : '') +
+    '<div class="scroll" style="padding:0 18px"><table class="t rca-tab"><thead><tr><th>Posição</th><th>Anúncio</th><th>Sinal</th><th class="r">Fat. ' + RCA_JANELA + 'd</th><th class="r">7 dias × ant.</th><th class="r">30 dias × ant. ▼</th><th>26 semanas</th><th class="r">Visitas 7d</th><th class="r">Conversão 7d</th><th>Estoque & ruptura</th><th>Ação sugerida</th></tr></thead><tbody>' + corpo + '</tbody></table></div>' +
+    '<div class="ec-sub" style="padding:10px 18px 14px;font-size:11px;line-height:1.5">Curva A = anúncios que somam ' + Math.round(RCA_CORTE * 100) + '% do faturamento ML nos últimos ' + RCA_JANELA + ' dias fechados (até ontem); posição comparada com a mesma curva 30 dias atrás. Candidato a A = seria A pelos últimos 30 dias, mas ainda não é pelos ' + RCA_JANELA + '. Lista ordenada pelo faturamento perdido em R$ (30 dias × 30 anteriores); nos filtros Em alta, Candidatos e Entraram, pelo maior ganho. ' + (D.nDias < RCA_HIST ? '<b>Histórico com ' + D.nDias + ' de ' + (RCA_HIST + 1) + ' dias — complete com ↻.</b> ' : '') +
     'Vendas — queda forte: 7d ≤ ' + rcaPct(R.quedaForte7) + ' ou 30d ≤ ' + rcaPct(R.quedaForte30) + ' · atenção: 7d ≤ ' + rcaPct(R.atencao7) + ', 30d ≤ ' + rcaPct(R.atencao30) + ' ou perdeu ' + R.posicao + '+ posições · em alta: 7d ≥ ' + rcaPct(R.alta7) + ' ou 30d ≥ ' + rcaPct(R.alta30) + '. ' +
     'Conversão = pedidos ÷ visitas do anúncio. Ruptura (Estoque & Compras): estoque Bling + trânsito contra a venda diária, lead time e estoque de segurança; crítico quando a reposição já não chega a tempo, atenção quando a compra vence em até 7 dias. Full: mínimo de ' + RCA_FULL_MIN + ' dias de venda.</div></div>';
 }
@@ -12197,7 +12196,7 @@ async function rcaExport() {
     var e = r.est || {};
     return { ['Posição (' + RCA_JANELA + 'd)']: r.pos || '', 'Posição 30 dias antes': r.posAnt || '', 'Anúncio': r.id, 'SKU': r.sku || '', 'Título': r.t, 'Full': r.ehFull ? 'Sim' : 'Não',
       'Curva A hoje': r.ehA ? 'Sim' : 'Não', 'Era curva A': r.eraA ? 'Sim' : 'Não', 'Sinal': RCA_SINAL[r.sinal][0],
-      ['Fat. ' + RCA_JANELA + 'd']: n2(r.rJ), 'Candidato a A': r.candidato ? 'Sim' : 'Não', 'Fat. 30d': n2(r.r30), 'Fat. 30d anteriores': n2(r.r30p), 'Var. 30d %': p1(r.d30), ['% da conta (' + RCA_JANELA + 'd)']: p1(r.share),
+      ['Fat. ' + RCA_JANELA + 'd']: n2(r.rJ), 'Candidato a A': r.candidato ? 'Sim' : 'Não', 'Fat. 30d': n2(r.r30), 'Fat. 30d anteriores': n2(r.r30p), 'Ganho/perda 30d (R$)': n2(r.perda30), 'Var. 30d %': p1(r.d30), ['% da conta (' + RCA_JANELA + 'd)']: p1(r.share),
       'Fat. 7d': n2(r.r7), 'Fat. 7d anteriores': n2(r.r7p), 'Var. 7d %': p1(r.d7), 'Pedidos 7d': r.n7, 'Pedidos 7d ant.': r.n7p, 'Unidades 30d': r.q30,
       'Visitas 7d': r.v7 == null ? '' : r.v7, 'Visitas 7d ant.': r.v7p == null ? '' : r.v7p, 'Var. visitas %': p1(r.dv),
       'Conversão 7d %': p2(r.c7), 'Conversão 7d ant. %': p2(r.c7p), 'Var. conversão %': p1(r.dc),
