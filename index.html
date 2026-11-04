@@ -2474,7 +2474,7 @@ const EC_DEFAULT_CFG = {
   faixas: { crit: 15, aten: 30, saud: 90 },  // faixas de cobertura (dias)
   alvo: { A: 45, B: 30, C: 20 },             // cobertura desejada após a reposição (dias)
   z: { A: 1.65, B: 1.28, C: 1.04 },          // nível de serviço do estoque de segurança (95% / 90% / 85%)
-  abc: { A: 0.70, B: 0.90 },                 // cortes da curva ABC (receita 90d acumulada)
+  abc: { A: 0.70, B: 0.90 },                 // cortes da curva ABC (receita 180d acumulada)
   fullAlvo: 30, fullMax: 60,                 // cobertura alvo e máxima no Full (dias)
   blingIncluiFull: true,                     // saldo do Bling já contém o estoque Full
   impostoPct: 0,                             // % de impostos sobre a venda (para margem)
@@ -2875,6 +2875,7 @@ function ecCompute() {
     const v7 = v(7), v15 = v(15), v30 = v(30), v60 = v(60), v90 = v(90);
     const prev30 = q ? ecSum(q, 30, 60) : 0, prev90 = q ? ecSum(q, 90, 180) : 0;
     const rev90 = s ? ecSum(s.r, 0, 90) : 0, rev30 = s ? ecSum(s.r, 0, 30) : 0, fee90 = s ? ecSum(s.f, 0, 90) : 0;
+    const rev180 = s ? ecSum(s.r, 0, 180) : 0;   // curva ABC
     const canc90 = s ? ecSum(s.c, 0, 90) : 0;
     const full90 = s ? ecSum(s.fq, 0, 90) : 0;
     let lastIdx = -1; if (q) for (let i = 0; i < H; i++) if (q[i] > 0) { lastIdx = i; break; }
@@ -2940,7 +2941,7 @@ function ecCompute() {
     rows.push({
       sku, id: p.id, nome: p.nome, ativo, isKit, kitFisico, formato: p.formato, blingVirt, matriz, full, total, transito, lt, ltFonte: Number(cfg.ltSku[sku]) ? 'manual' : ltB ? 'Bling' : 'padrão', moq: bf && bf[0] > 0 ? bf[0] : 0, mult: bf && bf[2] > 1 ? bf[2] : 0, buyLido: !!bf,
       custo, preco, tarifaUn, freteUn, freteFonte, impPct, impUn, impFonte: taxMap[sku] != null ? 'Bling' : 'padrão', margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
-      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, canc90, full90, tendPct, tend90Pct, tend, vol,
+      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, rev180, canc90, full90, tendPct, tend90Pct, tend, vol,
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
       deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds) || full > 0, anuncioFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
       compra: cp,
@@ -2955,12 +2956,12 @@ function ecCompute() {
     });
   }
 
-  // ── 6. Curva ABC (receita 90d)
-  const totRev = rows.reduce((a, r) => a + r.rev90, 0) || 1;
+  // ── 6. Curva ABC (receita 180d — mesma curva do Radar Curva A)
+  const totRev = rows.reduce((a, r) => a + r.rev180, 0) || 1;
   let acc = 0;
-  [...rows].sort((a, b) => b.rev90 - a.rev90).forEach(r => {
-    const before = acc / totRev; acc += r.rev90;
-    r.curva = r.rev90 <= 0 ? 'C' : before < cfg.abc.A ? 'A' : before < cfg.abc.B ? 'B' : 'C';
+  [...rows].sort((a, b) => b.rev180 - a.rev180).forEach(r => {
+    const before = acc / totRev; acc += r.rev180;
+    r.curva = r.rev180 <= 0 ? 'C' : before < cfg.abc.A ? 'A' : before < cfg.abc.B ? 'B' : 'C';
   });
 
   // ── 7. Cobertura, risco, projeção, compra, excesso, Full, recomendação
@@ -3176,8 +3177,8 @@ function ecAggregate(rows) {
   ['A', 'B', 'C'].forEach(c => {
     const rs = rows.filter(r => r.curva === c);
     a.abc[c] = {
-      n: rs.length, nVenda: rs.filter(r => r.rev90 > 0).length,
-      receita: rs.reduce((s, r) => s + r.rev90, 0),
+      n: rs.length, nVenda: rs.filter(r => r.rev180 > 0).length,
+      receita: rs.reduce((s, r) => s + r.rev180, 0),
       margem: rs.reduce((s, r) => s + (r.margemUn != null ? Math.max(0, r.margemUn) * r.v90 : 0), 0),
       estoque: rs.filter(r => !r.isKit).reduce((s, r) => s + r.valorCusto, 0),
       risco: rs.filter(r => r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO).length,
@@ -3499,7 +3500,7 @@ function ecComo() {
     ['Estoque a custo', 'unidades × custo usado', '—', 'posição de hoje', `kits virtuais; ${a.semCusto} SKUs sem custo ficam em zero`],
     ['Estoque a preço de referência', 'unidades × preço médio real de 90d (ou do anúncio)', '—', 'posição de hoje', 'kits virtuais'],
     ['Cobertura geral', `unidades em estoque (${ecInt(a.unidades)})`, 'soma da demanda diária prevista', 'posição de hoje', 'kits virtuais'],
-    ['Curva ABC', 'receita acumulada do SKU', 'receita total de 90 dias', '90 dias', 'sem receita = curva C'],
+    ['Curva ABC', 'receita acumulada do SKU', 'receita total de 180 dias', '180 dias', 'sem receita = curva C'],
     ['Valor sugerido de compra', 'compra sugerida × custo (e × preço de compra)', '—', 'lead time + cobertura alvo', 'bloqueados e kits virtuais'],
     ['% ruptura e % risco (saúde)', 'SKUs em ruptura / em risco', `${a.nDemanda} SKUs com demanda`, 'hoje', 'SKUs sem demanda'],
     ['Confiança alta %', 'SKUs sem ressalva grave e com menos de 3 pontos de ressalva', `${rel.length} SKUs relevantes`, 'hoje', 'SKUs não relevantes'],
@@ -3832,7 +3833,7 @@ function ecRenderDash() {
   <!-- 4/5. PERFORMANCE -->
   <div class="g2">
     <div class="card"><div class="card-head"><span class="card-title">Cobertura do estoque</span><span class="ec-muted">SKUs com demanda, por dias</span></div><div class="card-body">${ecCobChart(a)}</div></div>
-    <div class="card"><div class="card-head"><span class="card-title">Curva ABC</span><span class="ec-muted">participação (90 dias)</span></div><div class="card-body">${ecAbcChart(a)}</div></div>
+    <div class="card"><div class="card-head"><span class="card-title">Curva ABC</span><span class="ec-muted">participação (180 dias)</span></div><div class="card-body">${ecAbcChart(a)}</div></div>
   </div>
   <div class="g2">
     <div class="card"><div class="card-head"><span class="card-title">Tendência dos produtos</span><span class="ec-muted">30d × 30d anteriores</span></div><div class="card-body">${ecTrendChart(a)}</div></div>
@@ -4112,7 +4113,7 @@ function ecOpenCfg() {
         <label class="ec-f"><span>Saldo do Bling já inclui o Full</span><span><input type="checkbox" id="ec-bif" ${c.blingIncluiFull ? 'checked' : ''}></span></label>
         <div class="ec-muted" style="font-size:11px;margin-bottom:8px">${EC.depMatriz ? `Matriz = depósito <b>${ecEsc(EC.depMatriz.nome)}</b> do Bling. Full = ${EC.depFull ? `depósito <b>${ecEsc(EC.depFull.nome)}</b> do Bling` : 'Full do Mercado Livre (nenhum depósito Fulfillment no Bling)'}. O Mercado Livre é usado só para validação (aba Conciliação). Esta opção só vale se o depósito Matriz não for identificado.` : 'Depósito Matriz não identificado — com a opção marcada, Matriz = Bling − Full do ML.'}</div>
         ${inp('ec-imp', c.impostoPct, 'Imposto padrão (SKU sem % Tributos no Bling)', '%')}
-        <div class="ec-subhead" style="margin-top:12px">Curva ABC (receita 90d acumulada)</div>
+        <div class="ec-subhead" style="margin-top:12px">Curva ABC (receita 180d acumulada)</div>
         ${inp('ec-abcA', Math.round(c.abc.A * 100), 'Corte A até', '%')}${inp('ec-abcB', Math.round(c.abc.B * 100), 'Corte B até', '%')}</div>
     </div>
     <div class="card-body" style="padding-top:0">${ecBuyCfgHtml()}</div>
@@ -11810,10 +11811,14 @@ function avIniciar() {
 /* ═══════════════════════════════════════════════════════════════════════
    RADAR CURVA A — os anúncios que fazem o resultado da conta
 
-   - Curva A = anúncios que somam 70% do faturamento ML dos últimos 30 dias
-     fechados (mesmo corte do Estoque & Compras).
+   - Curva A = anúncios que somam 70% do faturamento ML dos últimos 180 dias
+     fechados (mesmo período e corte do Estoque & Compras) — estável, não
+     troca a cada oscilação de mercado.
+   - Candidato a A = ainda não é A em 180 dias, mas seria pelos últimos 30.
    - Vendas: 7d × 7d anteriores, 30d × 30d anteriores, posição no ranking
-     hoje × 30 dias antes e as 8 últimas semanas — só dias fechados.
+     de 180 dias hoje × 30 dias antes e as últimas 26 semanas — só dias fechados.
+   - Histórico diário por anúncio guardado no IndexedDB do navegador: a
+     primeira carga lê ~7 meses; depois só os últimos 3 dias.
    - Quem era A e saiu também aparece (às vezes saiu por falta de estoque).
    - Visitas e conversão por anúncio (7d × 7d anteriores) separam queda de
      tráfego de queda de conversão.
@@ -11824,24 +11829,80 @@ function avIniciar() {
 
 var RCA = { dados: null, carregando: false, erro: null, at: null, filtro: 'alerta', timer: null, vis: {}, prog: '', ecAt: 0 };
 var RCA_CORTE = 0.70;
+var RCA_JANELA = 180;           // dias que definem a curva A
+var RCA_HIST = RCA_JANELA + 31; // histórico guardado (curva de hoje e de 30 dias atrás)
 var RCA_FULL_MIN = 15;              // cobertura mínima no Full (dias)
 var RCA_REGRA = { quedaForte7: -0.30, quedaForte30: -0.20, atencao7: -0.15, atencao30: -0.10, alta7: 0.20, alta30: 0.15, posicao: 3 };
 
 function rcaProg(t) { RCA.prog = t; var e = document.getElementById('rca-prog'); if (e) e.textContent = t; }
 
-async function rcaPedidos(de, ate) {
-  var f = encodeURIComponent(de + 'T00:00:00.000-03:00'), t = encodeURIComponent(ate + 'T23:59:59.999-03:00');
-  var base = '/orders/search?seller=' + state.sellerId + '&order.date_created.from=' + f + '&order.date_created.to=' + t + '&sort=date_asc&limit=50';
-  var p1 = await mlGet(base + '&offset=0');
-  if (!p1) throw new Error('sem acesso aos pedidos');
-  var out = (p1.results || []).slice(), total = Math.min((p1.paging && p1.paging.total) || 0, 10000), offs = [];
-  for (var o = 50; o < total; o += 50) offs.push(o);
-  for (var i = 0; i < offs.length; i += 5) {
-    rcaProg('lendo pedidos ' + Math.min(total, (i + 6) * 50) + '/' + total + '…');
-    var g = await Promise.all(offs.slice(i, i + 5).map(function (x) { return mlGet(base + '&offset=' + x); }));
-    g.forEach(function (r) { if (r && r.results) out = out.concat(r.results); });
+/* ── histórico diário por anúncio (IndexedDB) ── */
+var RCA_DB = null;
+function rcaDb() {
+  return RCA_DB || (RCA_DB = new Promise(function (res, rej) {
+    var r = indexedDB.open('rca_radar', 1);
+    r.onupgradeneeded = function () { r.result.createObjectStore('dias'); };
+    r.onsuccess = function () { res(r.result); }; r.onerror = function () { RCA_DB = null; rej(r.error); };
+  }));
+}
+async function rcaDbTudo() {
+  var db = await rcaDb();
+  return new Promise(function (res, rej) {
+    var out = {}, c = db.transaction('dias').objectStore('dias').openCursor();
+    c.onsuccess = function () { var k = c.result; if (k) { out[k.key] = k.value; k.continue(); } else res(out); };
+    c.onerror = function () { rej(c.error); };
+  });
+}
+async function rcaDbGrava(dia, v) {
+  var db = await rcaDb();
+  return new Promise(function (res) { var tx = db.transaction('dias', 'readwrite'); tx.objectStore('dias').put(v, dia); tx.oncomplete = res; tx.onerror = res; });
+}
+async function rcaDbApaga(dias) {
+  if (!dias.length) return; var db = await rcaDb();
+  return new Promise(function (res) { var tx = db.transaction('dias', 'readwrite'), st = tx.objectStore('dias'); dias.forEach(function (d) { st.delete(d); }); tx.oncomplete = res; tx.onerror = res; });
+}
+
+/* pedidos de um dia → { i: {id: [qtd, receita, pedidos]}, t: {id: título} }; null se falhar */
+async function rcaDiaML(dia) {
+  var f = encodeURIComponent(dia + 'T00:00:00.000-03:00'), t = encodeURIComponent(dia + 'T23:59:59.999-03:00');
+  var base = '/orders/search?seller=' + state.sellerId + '&order.date_created.from=' + f + '&order.date_created.to=' + t + '&limit=50';
+  var out = { i: {}, t: {} }, off = 0, total = 1, g = 0;
+  while (off < total && g++ < 60) {
+    var p = await mlGet(base + '&offset=' + off);
+    if (!p || !p.results) return null;
+    total = (p.paging && p.paging.total) || p.results.length;
+    p.results.forEach(function (o) {
+      if (o.status === 'cancelled') return;
+      (o.order_items || []).forEach(function (oi) {
+        var id = oi.item && oi.item.id; if (!id) return;
+        var r = out.i[id] || (out.i[id] = [0, 0, 0]);
+        r[0] += oi.quantity || 0; r[1] += (oi.unit_price || 0) * (oi.quantity || 0); r[2]++;
+        if (!out.t[id]) out.t[id] = (oi.item && oi.item.title) || id;
+      });
+    });
+    off += 50;
   }
   return out;
+}
+
+/* carrega o histórico guardado e busca só os dias que faltam (+ os 3 últimos, por cancelamentos) */
+async function rcaHistorico(forcar) {
+  var H = {}; try { H = await rcaDbTudo(); } catch (e) { H = {}; }
+  var validos = {}, falta = [];
+  for (var k = 0; k <= RCA_HIST; k++) { var d = ecDay(k); validos[d] = 1; if (k <= 2 || forcar === 'tudo' || !H[d]) falta.push(d); }
+  try { await rcaDbApaga(Object.keys(H).filter(function (d) { return !validos[d]; })); } catch (e) {}
+  var feitos = 0, falhas = 0;
+  for (var i = 0; i < falta.length; i += 5) {
+    var lote = falta.slice(i, i + 5);
+    var res = await Promise.all(lote.map(function (d) { return rcaDiaML(d).catch(function () { return null; }); }));
+    for (var j = 0; j < lote.length; j++) {
+      if (res[j]) { H[lote[j]] = res[j]; try { await rcaDbGrava(lote[j], res[j]); } catch (e) {} } else falhas++;
+    }
+    feitos += lote.length;
+    if (falta.length > 3) rcaProg('histórico de vendas ' + feitos + '/' + falta.length + ' dias…');
+  }
+  Object.keys(H).forEach(function (d) { if (!validos[d]) delete H[d]; });
+  return { H: H, nDias: Object.keys(H).length, falhas: falhas };
 }
 
 async function rcaVisitas(ids, forcar) {
@@ -11872,22 +11933,20 @@ async function rcaEstoqueMotor() {
 
 async function rcaCarregar(forcar) {
   if (RCA.carregando || !state.sellerId || state.isDemo) return;
-  RCA.carregando = true; RCA.erro = null; rcaProg('lendo pedidos…'); rcaRender();
+  RCA.carregando = true; RCA.erro = null; rcaProg('lendo vendas…'); rcaRender();
   try {
-    var ped = await rcaPedidos(ecDay(60), ecDay(0));
+    var hist = await rcaHistorico(forcar);
     var porItem = {};
-    ped.forEach(function (o) {
-      if (o.status === 'cancelled') return;
-      var dia = ecDayOf(o.date_created);
-      (o.order_items || []).forEach(function (oi) {
-        var id = oi.item && oi.item.id; if (!id) return;
-        var p = porItem[id] || (porItem[id] = { id: id, t: (oi.item && oi.item.title) || id, dias: {} });
-        var d = p.dias[dia] || (p.dias[dia] = { q: 0, v: 0, n: 0 });
-        d.q += oi.quantity || 0; d.v += (oi.unit_price || 0) * (oi.quantity || 0); d.n++;
+    Object.keys(hist.H).forEach(function (dia) {
+      var x = hist.H[dia];
+      Object.keys(x.i).forEach(function (id) {
+        var p = porItem[id] || (porItem[id] = { id: id, t: x.t[id] || id, dias: {} });
+        var r = x.i[id]; p.dias[dia] = { q: r[0], v: r[1], n: r[2] };
       });
     });
     var D = rcaCalcular(porItem);
-    await rcaVisitas(D.linhas.map(function (r) { return r.id; }).slice(0, 70), forcar);
+    D.nDias = hist.nDias; D.falhas = hist.falhas;
+    await rcaVisitas(D.linhas.map(function (r) { return r.id; }).slice(0, 100), !!forcar);
     await rcaEstoqueMotor();
     rcaDiagnostico(D);
     RCA.dados = D; RCA.at = new Date();
@@ -11914,22 +11973,27 @@ function rcaCurva(lista, campo) {
 }
 
 function rcaCalcular(porItem) {
+  var J = RCA_JANELA;
   var lista = Object.values(porItem).map(function (p) {
     var s7 = rcaSoma(p.dias, 7, 1), s7p = rcaSoma(p.dias, 14, 8), s30 = rcaSoma(p.dias, 30, 1), s30p = rcaSoma(p.dias, 60, 31);
-    var sem = []; for (var w = 7; w >= 0; w--) sem.push(rcaSoma(p.dias, w * 7 + 7, w * 7 + 1).v);
-    return { id: p.id, t: p.t, r7: s7.v, r7p: s7p.v, q7: s7.q, q7p: s7p.q, n7: s7.n, n7p: s7p.n, r30: s30.v, r30p: s30p.v, q30: s30.q, q30p: s30p.q, sem: sem,
-      pm7: s7.q ? s7.v / s7.q : null, pm30p: s30p.q ? s30p.v / s30p.q : null };
+    var sJ = rcaSoma(p.dias, J, 1), sJa = rcaSoma(p.dias, J + 30, 31);
+    var sem = []; for (var w = 25; w >= 0; w--) sem.push(rcaSoma(p.dias, w * 7 + 7, w * 7 + 1).v);
+    var it = (state.items || []).find(function (x) { return x.id === p.id; });
+    return { id: p.id, t: (it && it.title) || p.t, r7: s7.v, r7p: s7p.v, q7: s7.q, q7p: s7p.q, n7: s7.n, n7p: s7p.n, r30: s30.v, r30p: s30p.v, q30: s30.q, q30p: s30p.q,
+      rJ: sJ.v, rJa: sJa.v, sem: sem, pm7: s7.q ? s7.v / s7.q : null, pm30p: s30p.q ? s30p.v / s30p.q : null };
   });
-  var cur = rcaCurva(lista, 'r30'), ant = rcaCurva(lista, 'r30p');
-  var linhas = lista.filter(function (r) { return cur.A[r.id] || ant.A[r.id]; }).map(function (r) {
+  var cur = rcaCurva(lista, 'rJ'), ant = rcaCurva(lista, 'rJa'), c30 = rcaCurva(lista, 'r30');
+  var linhas = lista.filter(function (r) { return cur.A[r.id] || ant.A[r.id] || c30.A[r.id]; }).map(function (r) {
     r.pos = cur.rank[r.id] || null; r.posAnt = ant.rank[r.id] || null;
-    r.share = cur.tot ? r.r30 / cur.tot : 0;
+    r.share = cur.tot ? r.rJ / cur.tot : 0;
     r.d7 = r.r7p ? (r.r7 - r.r7p) / r.r7p : (r.r7 ? 1 : null);
     r.d30 = r.r30p ? (r.r30 - r.r30p) / r.r30p : (r.r30 ? 1 : null);
     r.ehA = !!cur.A[r.id]; r.eraA = !!ant.A[r.id];
+    r.candidato = !r.ehA && !!c30.A[r.id];
     r.caiuPos = r.pos && r.posAnt ? r.pos - r.posAnt : 0;
     var R = RCA_REGRA;
     if (!r.ehA && r.eraA) r.sinal = 'saiu';
+    else if (r.ehA && r.r30 <= 0) r.sinal = 'queda';
     else if ((r.d7 != null && r.d7 <= R.quedaForte7) || (r.d30 != null && r.d30 <= R.quedaForte30)) r.sinal = 'queda';
     else if ((r.d7 != null && r.d7 <= R.atencao7) || (r.d30 != null && r.d30 <= R.atencao30) || r.caiuPos >= R.posicao) r.sinal = 'atencao';
     else if ((r.d7 != null && r.d7 >= R.alta7) || (r.d30 != null && r.d30 >= R.alta30)) r.sinal = 'alta';
@@ -11940,7 +12004,7 @@ function rcaCalcular(porItem) {
   });
   var soA = linhas.filter(function (r) { return r.ehA; });
   var tot = function (k) { return soA.reduce(function (s, r) { return s + r[k]; }, 0); };
-  return { linhas: linhas, totConta30: cur.tot, nA: soA.length, a7: tot('r7'), a7p: tot('r7p'), a30: tot('r30'), a30p: tot('r30p') };
+  return { linhas: linhas, totConta: cur.tot, nA: soA.length, aJ: tot('rJ'), a7: tot('r7'), a7p: tot('r7p'), a30: tot('r30'), a30p: tot('r30p') };
 }
 
 function rcaEcRow(id) {
@@ -12006,6 +12070,7 @@ function rcaDiagnostico(D) {
     var caindo = r.sinal === 'saiu' || r.sinal === 'queda' || r.sinal === 'atencao';
     if (caindo) {
       var n0 = acoes.length;
+      if (r.ehA && r.r30 <= 0) acoes.push(['crit', 'Item curva A sem nenhuma venda nos últimos 30 dias']);
       if (r.ruptura === 2 || (it && it.available_quantity === 0)) acoes.push(['alto', 'Queda provavelmente causada pela falta de estoque']);
       if (r.dv != null && r.dv <= -0.2) acoes.push(['alto', 'Perdeu tráfego (visitas ' + rcaPct(r.dv) + '): revisar Ads, posição e preço × concorrência']);
       else if (r.dc != null && r.dc <= -0.2) acoes.push(['alto', 'Visitas mantidas, conversão ' + rcaPct(r.dc) + ': checar preço, frete/prazo, perguntas e avaliações']);
@@ -12043,13 +12108,14 @@ var RCA_SINAL = {
   alta: ['Em alta', 'var(--green)'], estavel: ['Estável', 'var(--text2)']
 };
 var RCA_FILTROS = [
-  ['alerta', 'Precisam de ação', function (r) { return r.ruptura > 0 || r.sinal === 'saiu' || r.sinal === 'queda' || r.sinal === 'atencao' || (r.acoes || []).some(function (a) { return a[0] === 'crit'; }); }],
+  ['alerta', 'Precisam de ação', function (r) { return ((r.ehA || r.eraA) && (r.ruptura > 0 || r.sinal === 'saiu' || r.sinal === 'queda' || r.sinal === 'atencao' || (r.acoes || []).some(function (a) { return a[0] === 'crit'; }))) || (r.candidato && r.ruptura > 0); }],
   ['ruptura', '⚠ Risco de ruptura', function (r) { return r.ruptura > 0; }],
   ['todos', 'Todos', function () { return true; }],
   ['queda', '🔴 Queda', function (r) { return r.sinal === 'queda' || r.sinal === 'saiu'; }],
   ['atencao', '🟠 Atenção', function (r) { return r.sinal === 'atencao'; }],
   ['alta', '🟢 Em alta', function (r) { return r.sinal === 'alta'; }],
   ['conv', '↓ Conversão caiu', function (r) { return r.dc != null && r.dc <= -0.2; }],
+  ['cand', '★ Candidatos a A', function (r) { return r.candidato; }],
   ['entrou', '↗ Entraram na A', function (r) { return r.entrou; }],
   ['saiu', '↘ Saíram da A', function (r) { return r.sinal === 'saiu'; }]
 ];
@@ -12073,7 +12139,7 @@ function rcaRender() {
   var topo = '<div class="av-topo"><div><div class="av-titulo">📡 Radar <span>Curva A</span></div><div class="ec-sub">' + status + '</div></div>' +
     '<div style="display:flex;gap:8px"><button class="btn-sm" onclick="rcaExport()">⬇ Excel</button><button class="btn-sm" onclick="rcaCarregar(true)"' + (RCA.carregando ? ' disabled' : '') + '>↻</button></div></div>';
   if (RCA.erro && !RCA.dados) { el.innerHTML = '<div class="card av-card">' + topo + '<div class="card-body" style="color:var(--red)">Não consegui montar o radar: ' + ecEsc(RCA.erro) + '</div></div>'; return; }
-  if (!RCA.dados) { el.innerHTML = '<div class="card av-card">' + topo + '<div class="card-body ec-sub">Montando a curva A dos últimos 60 dias (leva 1 a 2 minutos)…</div></div>'; return; }
+  if (!RCA.dados) { el.innerHTML = '<div class="card av-card">' + topo + '<div class="card-body ec-sub">Montando a curva A de ' + RCA_JANELA + ' dias. Na primeira vez o histórico leva 1 a 3 minutos; depois fica guardado neste navegador.</div></div>'; return; }
   var D = RCA.dados, L = D.linhas;
   var cnt = function (f) { return L.filter(f).length; };
   var fAtual = RCA_FILTROS.find(function (f) { return f[0] === RCA.filtro; }) || RCA_FILTROS[0];
@@ -12084,7 +12150,7 @@ function rcaRender() {
   var rupC = cnt(function (r) { return r.ehA && r.ruptura === 2; }), rupA = cnt(function (r) { return r.ehA && r.ruptura === 1; });
   var resumo = '<div class="rca-resumo">' +
     '<div class="rca-box' + (rupC ? ' rca-box-crit' : '') + '" onclick="RCA.filtro=\'ruptura\';rcaRender()" style="cursor:pointer"><div class="av-kpi-l">Risco de ruptura · curva A</div><div class="av-kpi-v"><span style="color:' + (rupC ? 'var(--red)' : 'var(--green)') + '">' + rupC + '</span> · <span style="color:var(--orange)">' + rupA + '</span></div><div class="av-kpi-d">' + (D.temBling ? 'crítico · comprar/enviar em até 7 dias' : 'Bling não carregado: estoque do anúncio') + '</div></div>' +
-    '<div class="rca-box"><div class="av-kpi-l">Itens curva A</div><div class="av-kpi-v">' + D.nA + '</div><div class="av-kpi-d">' + Math.round(D.totConta30 ? D.a30 / D.totConta30 * 100 : 0) + '% do faturamento ML em 30 dias</div></div>' +
+    '<div class="rca-box"><div class="av-kpi-l">Itens curva A · ' + RCA_JANELA + ' dias</div><div class="av-kpi-v">' + D.nA + (cnt(function (r) { return r.candidato; }) ? ' <span style="font-size:13px;color:var(--accent)">+' + cnt(function (r) { return r.candidato; }) + ' candidatos</span>' : '') + '</div><div class="av-kpi-d">' + Math.round(D.totConta ? D.aJ / D.totConta * 100 : 0) + '% do faturamento ML · ' + avFmtR(D.aJ) + '</div></div>' +
     '<div class="rca-box"><div class="av-kpi-l">Curva A · últimos 7 dias</div><div class="av-kpi-v">' + avFmtR(D.a7) + '</div><div class="av-kpi-d">vs 7 dias anteriores ' + rcaVar(d7) + '</div></div>' +
     '<div class="rca-box"><div class="av-kpi-l">Curva A · últimos 30 dias</div><div class="av-kpi-v">' + avFmtR(D.a30) + '</div><div class="av-kpi-d">vs 30 dias anteriores ' + rcaVar(d30) + '</div></div>' +
     '<div class="rca-box"><div class="av-kpi-l">Vendas</div><div class="av-kpi-v"><span style="color:var(--red)">' + cnt(function (r) { return r.sinal === 'queda' || r.sinal === 'saiu'; }) + '</span> · <span style="color:var(--orange)">' + cnt(function (r) { return r.sinal === 'atencao'; }) + '</span> · <span style="color:var(--green)">' + cnt(function (r) { return r.sinal === 'alta'; }) + '</span></div><div class="av-kpi-d">queda · atenção · em alta</div></div>' +
@@ -12095,7 +12161,7 @@ function rcaRender() {
     var pos = r.pos ? '<b>' + r.pos + 'º</b>' : '—';
     var mov = r.pos && r.posAnt && r.pos !== r.posAnt ? '<div class="ec-sub" style="color:' + (r.pos < r.posAnt ? 'var(--green)' : 'var(--red)') + '">' + (r.pos < r.posAnt ? '▲' : '▼') + Math.abs(r.pos - r.posAnt) + ' (era ' + r.posAnt + 'º)</div>' : (r.posAnt ? '' : '<div class="ec-sub">novo</div>');
     var thumb = r.thumb ? '<img src="' + ecEsc(r.thumb) + '" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex:none">' : '<div style="width:36px;flex:none"></div>';
-    var tags = (r.entrou ? ' <span class="rca-tag" style="color:var(--green)">entrou na A</span>' : '') + (r.ehFull ? ' <span class="rca-tag" style="color:var(--accent)">FULL</span>' : '');
+    var tags = (r.candidato ? ' <span class="rca-tag" style="color:var(--accent)">★ candidato a A</span>' : '') + (r.entrou ? ' <span class="rca-tag" style="color:var(--green)">entrou na A</span>' : '') + (r.ehFull ? ' <span class="rca-tag" style="color:var(--accent)">FULL</span>' : '');
     var titulo = r.link ? '<a href="' + ecEsc(r.link) + '" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">' + ecEsc(r.t) + '</a>' : ecEsc(r.t);
     var vis = r.v7 != null ? avFmtN(r.v7) + '<div class="ec-sub">' + rcaVar(r.dv) + '</div>' : '<span class="ec-sub">—</span>';
     var conv = r.c7 != null ? '<b>' + rcaConv(r.c7) + '</b><div class="ec-sub">era ' + rcaConv(r.c7p) + ' ' + rcaVar(r.dc) + '</div>' : '<span class="ec-sub">—</span>';
@@ -12103,9 +12169,9 @@ function rcaRender() {
     return '<tr' + (r.ruptura === 2 && r.ehA ? ' class="rca-linha-crit"' : '') + '><td class="mono nw">' + pos + mov + '</td>' +
       '<td><div style="display:flex;gap:8px;align-items:center;min-width:0">' + thumb + '<div style="min-width:0"><div class="rca-t" title="' + ecEsc(r.t) + '">' + titulo + '</div><div class="ec-sub">' + r.id + (r.sku ? ' · ' + ecEsc(r.sku) : '') + tags + '</div></div></div></td>' +
       '<td><span class="ec-pill" style="--tone:' + s[1] + '">' + s[0] + '</span></td>' +
-      '<td class="r mono nw">' + avFmtR(r.r30) + '<div class="ec-sub">' + (r.share * 100).toFixed(1).replace('.', ',') + '% da conta</div></td>' +
+      '<td class="r mono nw">' + avFmtR(r.rJ) + '<div class="ec-sub">' + (r.share * 100).toFixed(1).replace('.', ',') + '% da conta</div></td>' +
       '<td class="r mono nw">' + avFmtR(r.r7) + '<div class="ec-sub">' + rcaVar(r.d7) + '</div></td>' +
-      '<td class="r mono nw">' + rcaVar(r.d30) + '</td>' +
+      '<td class="r mono nw">' + avFmtR(r.r30) + '<div class="ec-sub">' + rcaVar(r.d30) + '</div></td>' +
       '<td>' + rcaSpark(r.sem) + '</td>' +
       '<td class="r mono nw">' + vis + '</td>' +
       '<td class="r mono nw">' + conv + '</td>' +
@@ -12114,8 +12180,8 @@ function rcaRender() {
   }).join('') : '<tr><td colspan="11" style="text-align:center;padding:18px" class="ec-sub">Nenhum item neste filtro — curva A sob controle.</td></tr>';
   var R = RCA_REGRA;
   el.innerHTML = '<div class="card av-card">' + topo + resumo + chips +
-    '<div class="scroll" style="padding:0 18px"><table class="t rca-tab"><thead><tr><th>Posição</th><th>Anúncio</th><th>Sinal</th><th class="r">Fat. 30d</th><th class="r">7 dias × ant.</th><th class="r">30d × ant.</th><th>8 semanas</th><th class="r">Visitas 7d</th><th class="r">Conversão 7d</th><th>Estoque & ruptura</th><th>Ação sugerida</th></tr></thead><tbody>' + corpo + '</tbody></table></div>' +
-    '<div class="ec-sub" style="padding:10px 18px 14px;font-size:11px;line-height:1.5">Curva A = anúncios que somam ' + Math.round(RCA_CORTE * 100) + '% do faturamento ML nos últimos 30 dias. Comparações só com dias fechados (até ontem). ' +
+    '<div class="scroll" style="padding:0 18px"><table class="t rca-tab"><thead><tr><th>Posição</th><th>Anúncio</th><th>Sinal</th><th class="r">Fat. ' + RCA_JANELA + 'd</th><th class="r">7 dias × ant.</th><th class="r">30 dias × ant.</th><th>26 semanas</th><th class="r">Visitas 7d</th><th class="r">Conversão 7d</th><th>Estoque & ruptura</th><th>Ação sugerida</th></tr></thead><tbody>' + corpo + '</tbody></table></div>' +
+    '<div class="ec-sub" style="padding:10px 18px 14px;font-size:11px;line-height:1.5">Curva A = anúncios que somam ' + Math.round(RCA_CORTE * 100) + '% do faturamento ML nos últimos ' + RCA_JANELA + ' dias fechados (até ontem); posição comparada com a mesma curva 30 dias atrás. Candidato a A = seria A pelos últimos 30 dias, mas ainda não é pelos ' + RCA_JANELA + '. ' + (D.nDias < RCA_HIST ? '<b>Histórico com ' + D.nDias + ' de ' + (RCA_HIST + 1) + ' dias — complete com ↻.</b> ' : '') +
     'Vendas — queda forte: 7d ≤ ' + rcaPct(R.quedaForte7) + ' ou 30d ≤ ' + rcaPct(R.quedaForte30) + ' · atenção: 7d ≤ ' + rcaPct(R.atencao7) + ', 30d ≤ ' + rcaPct(R.atencao30) + ' ou perdeu ' + R.posicao + '+ posições · em alta: 7d ≥ ' + rcaPct(R.alta7) + ' ou 30d ≥ ' + rcaPct(R.alta30) + '. ' +
     'Conversão = pedidos ÷ visitas do anúncio. Ruptura (Estoque & Compras): estoque Bling + trânsito contra a venda diária, lead time e estoque de segurança; crítico quando a reposição já não chega a tempo, atenção quando a compra vence em até 7 dias. Full: mínimo de ' + RCA_FULL_MIN + ' dias de venda.</div></div>';
 }
@@ -12129,9 +12195,9 @@ async function rcaExport() {
   var n2 = function (v) { return v == null || !isFinite(v) ? '' : +v.toFixed(2); }, p1 = function (v) { return v == null || !isFinite(v) ? '' : +(v * 100).toFixed(1); }, p2 = function (v) { return v == null || !isFinite(v) ? '' : +(v * 100).toFixed(2); };
   var linhas = RCA.dados.linhas.map(function (r) {
     var e = r.est || {};
-    return { 'Posição': r.pos || '', 'Posição 30d antes': r.posAnt || '', 'Anúncio': r.id, 'SKU': r.sku || '', 'Título': r.t, 'Full': r.ehFull ? 'Sim' : 'Não',
+    return { ['Posição (' + RCA_JANELA + 'd)']: r.pos || '', 'Posição 30 dias antes': r.posAnt || '', 'Anúncio': r.id, 'SKU': r.sku || '', 'Título': r.t, 'Full': r.ehFull ? 'Sim' : 'Não',
       'Curva A hoje': r.ehA ? 'Sim' : 'Não', 'Era curva A': r.eraA ? 'Sim' : 'Não', 'Sinal': RCA_SINAL[r.sinal][0],
-      'Fat. 30d': n2(r.r30), 'Fat. 30d anteriores': n2(r.r30p), 'Var. 30d %': p1(r.d30), '% da conta': p1(r.share),
+      ['Fat. ' + RCA_JANELA + 'd']: n2(r.rJ), 'Candidato a A': r.candidato ? 'Sim' : 'Não', 'Fat. 30d': n2(r.r30), 'Fat. 30d anteriores': n2(r.r30p), 'Var. 30d %': p1(r.d30), ['% da conta (' + RCA_JANELA + 'd)']: p1(r.share),
       'Fat. 7d': n2(r.r7), 'Fat. 7d anteriores': n2(r.r7p), 'Var. 7d %': p1(r.d7), 'Pedidos 7d': r.n7, 'Pedidos 7d ant.': r.n7p, 'Unidades 30d': r.q30,
       'Visitas 7d': r.v7 == null ? '' : r.v7, 'Visitas 7d ant.': r.v7p == null ? '' : r.v7p, 'Var. visitas %': p1(r.dv),
       'Conversão 7d %': p2(r.c7), 'Conversão 7d ant. %': p2(r.c7p), 'Var. conversão %': p1(r.dc),
