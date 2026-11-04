@@ -806,6 +806,15 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .av-prod-1{background:rgba(255,230,0,.08);border-radius:8px}
 .av-pos{font-size:18px;font-weight:800;width:18px;text-align:center}
 .av-prod-t{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
+#rca-root{margin-bottom:18px}
+.rca-resumo{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:8px 18px 14px}
+.rca-resumo>div{border:1px solid var(--border2,#2a3242);border-radius:10px;padding:10px 12px}
+.rca-tab td{vertical-align:middle}.rca-tab .r{text-align:right}
+.rca-t{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px}
+.rca-tag{font:600 10px var(--mono);margin-left:6px}
+.rca-acao{font-size:12px;padding:3px 0 3px 8px;border-left:3px solid var(--text2);margin:2px 0}
+.rca-crit{border-color:var(--red)}.rca-alto{border-color:var(--orange)}.rca-ok{border-color:var(--green)}
+@media (max-width:900px){.rca-resumo{grid-template-columns:repeat(2,1fr)}}
 @media (max-width:1100px){.av-grid{grid-template-columns:1fr}.av-canais{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
@@ -982,6 +991,9 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
       <!-- ═══ AO VIVO — movimento do dia, todos os canais ═══ -->
       <div id="av-root"></div>
 
+      <!-- ═══ RADAR CURVA A ═══ -->
+      <div id="rca-root"></div>
+
       <!-- ═══ FILTRO DE PERÍODO ═══ -->
       <div class="period-bar">
         <span class="period-label">Período:</span>
@@ -1091,16 +1103,6 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 </div>
 </div>
 
-<div class="card" style="margin-bottom:22px">
-<div class="card-head">
-<span class="card-title">🏆 Top 5 Mais Vendidos Hoje</span>
-<span class="badge b-green" id="top-today-badge">carregando</span>
-</div>
-<div class="card-body">
-<div class="bars" id="top-today-bars"></div>
-</div>
-</div>
-
 <div class="gw" style="grid-template-columns:3fr 1fr">
         <div class="card">
           <div class="card-head">
@@ -1144,16 +1146,6 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
         </div>
       </div>
 
-      <!-- Revenue SVG Chart -->
-      <div class="card">
-        <div class="card-head">
-          <span class="card-title">Preços dos Anúncios — Distribuição</span>
-          <span class="badge b-green">Dados ao vivo</span>
-        </div>
-        <div class="card-body">
-          <div id="price-dist-chart"></div>
-        </div>
-      </div>
     </div>
 
     <!-- ═══ PRICING ═══ -->
@@ -2062,18 +2054,6 @@ document.getElementById('kpi-today-ticket').textContent = 'R$'+fmt(todayTicket);
 document.getElementById('kpi-today-ticket-d').innerHTML = todayOrders.length ? '<span class="up">média por pedido</span>' : '<span class="neutral">sem pedidos ainda</span>';
 document.getElementById('kpi-today-units').textContent = todayUnits;
 document.getElementById('kpi-today-units-d').innerHTML = `<span class="up">${Object.keys(todaySkuQty).length} SKU${Object.keys(todaySkuQty).length!==1?'s':''} diferentes</span>`;
-const top5Today = Object.entries(todaySkuQty).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([id,qty])=>{
-const it = items.find(i=>i.id===id);
-return { title: it?.title || id, qty, id };
-});
-const maxTop5 = top5Today[0]?.qty || 1;
-document.getElementById('top-today-badge').textContent = `${todayOrders.length} pedidos hoje`;
-document.getElementById('top-today-bars').innerHTML = top5Today.length ? top5Today.map(p=>`
-<div class="bar-row">
-<div class="bar-lbl">${p.title}<div class="c-muted" style="font-size:10px">${p.id||''}</div></div>
-<div class="bar-trk"><div class="bar-fill" style="width:${p.qty/maxTop5*100}%;background:var(--green)"></div></div>
-<div class="bar-num c-green">${p.qty} un</div>
-</div>`).join('') : '<div class="c-muted" style="font-size:13px">Nenhuma venda registrada hoje ainda</div>';
 } else {
       document.getElementById('kpi-orders').textContent='—';
       document.getElementById('kpi-orders-d').innerHTML='<span class="neutral">sem permissão /orders</span>';
@@ -2112,19 +2092,6 @@ document.getElementById('kpi-today-ticket').textContent='R$155,00';
 document.getElementById('kpi-today-ticket-d').innerHTML='<span class="up">média por pedido</span>';
 document.getElementById('kpi-today-units').textContent='14';
 document.getElementById('kpi-today-units-d').innerHTML='<span class="up">5 SKUs diferentes</span>';
-document.getElementById('top-today-badge').textContent='8 pedidos hoje';
-document.getElementById('top-today-bars').innerHTML = [
-{title:'Fone Bluetooth Pro X9',qty:5},
-{title:'Smart Watch Series 4',qty:3},
-{title:'Carregador USB-C 65W GaN',qty:2},
-{title:'Caixinha JBL Charge 5',qty:2},
-{title:'Mouse Sem Fio Ergonômico',qty:2}
-].map(p=>`
-<div class="bar-row">
-<div class="bar-lbl">${p.title}<div class="c-muted" style="font-size:10px">${p.id||''}</div></div>
-<div class="bar-trk"><div class="bar-fill" style="width:${p.qty/5*100}%;background:var(--green)"></div></div>
-<div class="bar-num c-green">${p.qty} un</div>
-</div>`).join('');
 }
 
   // ── Tabela anúncios + vendas 30d por SKU ──
@@ -2170,26 +2137,8 @@ const catNames = await resolveCategoryNames(catE.map(([c])=>c));
       <div class="bar-num c-blue">${n}</div>
     </div>`).join('')||'<div class="c-muted" style="font-size:13px">Sem dados</div>';
 
-  renderPriceDist(items);
 }
 
-function renderPriceDist(items){
-  if(!items.length){ document.getElementById('price-dist-chart').innerHTML='<div class="c-muted" style="padding:12px">Sem dados</div>'; return; }
-  const buckets = [0,50,100,200,500,1000,5000];
-  const labels = ['<R$50','R$50-100','R$100-200','R$200-500','R$500-1k','R$1k+'];
-  const counts = new Array(6).fill(0);
-  items.forEach(it=>{ const p=it.price||0; for(let i=0;i<buckets.length-1;i++){if(p>=buckets[i]&&p<buckets[i+1]){counts[i]++;break;}} });
-  const max=Math.max(...counts,1);
-  const colors=['#3483fa','#00d4a1','#ff9500','#a78bfa','#ff4d6a','#ffe600'];
-  document.getElementById('price-dist-chart').innerHTML=`
-    <div class="bars">${counts.map((c,i)=>`
-      <div class="bar-row">
-        <div class="bar-lbl">${labels[i]}</div>
-        <div class="bar-trk"><div class="bar-fill" style="width:${c/max*100}%;background:${colors[i]}"></div></div>
-        <div class="bar-num" style="color:${colors[i]}">${c} SKUs</div>
-      </div>`).join('')}
-    </div>`;
-}
 
 // ════════════════════════════════════════════
 // PRICING — tempo real via busca pública ML
@@ -11854,6 +11803,245 @@ function avIniciar() {
 (function avEsperar() {
   if (typeof state !== 'undefined' && state.sellerId && !state.isDemo && (state.items || []).length) { avIniciar(); return; }
   setTimeout(avEsperar, 3000);
+})();
+
+/* ═══════════════════════════════════════════════════════════════════════
+   RADAR CURVA A — os anúncios que fazem o resultado da conta
+
+   - Curva A = anúncios que somam 70% do faturamento ML dos últimos 30 dias
+     fechados (mesmo corte do Estoque & Compras).
+   - Compara só dias fechados (até ontem): 7d × 7d anteriores e 30d × 30d
+     anteriores, posição no ranking hoje × 30 dias antes e as 8 últimas semanas.
+   - Quem era A no período anterior e saiu também aparece (é o alerta mais caro).
+   - Visitas por anúncio (14 dias) separam queda de tráfego de queda de conversão.
+   Atualiza a cada 30 minutos.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var RCA = { dados: null, carregando: false, erro: null, at: null, filtro: 'alerta', timer: null, vis: {} };
+var RCA_CORTE = 0.70;
+var RCA_REGRA = { quedaForte7: -0.30, quedaForte30: -0.20, atencao7: -0.15, atencao30: -0.10, alta7: 0.20, alta30: 0.15, posicao: 3 };
+
+async function rcaPedidos(de, ate) {
+  var f = encodeURIComponent(de + 'T00:00:00.000-03:00'), t = encodeURIComponent(ate + 'T23:59:59.999-03:00');
+  var base = '/orders/search?seller=' + state.sellerId + '&order.date_created.from=' + f + '&order.date_created.to=' + t + '&sort=date_asc&limit=50';
+  var p1 = await mlGet(base + '&offset=0');
+  if (!p1) throw new Error('sem acesso aos pedidos');
+  var out = (p1.results || []).slice(), total = Math.min((p1.paging && p1.paging.total) || 0, 10000), offs = [];
+  for (var o = 50; o < total; o += 50) offs.push(o);
+  for (var i = 0; i < offs.length; i += 5) {
+    var g = await Promise.all(offs.slice(i, i + 5).map(function (x) { return mlGet(base + '&offset=' + x); }));
+    g.forEach(function (r) { if (r && r.results) out = out.concat(r.results); });
+  }
+  return out;
+}
+
+async function rcaVisitas(ids) {
+  var falta = ids.filter(function (id) { return !RCA.vis[id]; });
+  for (var i = 0; i < falta.length; i += 5) {
+    await Promise.all(falta.slice(i, i + 5).map(async function (id) {
+      try {
+        var r = await mlGet('/items/' + id + '/visits/time_window?last=15&unit=day');
+        var m = {}; ((r && r.results) || []).forEach(function (x) { m[String(x.date).slice(0, 10)] = x.total || 0; });
+        RCA.vis[id] = m;
+      } catch (e) { RCA.vis[id] = null; }
+    }));
+  }
+}
+
+async function rcaCarregar() {
+  if (RCA.carregando || !state.sellerId || state.isDemo) return;
+  RCA.carregando = true; RCA.erro = null; rcaRender();
+  try {
+    var ped = await rcaPedidos(ecDay(60), ecDay(0));
+    var porItem = {};
+    ped.forEach(function (o) {
+      if (o.status === 'cancelled') return;
+      var dia = ecDayOf(o.date_created);
+      (o.order_items || []).forEach(function (oi) {
+        var id = oi.item && oi.item.id; if (!id) return;
+        var p = porItem[id] || (porItem[id] = { id: id, t: (oi.item && oi.item.title) || id, dias: {} });
+        var d = p.dias[dia] || (p.dias[dia] = { q: 0, v: 0 });
+        d.q += oi.quantity || 0; d.v += (oi.unit_price || 0) * (oi.quantity || 0);
+      });
+    });
+    RCA.dados = rcaCalcular(porItem);
+    RCA.at = new Date();
+    await rcaVisitas(RCA.dados.linhas.map(function (r) { return r.id; }).slice(0, 45));
+    rcaDiagnostico(RCA.dados);
+  } catch (e) { RCA.erro = e.message; }
+  RCA.carregando = false; rcaRender();
+}
+
+/* soma de um intervalo de dias fechados: de D-a até D-b (a > b ≥ 1) */
+function rcaSoma(dias, a, b) {
+  var s = { q: 0, v: 0 };
+  for (var k = b; k <= a; k++) { var d = dias[ecDay(k)]; if (d) { s.q += d.q; s.v += d.v; } }
+  return s;
+}
+
+function rcaCurva(lista, campo) {
+  var tot = lista.reduce(function (s, r) { return s + r[campo]; }, 0), acc = 0, A = {}, rank = {};
+  lista.slice().sort(function (a, b) { return b[campo] - a[campo]; }).forEach(function (r, i) {
+    if (r[campo] <= 0) return;
+    rank[r.id] = i + 1;
+    if (tot && acc / tot < RCA_CORTE) A[r.id] = true;
+    acc += r[campo];
+  });
+  return { A: A, rank: rank, tot: tot };
+}
+
+function rcaCalcular(porItem) {
+  var lista = Object.values(porItem).map(function (p) {
+    var s7 = rcaSoma(p.dias, 7, 1), s7p = rcaSoma(p.dias, 14, 8), s30 = rcaSoma(p.dias, 30, 1), s30p = rcaSoma(p.dias, 60, 31), hj = p.dias[ecDay(0)] || { q: 0, v: 0 };
+    var sem = []; for (var w = 7; w >= 0; w--) sem.push(rcaSoma(p.dias, w * 7 + 7, w * 7 + 1).v);
+    return { id: p.id, t: p.t, r7: s7.v, r7p: s7p.v, q7: s7.q, q7p: s7p.q, r30: s30.v, r30p: s30p.v, q30: s30.q, q30p: s30p.q, hoje: hj.v, sem: sem,
+      pm7: s7.q ? s7.v / s7.q : null, pm30p: s30p.q ? s30p.v / s30p.q : null };
+  });
+  var cur = rcaCurva(lista, 'r30'), ant = rcaCurva(lista, 'r30p');
+  var linhas = lista.filter(function (r) { return cur.A[r.id] || ant.A[r.id]; }).map(function (r) {
+    r.pos = cur.rank[r.id] || null; r.posAnt = ant.rank[r.id] || null;
+    r.share = cur.tot ? r.r30 / cur.tot : 0;
+    r.d7 = r.r7p ? (r.r7 - r.r7p) / r.r7p : (r.r7 ? 1 : null);
+    r.d30 = r.r30p ? (r.r30 - r.r30p) / r.r30p : (r.r30 ? 1 : null);
+    r.ehA = !!cur.A[r.id]; r.eraA = !!ant.A[r.id];
+    var caiuPos = r.pos && r.posAnt ? r.pos - r.posAnt : 0;
+    r.caiuPos = caiuPos;
+    var R = RCA_REGRA;
+    if (!r.ehA && r.eraA) r.sinal = 'saiu';
+    else if ((r.d7 != null && r.d7 <= R.quedaForte7) || (r.d30 != null && r.d30 <= R.quedaForte30)) r.sinal = 'queda';
+    else if ((r.d7 != null && r.d7 <= R.atencao7) || (r.d30 != null && r.d30 <= R.atencao30) || caiuPos >= R.posicao) r.sinal = 'atencao';
+    else if ((r.d7 != null && r.d7 >= R.alta7) || (r.d30 != null && r.d30 >= R.alta30)) r.sinal = 'alta';
+    else r.sinal = 'estavel';
+    r.entrou = r.ehA && !r.eraA;
+    r.perda7 = r.r7 - r.r7p;
+    return r;
+  });
+  var ordem = { saiu: 0, queda: 1, atencao: 2, alta: 3, estavel: 4 };
+  linhas.sort(function (a, b) { return ordem[a.sinal] - ordem[b.sinal] || (a.sinal === 'alta' ? b.perda7 - a.perda7 : a.perda7 - b.perda7) || b.r30 - a.r30; });
+  var soA = linhas.filter(function (r) { return r.ehA; });
+  var tot = function (k) { return soA.reduce(function (s, r) { return s + r[k]; }, 0); };
+  return { linhas: linhas, totConta30: cur.tot, nA: soA.length, a7: tot('r7'), a7p: tot('r7p'), a30: tot('r30'), a30p: tot('r30p') };
+}
+
+function rcaEstoque(r) {
+  var it = (state.items || []).find(function (x) { return x.id === r.id; });
+  var sku = it && normSku(((it.attributes || []).find(function (a) { return a.id === 'SELLER_SKU'; }) || {}).value_name || it.seller_custom_field || '');
+  var ec = sku && typeof EC !== 'undefined' && EC.rows ? EC.rows.find(function (x) { return x.sku === sku; }) : null;
+  return { it: it, est: ec ? ec.total : (it ? it.available_quantity : null), fonte: ec ? 'Bling' : 'ML' };
+}
+
+function rcaDiagnostico(D) {
+  D.linhas.forEach(function (r) {
+    var e = rcaEstoque(r), acoes = [];
+    r.thumb = e.it && e.it.thumbnail; r.status = e.it && e.it.status; r.est = e.est; r.estFonte = e.fonte;
+    var ritmo = r.q30 / 30; r.cob = e.est == null || !ritmo ? null : e.est / ritmo;
+    var m = RCA.vis[r.id];
+    if (m) {
+      var v7 = 0, v7p = 0; for (var k = 1; k <= 7; k++) v7 += m[ecDay(k)] || 0; for (k = 8; k <= 14; k++) v7p += m[ecDay(k)] || 0;
+      r.v7 = v7; r.dv = v7p ? (v7 - v7p) / v7p : null;
+      var c7 = v7 ? r.q7 / v7 : null, c7p = v7p ? r.q7p / v7p : null;
+      r.dc = c7 != null && c7p ? (c7 - c7p) / c7p : null;
+    }
+    r.dPreco = r.pm7 && r.pm30p ? (r.pm7 - r.pm30p) / r.pm30p : null;
+    var caindo = r.sinal === 'saiu' || r.sinal === 'queda' || r.sinal === 'atencao';
+    if (r.status && r.status !== 'active') acoes.push(['crit', 'Anúncio ' + (r.status === 'paused' ? 'pausado' : r.status) + ' — reativar']);
+    if (r.est === 0) acoes.push(['crit', 'Sem estoque — repor já']);
+    else if (r.cob != null && r.cob < 10) acoes.push(['crit', 'Estoque para ' + Math.round(r.cob) + ' dias — repor / enviar ao Full']);
+    if (caindo) {
+      if (r.dv != null && r.dv <= -0.2) acoes.push(['alto', 'Perdeu tráfego (visitas ' + rcaPct(r.dv) + '): revisar Ads, posição e preço × concorrência']);
+      else if (r.dc != null && r.dc <= -0.2) acoes.push(['alto', 'Visitas mantidas, conversão ' + rcaPct(r.dc) + ': checar preço, frete/prazo, perguntas e avaliações']);
+      if (r.dPreco != null && r.dPreco >= 0.05) acoes.push(['alto', 'Preço médio subiu ' + rcaPct(r.dPreco) + ' vs mês anterior']);
+      if (!acoes.length) acoes.push(['alto', 'Investigar concorrência e preço no anúncio']);
+    } else if (r.sinal === 'alta') {
+      if (!acoes.length) acoes.push(['ok', 'Em alta: garantir estoque' + (r.cob != null ? ' (cobertura ' + Math.round(r.cob) + 'd)' : '') + ' e reforçar Ads']);
+    }
+    r.acoes = acoes;
+  });
+}
+
+function rcaPct(d) { return d == null ? '—' : (d > 0 ? '+' : '') + Math.round(d * 100) + '%'; }
+function rcaVar(d) {
+  if (d == null) return '<span class="ec-sub">—</span>';
+  var c = Math.abs(d) < 0.05 ? 'var(--text2)' : d > 0 ? 'var(--green)' : 'var(--red)';
+  return '<b style="color:' + c + '">' + (d > 0 ? '▲ ' : d < 0 ? '▼ ' : '') + Math.abs(Math.round(d * 100)) + '%</b>';
+}
+function rcaSpark(sem) {
+  var max = Math.max.apply(null, sem.concat([1])), W = 96, H = 26;
+  var pts = sem.map(function (v, i) { return (i * W / (sem.length - 1)).toFixed(1) + ',' + (H - 2 - v / max * (H - 4)).toFixed(1); });
+  var ult = sem[sem.length - 1], pen = sem[sem.length - 2], cor = ult >= pen ? 'var(--green)' : 'var(--red)';
+  return '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" style="display:block"><polyline points="' + pts.join(' ') + '" fill="none" stroke="var(--text2)" stroke-opacity=".5" stroke-width="1.5"/>' +
+    '<circle cx="' + W + '" cy="' + pts[pts.length - 1].split(',')[1] + '" r="2.8" fill="' + cor + '"/></svg>';
+}
+var RCA_SINAL = {
+  saiu: ['Saiu da curva A', 'var(--red)'], queda: ['Queda forte', 'var(--red)'], atencao: ['Atenção', 'var(--orange)'],
+  alta: ['Em alta', 'var(--green)'], estavel: ['Estável', 'var(--text2)']
+};
+var RCA_FILTROS = [
+  ['alerta', 'Precisam de ação', function (r) { return r.sinal === 'saiu' || r.sinal === 'queda' || r.sinal === 'atencao' || (r.acoes || []).some(function (a) { return a[0] === 'crit'; }); }],
+  ['todos', 'Todos', function () { return true; }],
+  ['queda', '🔴 Queda', function (r) { return r.sinal === 'queda' || r.sinal === 'saiu'; }],
+  ['atencao', '🟠 Atenção', function (r) { return r.sinal === 'atencao'; }],
+  ['alta', '🟢 Em alta', function (r) { return r.sinal === 'alta'; }],
+  ['entrou', '↗ Entraram na A', function (r) { return r.entrou; }],
+  ['saiu', '↘ Saíram da A', function (r) { return r.sinal === 'saiu'; }]
+];
+
+function rcaRender() {
+  var el = document.getElementById('rca-root'); if (!el) return;
+  var topo = '<div class="av-topo"><div><div class="av-titulo">📡 Radar <span>Curva A</span></div>' +
+    '<div class="ec-sub">' + (RCA.carregando ? 'lendo 60 dias de pedidos…' : RCA.at ? '● atualizado às ' + RCA.at.toLocaleTimeString('pt-BR').slice(0, 5) + ' · atualiza a cada 30 min · Mercado Livre (inclui Full)' : '') + '</div></div>' +
+    '<button class="btn-sm" onclick="RCA.vis={};rcaCarregar()">↻</button></div>';
+  if (RCA.erro) { el.innerHTML = '<div class="card av-card">' + topo + '<div class="card-body" style="color:var(--red)">Não consegui montar o radar: ' + ecEsc(RCA.erro) + '</div></div>'; return; }
+  if (!RCA.dados) { el.innerHTML = '<div class="card av-card">' + topo + '<div class="card-body ec-sub">Montando a curva A dos últimos 60 dias…</div></div>'; return; }
+  var D = RCA.dados, L = D.linhas;
+  var cnt = function (f) { return L.filter(f).length; };
+  var fAtual = RCA_FILTROS.find(function (f) { return f[0] === RCA.filtro; }) || RCA_FILTROS[0];
+  var chips = '<div class="ec-chips" style="padding:0 18px 12px">' + RCA_FILTROS.map(function (f) {
+    return '<button class="ec-chip ' + (RCA.filtro === f[0] ? 'active' : '') + '" onclick="RCA.filtro=\'' + f[0] + '\';rcaRender()">' + f[1] + '<span>' + cnt(f[2]) + '</span></button>';
+  }).join('') + '</div>';
+  var d7 = D.a7p ? (D.a7 - D.a7p) / D.a7p : null, d30 = D.a30p ? (D.a30 - D.a30p) / D.a30p : null;
+  var resumo = '<div class="rca-resumo">' +
+    '<div><div class="av-kpi-l">Itens curva A</div><div class="av-kpi-v">' + D.nA + '</div><div class="av-kpi-d">' + Math.round(D.totConta30 ? D.a30 / D.totConta30 * 100 : 0) + '% do faturamento ML em 30 dias</div></div>' +
+    '<div><div class="av-kpi-l">Curva A · últimos 7 dias</div><div class="av-kpi-v">' + avFmtR(D.a7) + '</div><div class="av-kpi-d">vs 7 dias anteriores ' + rcaVar(d7) + ' (' + avFmtR(D.a7p) + ')</div></div>' +
+    '<div><div class="av-kpi-l">Curva A · últimos 30 dias</div><div class="av-kpi-v">' + avFmtR(D.a30) + '</div><div class="av-kpi-d">vs 30 dias anteriores ' + rcaVar(d30) + '</div></div>' +
+    '<div><div class="av-kpi-l">Alertas</div><div class="av-kpi-v"><span style="color:var(--red)">' + cnt(function (r) { return r.sinal === 'queda' || r.sinal === 'saiu'; }) + '</span> · <span style="color:var(--orange)">' + cnt(function (r) { return r.sinal === 'atencao'; }) + '</span> · <span style="color:var(--green)">' + cnt(function (r) { return r.sinal === 'alta'; }) + '</span></div><div class="av-kpi-d">queda · atenção · em alta</div></div>' +
+    '</div>';
+  var rows = L.filter(fAtual[2]);
+  var corpo = rows.length ? rows.map(function (r) {
+    var s = RCA_SINAL[r.sinal];
+    var pos = r.pos ? '<b>' + r.pos + 'º</b>' : '—';
+    var mov = r.pos && r.posAnt && r.pos !== r.posAnt ? '<div class="ec-sub" style="color:' + (r.pos < r.posAnt ? 'var(--green)' : 'var(--red)') + '">' + (r.pos < r.posAnt ? '▲' : '▼') + Math.abs(r.pos - r.posAnt) + ' (era ' + r.posAnt + 'º)</div>' : (r.posAnt ? '' : '<div class="ec-sub">novo</div>');
+    var thumb = r.thumb ? '<img src="' + ecEsc(r.thumb) + '" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex:none">' : '<div style="width:36px;flex:none"></div>';
+    var tags = (r.entrou ? ' <span class="rca-tag" style="color:var(--green)">entrou na A</span>' : '');
+    var est = r.est == null ? '—' : '<b style="color:' + (r.cob != null && r.cob < 10 ? 'var(--red)' : 'inherit') + '">' + avFmtN(r.est) + '</b> <span class="ec-sub">(' + r.estFonte + ')</span>' + (r.cob != null ? '<div class="ec-sub">' + (isFinite(r.cob) ? Math.round(r.cob) + ' dias' : '—') + '</div>' : '');
+    var vis = r.v7 != null ? avFmtN(r.v7) + '<div class="ec-sub">' + rcaVar(r.dv) + '</div>' : '<span class="ec-sub">—</span>';
+    var acoes = (r.acoes || []).map(function (a) { return '<div class="rca-acao rca-' + a[0] + '">' + ecEsc(a[1]) + '</div>'; }).join('') || '<span class="ec-sub">manter</span>';
+    return '<tr><td class="mono" style="white-space:nowrap">' + pos + mov + '</td>' +
+      '<td><div style="display:flex;gap:8px;align-items:center;min-width:0">' + thumb + '<div style="min-width:0"><div class="rca-t" title="' + ecEsc(r.t) + '">' + ecEsc(r.t) + '</div><div class="ec-sub">' + r.id + tags + '</div></div></div></td>' +
+      '<td><span class="ec-pill" style="--tone:' + s[1] + '">' + s[0] + '</span></td>' +
+      '<td class="r mono">' + avFmtR(r.r30) + '<div class="ec-sub">' + (r.share * 100).toFixed(1).replace('.', ',') + '% da conta</div></td>' +
+      '<td class="r mono">' + avFmtR(r.r7) + '<div class="ec-sub">' + rcaVar(r.d7) + '</div></td>' +
+      '<td class="r mono">' + rcaVar(r.d30) + '</td>' +
+      '<td>' + rcaSpark(r.sem) + '</td>' +
+      '<td class="r mono">' + vis + '</td>' +
+      '<td class="r mono">' + est + '</td>' +
+      '<td style="min-width:220px">' + acoes + '</td></tr>';
+  }).join('') : '<tr><td colspan="10" style="text-align:center;padding:18px" class="ec-sub">Nenhum item neste filtro — curva A sob controle.</td></tr>';
+  var R = RCA_REGRA;
+  el.innerHTML = '<div class="card av-card">' + topo + resumo + chips +
+    '<div class="scroll" style="padding:0 18px"><table class="t rca-tab"><thead><tr><th>Posição</th><th>Anúncio</th><th>Sinal</th><th class="r">Fat. 30d</th><th class="r">7 dias × ant.</th><th class="r">30d × ant.</th><th>8 semanas</th><th class="r">Visitas 7d</th><th class="r">Estoque</th><th>Ação sugerida</th></tr></thead><tbody>' + corpo + '</tbody></table></div>' +
+    '<div class="ec-sub" style="padding:10px 18px 14px;font-size:11px">Curva A = anúncios que somam ' + Math.round(RCA_CORTE * 100) + '% do faturamento ML nos últimos 30 dias. Comparações só com dias fechados (até ontem). ' +
+    'Queda forte: 7d ≤ ' + rcaPct(R.quedaForte7) + ' ou 30d ≤ ' + rcaPct(R.quedaForte30) + ' · Atenção: 7d ≤ ' + rcaPct(R.atencao7) + ', 30d ≤ ' + rcaPct(R.atencao30) + ' ou perdeu ' + R.posicao + '+ posições · Em alta: 7d ≥ ' + rcaPct(R.alta7) + ' ou 30d ≥ ' + rcaPct(R.alta30) + '.</div></div>';
+}
+
+function rcaIniciar() {
+  if (RCA.timer) return;
+  rcaCarregar();
+  RCA.timer = setInterval(function () { if (!document.hidden) rcaCarregar(); }, 30 * 60000);
+}
+(function rcaEsperar() {
+  if (typeof state !== 'undefined' && state.sellerId && !state.isDemo && (state.items || []).length) { setTimeout(rcaIniciar, 4000); return; }
+  setTimeout(rcaEsperar, 3000);
 })();
 
 if (typeof module !== 'undefined') module.exports = {
