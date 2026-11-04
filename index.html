@@ -810,6 +810,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .rca-resumo{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;padding:8px 18px 14px}
 .rca-box{border:1px solid var(--border2,#2a3242);border-radius:10px;padding:10px 12px;min-width:0}
 .rca-box-crit{border-color:var(--red);box-shadow:0 0 0 1px var(--red) inset}
+.rca-th{cursor:pointer;user-select:none;white-space:nowrap}.rca-th:hover{color:var(--text)}.rca-th-on{color:var(--accent)}.rca-seta{font-size:10px;opacity:.6}.rca-th-on .rca-seta{opacity:1}
 .rca-tab td{vertical-align:middle}.rca-tab .r{text-align:right}.rca-tab .nw{white-space:nowrap}
 .rca-linha-crit td{background:rgba(255,77,106,.06)}
 .rca-t{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px}
@@ -11827,7 +11828,57 @@ function avIniciar() {
    Atualiza a cada 30 minutos sem tirar os dados da tela.
    ═══════════════════════════════════════════════════════════════════════ */
 
-var RCA = { dados: null, carregando: false, erro: null, at: null, filtro: 'alerta', timer: null, vis: {}, prog: '', ecAt: 0 };
+var RCA = { dados: null, carregando: false, erro: null, at: null, filtro: 'alerta', timer: null, vis: {}, prog: '', ecAt: 0, ord: null };
+try { RCA.ord = JSON.parse(localStorage.getItem('rca_ord_v1') || 'null'); } catch (e) {}
+
+/* colunas da tabela: [chave, título, valor para ordenar, direita?, 1º clique (1 = menor→maior, -1 = maior→menor)] */
+var RCA_SINAL_ORD = { saiu: 0, queda: 1, atencao: 2, alta: 3, estavel: 4 };
+var RCA_COLS = [
+  ['pos', 'Posição', function (r) { return r.pos; }, false, 1],
+  ['t', 'Anúncio', function (r) { return r.t; }, false, 1],
+  ['sinal', 'Sinal', function (r) { return RCA_SINAL_ORD[r.sinal]; }, false, 1],
+  ['rJ', function () { return 'Fat. ' + RCA_JANELA + 'd'; }, function (r) { return r.rJ; }, true, -1],
+  ['d7', '7 dias × ant.', function (r) { return r.d7; }, true, 1],
+  ['perda30', '30 dias × ant.', function (r) { return r.perda30; }, true, 1],
+  [null, '26 semanas'],
+  ['v7', 'Visitas 7d', function (r) { return r.v7; }, true, -1],
+  ['c7', 'Conversão 7d', function (r) { return r.c7; }, true, -1],
+  ['cob', 'Estoque & ruptura', function (r) { return r.est ? r.est.cob : null; }, false, 1],
+  [null, 'Ação sugerida']
+];
+function rcaOrdenar(k) {
+  var col = RCA_COLS.find(function (c) { return c[0] === k; }); if (!col) return;
+  RCA.ord = RCA.ord && RCA.ord.k === k ? { k: k, d: -RCA.ord.d } : { k: k, d: col[4] };
+  try { localStorage.setItem('rca_ord_v1', JSON.stringify(RCA.ord)); } catch (e) {}
+  rcaRender();
+}
+function rcaOrdemPadrao() { RCA.ord = null; try { localStorage.removeItem('rca_ord_v1'); } catch (e) {} rcaRender(); }
+/* vazio sempre no fim, qualquer que seja a direção */
+function rcaAplicaOrdem(rows) {
+  var o = RCA.ord;
+  if (!o) {   // padrão: maior perda em R$ primeiro; nos filtros de ganho, maior ganho primeiro
+    var ganho = RCA.filtro === 'alta' || RCA.filtro === 'cand' || RCA.filtro === 'entrou';
+    o = { k: 'perda30', d: ganho ? -1 : 1 };
+  }
+  var col = RCA_COLS.find(function (c) { return c[0] === o.k; }); if (!col) return rows;
+  var val = col[2];
+  return rows.slice().sort(function (a, b) {
+    var x = val(a), y = val(b), nx = x == null || (typeof x === 'number' && isNaN(x)), ny = y == null || (typeof y === 'number' && isNaN(y));
+    if (nx || ny) return nx === ny ? b.rJ - a.rJ : nx ? 1 : -1;
+    var c = typeof x === 'string' ? x.localeCompare(y, 'pt-BR') : (x === y ? 0 : x < y ? -1 : 1);
+    return c * o.d || b.rJ - a.rJ;
+  });
+}
+function rcaThead() {
+  var o = RCA.ord || { k: 'perda30', d: (RCA.filtro === 'alta' || RCA.filtro === 'cand' || RCA.filtro === 'entrou') ? -1 : 1 };
+  return '<tr>' + RCA_COLS.map(function (c) {
+    var tit = typeof c[1] === 'function' ? c[1]() : c[1];
+    if (!c[0]) return '<th>' + tit + '</th>';
+    var ativo = o.k === c[0];
+    return '<th class="rca-th' + (c[3] ? ' r' : '') + (ativo ? ' rca-th-on' : '') + '" onclick="rcaOrdenar(\'' + c[0] + '\')" title="Clique para ordenar; clique de novo para inverter">' +
+      tit + ' <span class="rca-seta">' + (ativo ? (o.d > 0 ? '▲' : '▼') : '⇅') + '</span></th>';
+  }).join('') + '</tr>';
+}
 var RCA_CORTE = 0.70;
 var RCA_JANELA = 180;           // dias que definem a curva A
 var RCA_HIST = RCA_JANELA + 31; // histórico guardado (curva de hoje e de 30 dias atrás)
@@ -12143,7 +12194,7 @@ function rcaRender() {
   var fAtual = RCA_FILTROS.find(function (f) { return f[0] === RCA.filtro; }) || RCA_FILTROS[0];
   var chips = '<div class="ec-chips" style="padding:0 18px 12px">' + RCA_FILTROS.map(function (f) {
     return '<button class="ec-chip ' + (RCA.filtro === f[0] ? 'active' : '') + '" onclick="RCA.filtro=\'' + f[0] + '\';rcaRender()">' + f[1] + '<span>' + cnt(f[2]) + '</span></button>';
-  }).join('') + '</div>';
+  }).join('') + (RCA.ord ? '<button class="ec-chip" onclick="rcaOrdemPadrao()" title="Voltar a ordenar pelo faturamento perdido">↺ Ordem padrão</button>' : '') + '</div>';
   var d7 = D.a7p ? (D.a7 - D.a7p) / D.a7p : null, d30 = D.a30p ? (D.a30 - D.a30p) / D.a30p : null;
   var rupC = cnt(function (r) { return r.ehA && r.ruptura === 2; }), rupA = cnt(function (r) { return r.ehA && r.ruptura === 1; });
   var resumo = '<div class="rca-resumo">' +
@@ -12153,8 +12204,7 @@ function rcaRender() {
     '<div class="rca-box"><div class="av-kpi-l">Curva A · últimos 30 dias</div><div class="av-kpi-v">' + avFmtR(D.a30) + '</div><div class="av-kpi-d">vs 30 dias anteriores ' + rcaVar(d30) + '</div></div>' +
     '<div class="rca-box"><div class="av-kpi-l">Vendas</div><div class="av-kpi-v"><span style="color:var(--red)">' + cnt(function (r) { return r.sinal === 'queda' || r.sinal === 'saiu'; }) + '</span> · <span style="color:var(--orange)">' + cnt(function (r) { return r.sinal === 'atencao'; }) + '</span> · <span style="color:var(--green)">' + cnt(function (r) { return r.sinal === 'alta'; }) + '</span></div><div class="av-kpi-d">queda · atenção · em alta</div></div>' +
     '</div>';
-  var rows = L.filter(fAtual[2]);
-  if (RCA.filtro === 'alta' || RCA.filtro === 'cand' || RCA.filtro === 'entrou') rows = rows.slice().sort(function (a, b) { return b.perda30 - a.perda30; });   // ganhos: maior ganho primeiro
+  var rows = rcaAplicaOrdem(L.filter(fAtual[2]));
   var corpo = rows.length ? rows.map(function (r) {
     var s = RCA_SINAL[r.sinal];
     var pos = r.pos ? '<b>' + r.pos + 'º</b>' : '—';
@@ -12179,8 +12229,8 @@ function rcaRender() {
   }).join('') : '<tr><td colspan="11" style="text-align:center;padding:18px" class="ec-sub">Nenhum item neste filtro — curva A sob controle.</td></tr>';
   var R = RCA_REGRA;
   el.innerHTML = '<div class="card av-card">' + topo + resumo + chips +
-    '<div class="scroll" style="padding:0 18px"><table class="t rca-tab"><thead><tr><th>Posição</th><th>Anúncio</th><th>Sinal</th><th class="r">Fat. ' + RCA_JANELA + 'd</th><th class="r">7 dias × ant.</th><th class="r">30 dias × ant. ▼</th><th>26 semanas</th><th class="r">Visitas 7d</th><th class="r">Conversão 7d</th><th>Estoque & ruptura</th><th>Ação sugerida</th></tr></thead><tbody>' + corpo + '</tbody></table></div>' +
-    '<div class="ec-sub" style="padding:10px 18px 14px;font-size:11px;line-height:1.5">Curva A = anúncios que somam ' + Math.round(RCA_CORTE * 100) + '% do faturamento ML nos últimos ' + RCA_JANELA + ' dias fechados (até ontem); posição comparada com a mesma curva 30 dias atrás. Candidato a A = seria A pelos últimos 30 dias, mas ainda não é pelos ' + RCA_JANELA + '. Lista ordenada pelo faturamento perdido em R$ (30 dias × 30 anteriores); nos filtros Em alta, Candidatos e Entraram, pelo maior ganho. ' + (D.nDias < RCA_HIST ? '<b>Histórico com ' + D.nDias + ' de ' + (RCA_HIST + 1) + ' dias — complete com ↻.</b> ' : '') +
+    '<div class="scroll" style="padding:0 18px"><table class="t rca-tab"><thead>' + rcaThead() + '</thead><tbody>' + corpo + '</tbody></table></div>' +
+    '<div class="ec-sub" style="padding:10px 18px 14px;font-size:11px;line-height:1.5">Curva A = anúncios que somam ' + Math.round(RCA_CORTE * 100) + '% do faturamento ML nos últimos ' + RCA_JANELA + ' dias fechados (até ontem); posição comparada com a mesma curva 30 dias atrás. Candidato a A = seria A pelos últimos 30 dias, mas ainda não é pelos ' + RCA_JANELA + '. Ordem padrão: faturamento perdido em R$ (30 dias × 30 anteriores); nos filtros Em alta, Candidatos e Entraram, maior ganho. Clique no título de uma coluna para ordenar por ela; clique de novo para inverter. ' + (D.nDias < RCA_HIST ? '<b>Histórico com ' + D.nDias + ' de ' + (RCA_HIST + 1) + ' dias — complete com ↻.</b> ' : '') +
     'Vendas — queda forte: 7d ≤ ' + rcaPct(R.quedaForte7) + ' ou 30d ≤ ' + rcaPct(R.quedaForte30) + ' · atenção: 7d ≤ ' + rcaPct(R.atencao7) + ', 30d ≤ ' + rcaPct(R.atencao30) + ' ou perdeu ' + R.posicao + '+ posições · em alta: 7d ≥ ' + rcaPct(R.alta7) + ' ou 30d ≥ ' + rcaPct(R.alta30) + '. ' +
     'Conversão = pedidos ÷ visitas do anúncio. Ruptura (Estoque & Compras): estoque Bling + trânsito contra a venda diária, lead time e estoque de segurança; crítico quando a reposição já não chega a tempo, atenção quando a compra vence em até 7 dias. Full: mínimo de ' + RCA_FULL_MIN + ' dias de venda.</div></div>';
 }
