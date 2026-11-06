@@ -2475,7 +2475,7 @@ const EC_DEFAULT_CFG = {
   faixas: { crit: 15, aten: 30, saud: 90 },  // faixas de cobertura (dias)
   alvo: { A: 45, B: 30, C: 20 },             // cobertura desejada após a reposição (dias)
   z: { A: 1.65, B: 1.28, C: 1.04 },          // nível de serviço do estoque de segurança (95% / 90% / 85%)
-  abc: { A: 0.70, B: 0.90 },                 // cortes da curva ABC (receita 180d acumulada)
+  abc: { A: 0.70, B: 0.90 },                 // cortes da curva ABC (receita 90d acumulada, sem dias de ruptura)
   fullAlvo: 30, fullMax: 60,                 // cobertura alvo e máxima no Full (dias)
   blingIncluiFull: true,                     // saldo do Bling já contém o estoque Full
   impostoPct: 0,                             // % de impostos sobre a venda (para margem)
@@ -2704,6 +2704,7 @@ async function ecLoad(force = false) {
     ecProgress('Validando estoque Full no Mercado Livre…', null);
     await ecFetchFullInv(force);
     try { EC.snaps = (await blingApi('/bling/snapshots')).snapshots || []; } catch (e) { EC.snaps = []; }
+    await ecStkLoad();
     ecCompute();
     EC.loadedAt = Date.now();
     try { await ecStkSync(); } catch (e) { EC.stk = null; }
@@ -2876,7 +2877,8 @@ function ecCompute() {
     const v7 = v(7), v15 = v(15), v30 = v(30), v60 = v(60), v90 = v(90);
     const prev30 = q ? ecSum(q, 30, 60) : 0, prev90 = q ? ecSum(q, 90, 180) : 0;
     const rev90 = s ? ecSum(s.r, 0, 90) : 0, rev30 = s ? ecSum(s.r, 0, 30) : 0, fee90 = s ? ecSum(s.f, 0, 90) : 0;
-    const rev180 = s ? ecSum(s.r, 0, 180) : 0;   // curva ABC
+    const rev180 = s ? ecSum(s.r, 0, 180) : 0;
+    const cv = s ? ecCurvaRev(sku, k => s.r[k], EC_CURVA_DIAS, 1) : { v: 0, bruto: 0, rupt: 0 };   // curva ABC (90d fechados, sem ruptura)
     const canc90 = s ? ecSum(s.c, 0, 90) : 0;
     const full90 = s ? ecSum(s.fq, 0, 90) : 0;
     let lastIdx = -1; if (q) for (let i = 0; i < H; i++) if (q[i] > 0) { lastIdx = i; break; }
@@ -2942,7 +2944,7 @@ function ecCompute() {
     rows.push({
       sku, id: p.id, nome: p.nome, ativo, isKit, kitFisico, formato: p.formato, blingVirt, matriz, full, total, transito, lt, ltFonte: Number(cfg.ltSku[sku]) ? 'manual' : ltB ? 'Bling' : 'padrão', moq: bf && bf[0] > 0 ? bf[0] : 0, mult: bf && bf[2] > 1 ? bf[2] : 0, buyLido: !!bf,
       custo, preco, tarifaUn, freteUn, freteFonte, impPct, impUn, impFonte: taxMap[sku] != null ? 'Bling' : 'padrão', margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
-      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, rev180, canc90, full90, tendPct, tend90Pct, tend, vol,
+      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, rev180, revCurva: cv.v, revCurvaBruta: cv.bruto, ruptCurva: cv.rupt, canc90, full90, tendPct, tend90Pct, tend, vol,
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
       deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds) || full > 0, anuncioFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
       compra: cp,
@@ -2957,12 +2959,12 @@ function ecCompute() {
     });
   }
 
-  // ── 6. Curva ABC (receita 180d — mesma curva do Radar Curva A)
-  const totRev = rows.reduce((a, r) => a + r.rev180, 0) || 1;
+  // ── 6. Curva ABC (receita 90d fechados sem dias de ruptura — mesma curva do Radar Curva A)
+  const totRev = rows.reduce((a, r) => a + r.revCurva, 0) || 1;
   let acc = 0;
-  [...rows].sort((a, b) => b.rev180 - a.rev180).forEach(r => {
-    const before = acc / totRev; acc += r.rev180;
-    r.curva = r.rev180 <= 0 ? 'C' : before < cfg.abc.A ? 'A' : before < cfg.abc.B ? 'B' : 'C';
+  [...rows].sort((a, b) => b.revCurva - a.revCurva).forEach(r => {
+    const before = acc / totRev; acc += r.revCurva;
+    r.curva = r.revCurva <= 0 ? 'C' : before < cfg.abc.A ? 'A' : before < cfg.abc.B ? 'B' : 'C';
   });
 
   // ── 7. Cobertura, risco, projeção, compra, excesso, Full, recomendação
@@ -3178,8 +3180,8 @@ function ecAggregate(rows) {
   ['A', 'B', 'C'].forEach(c => {
     const rs = rows.filter(r => r.curva === c);
     a.abc[c] = {
-      n: rs.length, nVenda: rs.filter(r => r.rev180 > 0).length,
-      receita: rs.reduce((s, r) => s + r.rev180, 0),
+      n: rs.length, nVenda: rs.filter(r => r.revCurva > 0).length,
+      receita: rs.reduce((s, r) => s + r.revCurva, 0),
       margem: rs.reduce((s, r) => s + (r.margemUn != null ? Math.max(0, r.margemUn) * r.v90 : 0), 0),
       estoque: rs.filter(r => !r.isKit).reduce((s, r) => s + r.valorCusto, 0),
       risco: rs.filter(r => r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO).length,
@@ -3297,6 +3299,31 @@ function ecBloqResumo() {
   const g = {}; EC.rows.filter(r => r.bloqueado).forEach(r => { const k = ecBloqMotivo(r); g[k] = (g[k] || 0) + 1; });
   const ab = { 'inativo com estoque': 'inativos', 'inativo no Bling': 'inativos sem estoque', 'sem venda há mais de 180 dias': 'sem venda +180d', 'sem venda há mais de 90 dias': 'sem venda +90d', 'excesso acima de 2× a faixa saudável': 'excesso' };
   return Object.entries(g).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${ab[k]}`).join(' · ') || 'SKUs';
+}
+
+// ───────── Curva ABC: 90 dias fechados, ignorando os dias de ruptura ─────────
+// Dia de ruptura = dia com registro de estoque (Matriz + Full) zerado e sem venda.
+// A receita é projetada para 90 dias: receita ÷ dias com estoque × 90. Para não inflar
+// quem passou quase o período todo sem estoque, considera no mínimo EC_CURVA_MIN_DISP dias.
+// Dia sem registro (painel não aberto) conta como dia com estoque.
+const EC_CURVA_DIAS = 90, EC_CURVA_MIN_DISP = 30;
+async function ecStkLoad() {
+  if (state.isDemo) return;
+  try {
+    const db = await ccDb(); const min = ecDay(EC_CURVA_DIAS + 31);
+    const all = await new Promise(res => { const q = db.transaction('stk').objectStore('stk').getAll(); q.onsuccess = () => res(q.result || []); q.onerror = () => res([]); });
+    const R = {};
+    all.forEach(d => { if (d.seller !== state.sellerId || d.date < min) return;
+      for (const k in d.s) { const x = d.s[k]; if (!((x[0] || 0) + (x[1] || 0) > 0)) (R[k] || (R[k] = {}))[d.date] = 1; } });
+    EC.ruptDias = R;
+  } catch (e) { EC.ruptDias = EC.ruptDias || {}; }
+}
+// receita da curva de um SKU entre os dias D-a e D-b (a ≥ b ≥ 1); val(k, dia) = receita do dia
+function ecCurvaRev(sku, val, a, b) {
+  const R = (EC.ruptDias || {})[sku]; let v = 0, n = 0, rupt = 0;
+  for (let k = b; k <= a; k++) { const d = ecDay(k); const x = val(k, d) || 0; n++; v += x; if (R && R[d] && x <= 0) rupt++; }
+  const disp = n - rupt;
+  return { v: rupt ? v * n / Math.max(disp, Math.min(EC_CURVA_MIN_DISP, n)) : v, bruto: v, rupt };
 }
 
 // ───────── Histórico diário de estoque por SKU (base para medir ruptura e demanda censurada) ─────────
@@ -3501,7 +3528,7 @@ function ecComo() {
     ['Estoque a custo', 'unidades × custo usado', '—', 'posição de hoje', `kits virtuais; ${a.semCusto} SKUs sem custo ficam em zero`],
     ['Estoque a preço de referência', 'unidades × preço médio real de 90d (ou do anúncio)', '—', 'posição de hoje', 'kits virtuais'],
     ['Cobertura geral', `unidades em estoque (${ecInt(a.unidades)})`, 'soma da demanda diária prevista', 'posição de hoje', 'kits virtuais'],
-    ['Curva ABC', 'receita acumulada do SKU', 'receita total de 180 dias', '180 dias', 'sem receita = curva C'],
+    ['Curva ABC', 'receita acumulada do SKU (dias de ruptura descontados: receita ÷ dias com estoque × 90)', 'receita total da curva', '90 dias fechados', 'sem receita = curva C; dia sem estoque e sem venda não conta'],
     ['Valor sugerido de compra', 'compra sugerida × custo (e × preço de compra)', '—', 'lead time + cobertura alvo', 'bloqueados e kits virtuais'],
     ['% ruptura e % risco (saúde)', 'SKUs em ruptura / em risco', `${a.nDemanda} SKUs com demanda`, 'hoje', 'SKUs sem demanda'],
     ['Confiança alta %', 'SKUs sem ressalva grave e com menos de 3 pontos de ressalva', `${rel.length} SKUs relevantes`, 'hoje', 'SKUs não relevantes'],
@@ -3834,7 +3861,7 @@ function ecRenderDash() {
   <!-- 4/5. PERFORMANCE -->
   <div class="g2">
     <div class="card"><div class="card-head"><span class="card-title">Cobertura do estoque</span><span class="ec-muted">SKUs com demanda, por dias</span></div><div class="card-body">${ecCobChart(a)}</div></div>
-    <div class="card"><div class="card-head"><span class="card-title">Curva ABC</span><span class="ec-muted">participação (180 dias)</span></div><div class="card-body">${ecAbcChart(a)}</div></div>
+    <div class="card"><div class="card-head"><span class="card-title">Curva ABC</span><span class="ec-muted">participação (90 dias, sem ruptura)</span></div><div class="card-body">${ecAbcChart(a)}</div></div>
   </div>
   <div class="g2">
     <div class="card"><div class="card-head"><span class="card-title">Tendência dos produtos</span><span class="ec-muted">30d × 30d anteriores</span></div><div class="card-body">${ecTrendChart(a)}</div></div>
@@ -4114,7 +4141,7 @@ function ecOpenCfg() {
         <label class="ec-f"><span>Saldo do Bling já inclui o Full</span><span><input type="checkbox" id="ec-bif" ${c.blingIncluiFull ? 'checked' : ''}></span></label>
         <div class="ec-muted" style="font-size:11px;margin-bottom:8px">${EC.depMatriz ? `Matriz = depósito <b>${ecEsc(EC.depMatriz.nome)}</b> do Bling. Full = ${EC.depFull ? `depósito <b>${ecEsc(EC.depFull.nome)}</b> do Bling` : 'Full do Mercado Livre (nenhum depósito Fulfillment no Bling)'}. O Mercado Livre é usado só para validação (aba Conciliação). Esta opção só vale se o depósito Matriz não for identificado.` : 'Depósito Matriz não identificado — com a opção marcada, Matriz = Bling − Full do ML.'}</div>
         ${inp('ec-imp', c.impostoPct, 'Imposto padrão (SKU sem % Tributos no Bling)', '%')}
-        <div class="ec-subhead" style="margin-top:12px">Curva ABC (receita 180d acumulada)</div>
+        <div class="ec-subhead" style="margin-top:12px">Curva ABC (receita 90d acumulada, sem ruptura)</div>
         ${inp('ec-abcA', Math.round(c.abc.A * 100), 'Corte A até', '%')}${inp('ec-abcB', Math.round(c.abc.B * 100), 'Corte B até', '%')}</div>
     </div>
     <div class="card-body" style="padding-top:0">${ecBuyCfgHtml()}</div>
@@ -11812,12 +11839,12 @@ function avIniciar() {
 /* ═══════════════════════════════════════════════════════════════════════
    RADAR CURVA A — os anúncios que fazem o resultado da conta
 
-   - Curva A = anúncios que somam 70% do faturamento ML dos últimos 180 dias
-     fechados (mesmo período e corte do Estoque & Compras) — estável, não
-     troca a cada oscilação de mercado.
-   - Candidato a A = ainda não é A em 180 dias, mas seria pelos últimos 30.
+   - Curva A = anúncios que somam 70% do faturamento ML dos últimos 90 dias
+     fechados, descontando os dias de ruptura do SKU (mesmo período, regra
+     e corte do Estoque & Compras).
+   - Candidato a A = ainda não é A em 90 dias, mas seria pelos últimos 30.
    - Vendas: 7d × 7d anteriores, 30d × 30d anteriores, posição no ranking
-     de 180 dias hoje × 30 dias antes e as últimas 26 semanas — só dias fechados.
+     de 90 dias hoje × 30 dias antes e as últimas 26 semanas — só dias fechados.
    - Histórico diário por anúncio guardado no IndexedDB do navegador: a
      primeira carga lê ~7 meses; depois só os últimos 3 dias.
    - Quem era A e saiu também aparece (às vezes saiu por falta de estoque).
@@ -11880,8 +11907,8 @@ function rcaThead() {
   }).join('') + '</tr>';
 }
 var RCA_CORTE = 0.70;
-var RCA_JANELA = 180;           // dias que definem a curva A
-var RCA_HIST = RCA_JANELA + 31; // histórico guardado (curva de hoje e de 30 dias atrás)
+var RCA_JANELA = 90;            // dias que definem a curva A (sem os dias de ruptura)
+var RCA_HIST = Math.max(RCA_JANELA + 31, 183); // histórico guardado (curva de hoje e de 30 dias atrás; 26 semanas)
 var RCA_FULL_MIN = 15;              // cobertura mínima no Full (dias)
 var RCA_REGRA = { quedaForte7: -0.30, quedaForte30: -0.20, atencao7: -0.15, atencao30: -0.10, alta7: 0.20, alta30: 0.15, posicao: 3 };
 
@@ -11995,10 +12022,10 @@ async function rcaCarregar(forcar) {
         var r = x.i[id]; p.dias[dia] = { q: r[0], v: r[1], n: r[2] };
       });
     });
+    await rcaEstoqueMotor();   // antes da curva: SKU do anúncio e dias de ruptura
     var D = rcaCalcular(porItem);
     D.nDias = hist.nDias; D.falhas = hist.falhas;
     await rcaVisitas(D.linhas.map(function (r) { return r.id; }).slice(0, 100), !!forcar);
-    await rcaEstoqueMotor();
     rcaDiagnostico(D);
     RCA.dados = D; RCA.at = new Date();
   } catch (e) { RCA.erro = e.message; }
@@ -12027,11 +12054,14 @@ function rcaCalcular(porItem) {
   var J = RCA_JANELA;
   var lista = Object.values(porItem).map(function (p) {
     var s7 = rcaSoma(p.dias, 7, 1), s7p = rcaSoma(p.dias, 14, 8), s30 = rcaSoma(p.dias, 30, 1), s30p = rcaSoma(p.dias, 60, 31);
-    var sJ = rcaSoma(p.dias, J, 1), sJa = rcaSoma(p.dias, J + 30, 31);
+    var ec = rcaEcRow(p.id), sku = ec && !ec.isKit ? ec.sku : null;
+    var dv = function (k, d) { var x = p.dias[d]; return x ? x.v : 0; };
+    var sJ = sku ? ecCurvaRev(sku, dv, J, 1) : { v: rcaSoma(p.dias, J, 1).v, rupt: 0 };
+    var sJa = sku ? ecCurvaRev(sku, dv, J + 30, 31) : { v: rcaSoma(p.dias, J + 30, 31).v, rupt: 0 };
     var sem = []; for (var w = 25; w >= 0; w--) sem.push(rcaSoma(p.dias, w * 7 + 7, w * 7 + 1).v);
     var it = (state.items || []).find(function (x) { return x.id === p.id; });
     return { id: p.id, t: (it && it.title) || p.t, r7: s7.v, r7p: s7p.v, q7: s7.q, q7p: s7p.q, n7: s7.n, n7p: s7p.n, r30: s30.v, r30p: s30p.v, q30: s30.q, q30p: s30p.q,
-      rJ: sJ.v, rJa: sJa.v, sem: sem, pm7: s7.q ? s7.v / s7.q : null, pm30p: s30p.q ? s30p.v / s30p.q : null };
+      rJ: sJ.v, rJa: sJa.v, ruptJ: sJ.rupt, sem: sem, pm7: s7.q ? s7.v / s7.q : null, pm30p: s30p.q ? s30p.v / s30p.q : null };
   });
   var cur = rcaCurva(lista, 'rJ'), ant = rcaCurva(lista, 'rJa'), c30 = rcaCurva(lista, 'r30');
   var linhas = lista.filter(function (r) { return cur.A[r.id] || ant.A[r.id] || c30.A[r.id]; }).map(function (r) {
@@ -12230,7 +12260,7 @@ function rcaRender() {
   var R = RCA_REGRA;
   el.innerHTML = '<div class="card av-card">' + topo + resumo + chips +
     '<div class="scroll" style="padding:0 18px"><table class="t rca-tab"><thead>' + rcaThead() + '</thead><tbody>' + corpo + '</tbody></table></div>' +
-    '<div class="ec-sub" style="padding:10px 18px 14px;font-size:11px;line-height:1.5">Curva A = anúncios que somam ' + Math.round(RCA_CORTE * 100) + '% do faturamento ML nos últimos ' + RCA_JANELA + ' dias fechados (até ontem); posição comparada com a mesma curva 30 dias atrás. Candidato a A = seria A pelos últimos 30 dias, mas ainda não é pelos ' + RCA_JANELA + '. Ordem padrão: faturamento perdido em R$ (30 dias × 30 anteriores); nos filtros Em alta, Candidatos e Entraram, maior ganho. Clique no título de uma coluna para ordenar por ela; clique de novo para inverter. ' + (D.nDias < RCA_HIST ? '<b>Histórico com ' + D.nDias + ' de ' + (RCA_HIST + 1) + ' dias — complete com ↻.</b> ' : '') +
+    '<div class="ec-sub" style="padding:10px 18px 14px;font-size:11px;line-height:1.5">Curva A = anúncios que somam ' + Math.round(RCA_CORTE * 100) + '% do faturamento ML nos últimos ' + RCA_JANELA + ' dias fechados (até ontem), descontando os dias de ruptura do SKU (receita ÷ dias com estoque × ' + RCA_JANELA + '; dia sem registro de estoque conta como dia com estoque); posição comparada com a mesma curva 30 dias atrás. Candidato a A = seria A pelos últimos 30 dias, mas ainda não é pelos ' + RCA_JANELA + '. Ordem padrão: faturamento perdido em R$ (30 dias × 30 anteriores); nos filtros Em alta, Candidatos e Entraram, maior ganho. Clique no título de uma coluna para ordenar por ela; clique de novo para inverter. ' + (D.nDias < RCA_HIST ? '<b>Histórico com ' + D.nDias + ' de ' + (RCA_HIST + 1) + ' dias — complete com ↻.</b> ' : '') +
     'Vendas — queda forte: 7d ≤ ' + rcaPct(R.quedaForte7) + ' ou 30d ≤ ' + rcaPct(R.quedaForte30) + ' · atenção: 7d ≤ ' + rcaPct(R.atencao7) + ', 30d ≤ ' + rcaPct(R.atencao30) + ' ou perdeu ' + R.posicao + '+ posições · em alta: 7d ≥ ' + rcaPct(R.alta7) + ' ou 30d ≥ ' + rcaPct(R.alta30) + '. ' +
     'Conversão = pedidos ÷ visitas do anúncio. Ruptura (Estoque & Compras): estoque Bling + trânsito contra a venda diária, lead time e estoque de segurança; crítico quando a reposição já não chega a tempo, atenção quando a compra vence em até 7 dias. Full: mínimo de ' + RCA_FULL_MIN + ' dias de venda.</div></div>';
 }
