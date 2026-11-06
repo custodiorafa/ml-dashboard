@@ -8876,7 +8876,42 @@ fonte('margem_contribuicao', {
   },
 });
 
+/* ─── EMPRESA: todos os canais (mesma base da Central Comercial) ──────────
+   ML + Full + Shopee + venda direta, como no fechamento de setembro.
+   Margem ANTES do investimento em Ads (as metas foram definidas assim).
+   Venda sem margem calculável (ex.: Shopee sem tarifa) fica fora da soma da
+   margem e aparece no detalhe — não entra como zero escondido. */
+fonte('faturamento_canais', {
+  nome: 'Faturamento — todos os canais',
+  descricao: 'Receita dos pedidos não cancelados de todos os canais (ML, Full, Shopee, venda direta), pela mesma base da Central Comercial.',
+  escopo: 'empresa', unidade: 'R$', direcao: 'Maior é melhor', acumulativo: true,
+  versao: 1, custo: 'médio (sincroniza a Central Comercial da janela)',
+  apurar: function (ctx) {
+    var c = ctx.canais; if (!c) return null;
+    return { quantidade: c.receita, base: null, detalhe: c.detalheFat };
+  },
+});
+fonte('margem_canais', {
+  nome: 'Margem de contribuição — todos os canais',
+  descricao: 'Receita − tarifa − frete − imposto − custo − cupom, antes do Ads, de todos os canais, pela base da Central Comercial.',
+  escopo: 'empresa', unidade: 'R$', direcao: 'Maior é melhor', acumulativo: true,
+  versao: 1, custo: 'zero extra (mesma leitura do faturamento)',
+  ressalva: 'Venda sem tarifa informada (Shopee) ou sem custo fica fora da soma da margem: o número tende a ficar um pouco abaixo do real.',
+  apurar: function (ctx) {
+    var c = ctx.canais; if (!c || c.margem == null) return null;
+    return { quantidade: c.margem, base: null, detalhe: c.detalheMar };
+  },
+});
+
 /* ─── SEM FONTE ──────────────────────────────────────────────────────────── */
+
+fonte('suspensa_validacao', {
+  nome: 'Suspenso — base em validação',
+  descricao: 'Indicador mantido no scorecard, mas sem apuração nesta competência porque a base de medição ainda não é confiável. Devolve N.D.: não gera XP nem penalidade.',
+  escopo: 'pessoa', unidade: null, direcao: null, acumulativo: false,
+  versao: 1, custo: 'zero',
+  apurar: function () { return null; },
+});
 
 fonte('aguardando_integracao', {
   nome: 'Fonte aguardando integração',
@@ -9035,6 +9070,7 @@ async function xpColetar(opts) {
     ctx.skusAnunciados = Object.keys(anunciados).length;
   }
   if (o.conciliacaoFull) ctx.conciliacaoFull = o.conciliacaoFull;
+  if (o.canais) ctx.canais = o.canais;
 
   /* 6. Base elegível. Se o chamador não trouxer uma base CONGELADA, monta
         uma do estado de hoje e marca que não é congelada — a fonte decide
@@ -9049,6 +9085,19 @@ async function xpColetar(opts) {
       semAnuncioNoInicio: u2.filter(function (r) { return !(o.anunciado && o.anunciado(r)); }).length,
       semHistorico: u2.filter(function (r) { return !r.ultimaVenda; }).length,
     };
+  }
+  /* Primeira venda: "sem histórico" quer dizer sem venda ANTES do início da
+     competência. Antes a base era recalculada no dia da medição, e todo SKU
+     que vendeu no mês já tinha última venda — saía da base e o numerador
+     ficava sempre zero. Elegível = ativo, não kit, com saldo hoje OU com
+     venda no mês (quem esgotou vendendo continua contando). */
+  if (o.vendeuAntes && rows.length && ctx.baseElegivel && !ctx.baseElegivel.congelada) {
+    var vendNoMes = o.vendeuNoMes || {};
+    var base1 = rows.filter(function (r) {
+      return r.ativo && !r.isKit && ((r.total || 0) > 0 || vendNoMes[r.sku]) && !o.vendeuAntes[r.sku];
+    });
+    ctx.semHistoricoSet = {}; base1.forEach(function (r) { ctx.semHistoricoSet[r.sku] = true; });
+    ctx.baseElegivel.semHistorico = base1.length;
   }
 
   /* 7. Derivados dos pedidos: SKUs com venda, primeiras vendas e margem. */
@@ -9065,9 +9114,10 @@ async function xpColetar(opts) {
     ctx.vendasPorSku = porSku;
 
     if (ctx.baseElegivel) {
-      var semHist = {};
-      rows.forEach(function (r) { if (!r.ultimaVenda) semHist[r.sku] = true; });
-      ctx.primeirasVendas = Object.keys(porSku).filter(function (s) { return semHist[s]; }).length;
+      var semHist = ctx.semHistoricoSet;
+      if (!semHist) { semHist = {}; rows.forEach(function (r) { if (!r.ultimaVenda) semHist[r.sku] = true; }); }
+      var normS = typeof normSku === 'function' ? normSku : function (x) { return x; };
+      ctx.primeirasVendas = Object.keys(porSku).filter(function (s) { return semHist[normS(s)]; }).length;
     }
 
     /* Margem do período: margem unitária do painel × quantidade vendida.
@@ -9167,8 +9217,29 @@ async function xpMedir() {
     try { await ecLoad(false); } catch (e) { XP.aviso = null; }
   }
 
+  if (c.fechamento && c.fechamento.em) {   // fechada: valores congelados, nada a medir
+    XP.aviso = null; xpRender(); return;
+  }
+
   var pv = [];
   try { pv = (await pvApi('/pv/ocorrencias')).ocorrencias || []; } catch (e) {}
+
+  /* Vendas por SKU antes e dentro da competência (histórico de 180 dias do
+     Estoque & Compras) — base da "primeira venda". */
+  var vendeuAntes = null, vendeuNoMes = {};
+  try {
+    var hd = (typeof EC !== 'undefined' && EC.hist && EC.hist.days) || null;
+    if (hd && Object.keys(hd).length) {
+      vendeuAntes = {};
+      Object.keys(hd).forEach(function (d) {
+        var alvo = d < jan.de ? vendeuAntes : (d <= jan.ate ? vendeuNoMes : null); if (!alvo) return;
+        Object.keys(hd[d]).forEach(function (k) { if ((hd[d][k][0] || 0) > 0) alvo[k] = true; });
+      });
+    }
+  } catch (e) { vendeuAntes = null; }
+
+  var canais = null;
+  try { canais = await xpCanais(jan); } catch (e) { XP.falhaCanais = e.message; }
 
   XP.ctx = await xpColetar({
     janela: jan,
@@ -9176,6 +9247,7 @@ async function xpMedir() {
     itens: (typeof state !== 'undefined' && state.items) || [],
     posvenda: pv,
     baseCongelada: c.baseCongelada || null,
+    canais: canais, vendeuAntes: vendeuAntes, vendeuNoMes: vendeuNoMes,
     conciliacaoFull: (typeof EC !== 'undefined' && EC.agg && EC.agg.conc)
       ? { skus: EC.agg.conc.skus, divergentes: EC.agg.conc.div } : null,
     skusDoItem: function (it) { return (typeof mlItemSkus === 'function') ? mlItemSkus(it) : []; },
@@ -9190,6 +9262,29 @@ async function xpMedir() {
   XP.ultimaApuracao = s;
   XP.aviso = null;
   xpRender();
+}
+
+/* Faturamento e margem de todos os canais na janela, pela Central Comercial.
+   Garante a sincronização dos dias (ML e Bling) antes de somar; dia que
+   continuar faltando derruba o resultado para N.D. em vez de somar parcial. */
+async function xpCanais(jan) {
+  if (typeof ccRange !== 'function') return null;
+  XP.aviso = 'Lendo vendas de todos os canais (Central Comercial)…'; xpRender();
+  var dias = await ccRange(jan.de, jan.ate);
+  if (dias.length < jan.diasDecorridos) { await ccSync(jan.de); }
+  try { await ccBlSync(jan.de); } catch (e) {}
+  dias = await ccRange(jan.de, jan.ate);
+  if (dias.length < jan.diasDecorridos) throw new Error('Central Comercial com ' + dias.length + ' de ' + jan.diasDecorridos + ' dias lidos');
+  var flat = await ccFactsRange(jan.de, jan.ate);
+  var f = flat.filter(function (x) { var d = ecDayOf(x.d); return d >= jan.de && d <= jan.ate; });
+  f.forEach(function (x) { x.ad = 0; });     // margem antes do Ads
+  var a = ccAgg(f), can = ccByCanal(f);
+  var semM = a.receita - a.recComMargem;
+  return {
+    receita: a.receita, margem: a.recComMargem > 0 ? a.margem : null,
+    detalheFat: can.map(function (r) { return r.k + ' ' + ecMoney(r.receita); }).join(' · ') + (CC.blErr ? ' · ⚠ Bling: ' + CC.blErr : ''),
+    detalheMar: 'antes do Ads' + (semM > 1 ? ' · ' + ecMoney(semM) + ' em vendas sem margem calculável fora da soma' : ''),
+  };
 }
 
 /* Pedidos do período, paginados. Testado: a busca pagina sem teto prático. */
@@ -9324,7 +9419,10 @@ function xpBarra(comps, c) {
       '</select>' +
       (comps.some(function (x) { return x.nome === 'Outubro/2026'; }) ? '' :
         '<button class="btn-sm" onclick="xpCriarOutubro()">+ Criar Outubro/2026</button>') +
-      '<button class="btn-sm" onclick="xpMedir()">↻ Medir agora</button>' +
+      (comps.length && !comps.some(function (x) { return x.nome === xpProximoNome(comps[comps.length - 1].nome); })
+        ? '<button class="btn-sm" onclick="xpCriarProximo()">+ Criar ' + ecEsc(xpProximoNome(comps[comps.length - 1].nome)) + '</button>' : '') +
+      (fech ? '' : '<button class="btn-sm" onclick="xpMedir()">↻ Medir agora</button>') +
+      (c && !fech ? '<button class="btn-sm" style="border-color:#e5a23d;color:#e5a23d" onclick="xpFechar()">🔒 Fechar ' + ecEsc(c.nome) + '</button>' : '') +
     '</div></div>' +
     '<div class="ec-muted" style="padding:0 18px 12px">' +
       (fech ? '<b style="color:#e5a23d">Competência fechada em ' + new Date(fech).toLocaleString('pt-BR') + '.</b> Alterações recusadas pelo servidor. · ' : '') +
@@ -9478,6 +9576,7 @@ function xpTelaMetas(R) {
       '<td><select class="btn-sm"' + dis + ' onchange="xpSet(' + i + ',\'direcao\',this.value)">' +
         ['Maior é melhor', 'Menor é melhor'].map(function (d) { return '<option' + (l.direcao === d ? ' selected' : '') + '>' + d + '</option>'; }).join('') + '</select></td>' +
       '<td><input class="btn-sm" style="width:64px" type="number" step="1"' + dis + ' value="' + (l.peso == null ? '' : l.peso) + '" onchange="xpSet(' + i + ',\'peso\',this.value)"></td>' +
+      '<td>' + (fech ? '' : '<button class="btn-sm" title="Remover indicador" onclick="xpRemover(' + i + ')">✕</button>') + '</td>' +
       '<td style="white-space:normal;min-width:240px" class="ec-sub">' +
         (avisos.length ? avisos.map(function (a) { return '<div style="color:#e5a23d">⚠ ' + ecEsc(a) + '</div>'; }).join('') : '') +
         ((l.apuracao && l.apuracao.detalhe) ? '<div>' + ecEsc(l.apuracao.detalhe) + '</div>' : '') +
@@ -9498,8 +9597,46 @@ function xpTelaMetas(R) {
     '<div class="ec-muted" style="padding:0 18px 10px">Pesos individuais por pessoa — ' + ecEsc(pesos) + ' · devem somar ' + XP_CFG.baseIndividual + '. ' +
       'Alterar meta ou peso <b>não</b> reapura: o apurado continua o mesmo e só o atingimento muda.</div>' +
     '<div class="ec-table-wrap"><table class="t ec-table" style="min-width:1400px"><thead><tr>' +
-    '<th>Quem</th><th>Indicador</th><th>Fonte</th><th class="r">Apurado</th><th class="r">Realizado</th><th class="r">Meta</th><th>Unidade</th><th>Direção</th><th class="r">Peso</th><th>Avisos</th>' +
-    '</tr></thead><tbody>' + linhas + '</tbody></table></div></div>';
+    '<th>Quem</th><th>Indicador</th><th>Fonte</th><th class="r">Apurado</th><th class="r">Realizado</th><th class="r">Meta</th><th>Unidade</th><th>Direção</th><th class="r">Peso</th><th></th><th>Avisos</th>' +
+    '</tr></thead><tbody>' + linhas + '</tbody></table></div>' +
+    (fech ? '' : xpFormNovo(c)) + '</div>';
+}
+
+function xpFormNovo(c) {
+  var pessoas = c.pessoas || XP_PESSOAS_PADRAO;
+  var cat = xpCatalogo();
+  return '<div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+    '<b style="font-size:12px">+ Indicador</b>' +
+    '<select class="btn-sm" id="xp-n-quem">' + ['Empresa'].concat(pessoas).map(function (n) { return '<option>' + ecEsc(n) + '</option>'; }).join('') + '</select>' +
+    '<input class="btn-sm" id="xp-n-item" placeholder="nome do indicador" style="width:220px">' +
+    '<select class="btn-sm" id="xp-n-fonte">' + cat.map(function (f) { return '<option value="' + f.id + '">' + ecEsc(f.nome) + '</option>'; }).join('') + '</select>' +
+    '<button class="btn-sm" onclick="xpAdicionar()">Adicionar</button>' +
+    '<span class="ec-sub" style="margin-left:12px">Baseline (mede, não pontua): ' + pessoas.map(function (n) {
+      var on = (c.baseline || []).indexOf(n) >= 0;
+      return '<label style="margin-right:8px;cursor:pointer"><input type="checkbox"' + (on ? ' checked' : '') + ' onchange="xpBaseline(\'' + ecEsc(n).replace(/'/g, "\\'") + '\',this.checked)"> ' + ecEsc(n) + '</label>';
+    }).join('') + '</span>' +
+    '<span class="ec-sub" style="margin-left:auto">Depois de mexer, clique em <b>Salvar alterações</b>.</span></div>';
+}
+function xpAdicionar() {
+  var c = xpCompetencia(); if (!c) return;
+  var quem = document.getElementById('xp-n-quem').value, item = document.getElementById('xp-n-item').value.trim();
+  var fid = document.getElementById('xp-n-fonte').value, f = XP_FONTES[fid] || {};
+  if (!item) { showToast('Dê um nome ao indicador', 'warn'); return; }
+  c.lancamentos.push({ id: Math.random().toString(36).slice(2), item: item, quem: quem, tipo: quem === 'Empresa' ? 'Global' : 'Individual',
+    fonteId: fid, meta: null, unidade: f.unidade || '%', direcao: f.direcao || 'Maior é melhor', peso: null,
+    acumulativo: !!f.acumulativo, quantidade: null, base: null, final: null });
+  XP.view.editando = true; xpRender();
+}
+function xpRemover(i) {
+  var c = xpCompetencia(); if (!c || !c.lancamentos[i]) return;
+  if (!confirm('Remover "' + c.lancamentos[i].item + '" de ' + c.nome + '?')) return;
+  c.lancamentos.splice(i, 1); XP.view.editando = true; xpRender();
+}
+function xpBaseline(nome, on) {
+  var c = xpCompetencia(); if (!c) return;
+  var b = (c.baseline || []).filter(function (n) { return n !== nome; });
+  if (on) b.push(nome);
+  c.baseline = b; XP.view.editando = true; xpRender();
 }
 
 function xpSet(i, campo, valor) {
@@ -9508,6 +9645,12 @@ function xpSet(i, campo, valor) {
   if (campo === 'meta' || campo === 'peso' || campo === 'quantidade' || campo === 'base')
     l[campo] = valor === '' ? null : Number(valor);
   else l[campo] = valor;
+  if (campo === 'fonteId') {
+    var f = XP_FONTES[valor];
+    if (f && f.direcao) l.direcao = f.direcao;
+    if (f && f.unidade) l.unidade = f.unidade;
+    if (f) l.acumulativo = !!f.acumulativo;
+  }
   XP.view.editando = true;
   xpRender();
 }
@@ -9566,6 +9709,69 @@ function xpSeedOutubro() {
       L({ item: 'Divergência Full (acompanhamento)', quem: 'William', fonteId: 'divergencia_full', peso: null, direcao: 'Menor é melhor' }),
     ],
   };
+}
+
+/* ─── virada de mês ────────────────────────────────────────────────────── */
+var XP_MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+function xpProximoNome(nome) {
+  var iso = compIso(nome); if (!iso) return null;
+  var a = +iso.slice(0, 4), m = +iso.slice(5, 7);
+  if (m === 12) { a++; m = 1; } else m++;
+  return XP_MESES[m - 1] + '/' + a;
+}
+/* Copia pessoas, indicadores, fontes, pesos e metas do mês anterior; zera o
+   que é medição. A direção e a unidade vêm da fonte quando ela as define. */
+function xpCopiarCompetencia(ant, nome) {
+  return {
+    nome: nome, criadaEm: new Date().toISOString(),
+    pessoas: (ant.pessoas || XP_PESSOAS_PADRAO).slice(), baseline: (ant.baseline || []).slice(),
+    copiadaDe: ant.nome,
+    lancamentos: (ant.lancamentos || []).filter(function (l) { return l.tipo !== 'Conformidade'; }).map(function (l) {
+      var f = XP_FONTES[l.fonteId] || {};
+      return Object.assign({}, l, { id: Math.random().toString(36).slice(2),
+        direcao: f.direcao || l.direcao, unidade: f.unidade || l.unidade,
+        quantidade: null, base: null, final: null, apuracao: null, data: null, fonte: null });
+    }),
+  };
+}
+async function xpCriarProximo() {
+  var comps = (XP.estado && XP.estado.competencias) || []; if (!comps.length) return;
+  var ant = comps[comps.length - 1], nome = xpProximoNome(ant.nome);
+  if (!confirm('Criar ' + nome + ' copiando indicadores, pesos e metas de ' + ant.nome + '?\nDepois ajuste as metas em "Metas e fontes".')) return;
+  var quem = xpQuem(); if (!quem) return;
+  var c = xpCopiarCompetencia(ant, nome);
+  try {
+    var r = await xpApi('/xp/salvar', { method: 'POST', body: { competencia: c, usuario: quem, rev: XP.rev } });
+    if (r.erro) { alert(r.erro); return; }
+    XP.rev = r.rev; XP.comp = nome; XP.view.aba = 'metas';
+    await xpCarregar();
+  } catch (e) { alert('Não foi possível criar: ' + e.message); }
+}
+/* Fechar: copia o realizado de cada linha para Final (congela) e grava o
+   carimbo. Depois disso o servidor recusa alterações e o painel não reapura. */
+async function xpFechar() {
+  var c = xpCompetencia(); if (!c || (c.fechamento && c.fechamento.em)) return;
+  var R = xpCalcular();
+  var nd = (c.lancamentos || []).filter(function (l) { return l.tipo !== 'Conformidade' && l.final == null && xpValorDe(l) === null; });
+  var msg = 'Fechar ' + c.nome + '?\n\nO realizado de cada indicador é congelado e a competência deixa de aceitar alterações.' +
+    (R && R.atingGlobal != null ? '\nAtingimento global: ' + (R.atingGlobal * 100).toFixed(1) + '%' + (R.atingGlobal < 0.9 ? ' — abaixo da régua de 90%: sem premiação' : '') : '') +
+    (nd.length ? '\n\n' + nd.length + ' indicador(es) seguem N.D.: ' + nd.map(function (l) { return l.item; }).join(', ') : '');
+  if (!confirm(msg)) return;
+  var quem = xpQuem(); if (!quem) return;
+  var n = 0;
+  (c.lancamentos || []).forEach(function (l) {
+    if (l.tipo === 'Conformidade' || l.final != null) return;
+    var v = xpValorDe(l); if (v === null) return;
+    l.final = v; n++;
+  });
+  c.fechamento = { em: new Date().toISOString(), por: quem, congeladas: n,
+    atingGlobal: R ? R.atingGlobal : null, ranking: R ? R.pessoas.map(function (p) { return { nome: p.nome, xpTecnico: p.xpTecnico, xpFinal: p.xpFinal }; }) : null };
+  try {
+    var r = await xpApi('/xp/salvar', { method: 'POST', body: { competencia: c, usuario: quem, rev: XP.rev } });
+    if (r.erro) { alert(r.erro); await xpCarregar(); return; }
+    XP.rev = r.rev; XP.aviso = c.nome + ' fechada: ' + n + ' valor(es) congelado(s).';
+    await xpCarregar();
+  } catch (e) { alert('Não foi possível fechar: ' + e.message); await xpCarregar(); }
 }
 
 async function xpCriarOutubro() {
