@@ -8927,9 +8927,11 @@ fonte('manual', {
   escopo: 'pessoa', unidade: null, direcao: null, acumulativo: false,
   versao: 1, custo: 'zero',
   apurar: function (ctx, lanc) {
+    /* Sem base = o valor digitado já é o resultado (ex.: 2,8 para 2,8%).
+       Sem quantidade = N.D. Medir de novo nunca apaga o que foi digitado. */
     var q = lanc && lanc.quantidade, b = lanc && lanc.base;
-    if (q == null || b == null) return null;
-    return { quantidade: q, base: b };
+    if (q == null) return null;
+    return { quantidade: q, base: b == null ? null : b };
   },
 });
 
@@ -8957,7 +8959,7 @@ function xpApurar(competencia, ctx, hoje) {
     if (!r || r.quantidade == null) {
       saida.semFonte++;
       saida.naoApurados.push(l.item + (f.id === 'aguardando_integracao' ? ' (aguardando integração)' : ' (sem dado)'));
-      l.quantidade = null; l.base = null;
+      if (f.id !== 'manual') { l.quantidade = null; l.base = null; }
       l.apuracao = { fonte: f.id, versao: f.versao, em: saida.em, resultado: 'N.D.' };
       return;
     }
@@ -9216,6 +9218,9 @@ async function xpMedir() {
     xpRender();
     try { await ecLoad(false); } catch (e) { XP.aviso = null; }
   }
+  /* ecLoad volta na hora se outra tela (ex.: Radar Curva A) já estiver lendo
+     o Bling — espera terminar em vez de medir com EC vazio. */
+  for (var w = 0; w < 300 && typeof EC !== 'undefined' && EC.loading; w++) await new Promise(function (r) { setTimeout(r, 1000); });
 
   if (c.fechamento && c.fechamento.em) {   // fechada: valores congelados, nada a medir
     XP.aviso = null; xpRender(); return;
