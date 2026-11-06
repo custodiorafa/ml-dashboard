@@ -8813,25 +8813,26 @@ fonte('portfolio_produtivo', {
   },
 });
 
-/* ─── KAUAN: envios atrasados pela métrica oficial do ML ──────────────────
-   O prazo de postagem NÃO vem no endpoint de envios — conferi 14 envios e
-   nenhum expõe handling limit. A fonte oficial é a reputação do vendedor,
-   que publica a taxa de atraso. Preço disso: a janela é de 60 dias
-   corridos, não o mês da competência. A ressalva vai junto. */
+/* ─── KAUAN: envios atrasados no MÊS da competência ──────────────────────
+   Versão 1 usava a taxa da reputação do vendedor, que é uma janela móvel de
+   60 dias — misturava o mês anterior e não fechava com a competência.
+   Versão 2: para cada envio próprio do mês (pedido criado na janela, sem
+   Full, que é preparado pelo ML), consulta /shipments/{id}/sla, que traz o
+   veredito oficial do Mercado Livre (on_time / delayed). Taxa = atrasados ÷
+   envios com veredito. Envio sem veredito (ainda não despachado, cancelado)
+   fica fora da base e aparece no detalhe. */
 fonte('envios_atrasados', {
-  nome: 'Envios atrasados (métrica oficial do ML)',
-  descricao: 'Taxa de atraso de preparação publicada pelo Mercado Livre na reputação do vendedor.',
+  nome: 'Envios atrasados no mês (SLA oficial do ML)',
+  descricao: 'Envios próprios (sem Full) dos pedidos do mês com status "delayed" no SLA do Mercado Livre, sobre os envios com veredito.',
   escopo: 'pessoa', unidade: '%', direcao: 'Menor é melhor', acumulativo: false,
-  versao: 1, custo: 'baixo (1 chamada)',
-  ressalva: 'A janela da reputação é de 60 dias corridos, não o mês da competência. Comparar com meta mensal é aproximação — o prazo de postagem por envio não é exposto pela API.',
+  versao: 2, custo: 'médio (1 chamada por envio; o que já fechou fica guardado)',
   apurar: function (ctx) {
-    var m = ctx.reputacao;
-    if (!m || !m.delayed_handling_time || m.delayed_handling_time.value == null) return null;
-    var d = m.delayed_handling_time;
-    var total = m.sales && m.sales.completed;
-    if (!total) return null;
-    return { quantidade: d.value, base: total,
-             detalhe: d.value + ' atrasos em ' + total + ' vendas · janela ' + d.period };
+    var m = ctx.slaMes;
+    if (!m || !m.base) return null;
+    return { quantidade: m.atrasados, base: m.base,
+             detalhe: m.atrasados + ' atrasados em ' + m.base + ' envios próprios do mês (sem Full)' +
+                      (m.semVeredito ? ' · ' + m.semVeredito + ' sem veredito do ML' : '') +
+                      (m.falhas ? ' · ' + m.falhas + ' não lidos' : '') };
   },
 });
 
@@ -9073,6 +9074,10 @@ async function xpColetar(opts) {
   }
   if (o.conciliacaoFull) ctx.conciliacaoFull = o.conciliacaoFull;
   if (o.canais) ctx.canais = o.canais;
+  if (o.buscarSla && o.canais && o.canais.envios) {
+    try { ctx.slaMes = await o.buscarSla(o.canais.envios); }
+    catch (e) { ctx.falhas.push('SLA dos envios: ' + e.message); }
+  }
 
   /* 6. Base elegível. Se o chamador não trouxer uma base CONGELADA, monta
         uma do estado de hoje e marca que não é congelada — a fonte decide
@@ -9261,6 +9266,7 @@ async function xpMedir() {
     buscarPedidos: xpBuscarPedidos,
     buscarVisitas: xpBuscarVisitas,
     buscarReputacao: xpBuscarReputacao,
+    buscarSla: xpBuscarSla,
   });
 
   var s = xpApurar(c, XP.ctx);
@@ -9285,7 +9291,10 @@ async function xpCanais(jan) {
   f.forEach(function (x) { x.ad = 0; });     // margem antes do Ads
   var a = ccAgg(f), can = ccByCanal(f);
   var semM = a.receita - a.recComMargem;
+  var env = {};
+  f.forEach(function (x) { if (x.st !== 'cancelled' && x.sh && x.src !== 'bling' && ccCanal(x) !== ccLojaNome(CC_LOJA_FULL)) env[x.sh] = 1; });
   return {
+    envios: Object.keys(env),
     receita: a.receita, margem: a.recComMargem > 0 ? a.margem : null,
     detalheFat: can.map(function (r) { return r.k + ' ' + ecMoney(r.receita); }).join(' · ') + (CC.blErr ? ' · ⚠ Bling: ' + CC.blErr : ''),
     detalheMar: 'antes do Ads' + (semM > 1 ? ' · ' + ecMoney(semM) + ' em vendas sem margem calculável fora da soma' : ''),
@@ -9320,6 +9329,25 @@ async function xpBuscarPedidos(jan) {
 async function xpBuscarVisitas(jan) {
   var v = await mlGet('/users/' + state.sellerId + '/items_visits?date_from=' + jan.de + '&date_to=' + jan.ate);
   return v ? v.total_visits : null;
+}
+
+/* SLA de despacho por envio. Veredito final (on_time/delayed/early) não muda
+   mais: fica guardado no navegador e não é relido. */
+var XP_SLA_KEY = 'xp_sla_v1';
+async function xpBuscarSla(ids) {
+  var cache = {}; try { cache = JSON.parse(localStorage.getItem(XP_SLA_KEY) || '{}'); } catch (e) {}
+  var falta = ids.filter(function (id) { return !cache[id]; }), feitos = 0, falhas = 0;
+  await prPool(falta, 5, async function (id) {
+    try { var r = await mlGet('/shipments/' + id + '/sla'); if (r && r.status) cache[id] = r.status; }
+    catch (e) { falhas++; }
+    if (++feitos % 50 === 0) { XP.aviso = 'Lendo SLA dos envios ' + feitos + '/' + falta.length + '…'; xpRender(); }
+  });
+  var fin = {}; Object.keys(cache).forEach(function (k) { if (/^(on_time|delayed|early)$/.test(cache[k])) fin[k] = cache[k]; });
+  try { localStorage.setItem(XP_SLA_KEY, JSON.stringify(fin)); } catch (e) {}
+  var atr = 0, base = 0, sem = 0;
+  ids.forEach(function (id) { var st = cache[id];
+    if (st === 'delayed') { atr++; base++; } else if (st === 'on_time' || st === 'early') base++; else sem++; });
+  return { atrasados: atr, base: base, semVeredito: sem - falhas > 0 ? sem - falhas : 0, falhas: falhas };
 }
 
 async function xpBuscarReputacao() {
