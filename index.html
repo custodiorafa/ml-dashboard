@@ -8814,25 +8814,30 @@ fonte('portfolio_produtivo', {
 });
 
 /* ─── KAUAN: envios atrasados no MÊS da competência ──────────────────────
-   Versão 1 usava a taxa da reputação do vendedor, que é uma janela móvel de
-   60 dias — misturava o mês anterior e não fechava com a competência.
-   Versão 2: para cada envio próprio do mês (pedido criado na janela, sem
-   Full, que é preparado pelo ML), consulta /shipments/{id}/sla, que traz o
-   veredito oficial do Mercado Livre (on_time / delayed). Taxa = atrasados ÷
-   envios com veredito. Envio sem veredito (ainda não despachado, cancelado)
-   fica fora da base e aparece no detalhe. */
+   v1 usava a taxa da reputação (janela móvel de 60 dias). v2 usava o status
+   bruto do SLA, que marca atraso até quando a coleta do ML não vem.
+   v3: para cada envio próprio do mês (pedido criado na janela, sem Full),
+   conta como atraso o envio que o ML marcou com "handling_delayed"
+   (/shipments/{id}/delays — atraso de PREPARAÇÃO), agrupado pela data de
+   coleta prevista (/shipments/{id}/sla). A Diretoria pode excluir uma data
+   inteira com motivo (ex.: coleta do ML não realizada) — a exclusão fica no
+   lançamento e no histórico, e os envios dessa data saem do numerador e da
+   base. Envio ainda sem veredito fica fora da base. */
 fonte('envios_atrasados', {
-  nome: 'Envios atrasados no mês (SLA oficial do ML)',
-  descricao: 'Envios próprios (sem Full) dos pedidos do mês com status "delayed" no SLA do Mercado Livre, sobre os envios com veredito.',
+  nome: 'Envios atrasados no mês (atraso de preparação do ML)',
+  descricao: 'Envios próprios (sem Full) dos pedidos do mês marcados pelo ML com atraso de preparação, sobre os envios com veredito. Datas de coleta excluídas pela Diretoria saem da conta.',
   escopo: 'pessoa', unidade: '%', direcao: 'Menor é melhor', acumulativo: false,
-  versao: 2, custo: 'médio (1 chamada por envio; o que já fechou fica guardado)',
-  apurar: function (ctx) {
-    var m = ctx.slaMes;
-    if (!m || !m.base) return null;
-    return { quantidade: m.atrasados, base: m.base,
-             detalhe: m.atrasados + ' atrasados em ' + m.base + ' envios próprios do mês (sem Full)' +
-                      (m.semVeredito ? ' · ' + m.semVeredito + ' sem veredito do ML' : '') +
-                      (m.falhas ? ' · ' + m.falhas + ' não lidos' : '') };
+  versao: 3, custo: 'médio (2 chamadas por envio; o que já fechou fica guardado)',
+  apurar: function (ctx, lanc) {
+    var m = ctx.slaMes; if (!m || !m.envios) return null;
+    var exc = {}; ((lanc && lanc.exclusoes) || []).forEach(function (x) { exc[x.data] = true; });
+    var atr = 0, base = 0, fora = 0;
+    m.envios.forEach(function (e) { if (exc[e.d]) { fora++; return; } base++; if (e.h) atr++; });
+    if (!base) return null;
+    return { quantidade: atr, base: base,
+             detalhe: atr + ' com atraso de preparação em ' + base + ' envios próprios do mês (sem Full)' +
+                      (fora ? ' · ' + fora + ' envios de ' + Object.keys(exc).length + ' data(s) excluída(s)' : '') +
+                      (m.semVeredito ? ' · ' + m.semVeredito + ' sem veredito' : '') + (m.falhas ? ' · ' + m.falhas + ' não lidos' : '') };
   },
 });
 
@@ -9331,23 +9336,30 @@ async function xpBuscarVisitas(jan) {
   return v ? v.total_visits : null;
 }
 
-/* SLA de despacho por envio. Veredito final (on_time/delayed/early) não muda
-   mais: fica guardado no navegador e não é relido. */
-var XP_SLA_KEY = 'xp_sla_v1';
+/* Por envio: data de coleta prevista (SLA) e se o ML registrou atraso de
+   preparação (delays). Envio com veredito final não muda mais: fica guardado
+   no navegador e não é relido. */
+var XP_SLA_KEY = 'xp_sla_v3';
 async function xpBuscarSla(ids) {
   var cache = {}; try { cache = JSON.parse(localStorage.getItem(XP_SLA_KEY) || '{}'); } catch (e) {}
-  var falta = ids.filter(function (id) { return !cache[id]; }), feitos = 0, falhas = 0;
+  var falta = ids.filter(function (id) { return !cache[id]; }), feitos = 0, falhas = 0, sem = 0;
+  var tmp = {};
   await prPool(falta, 5, async function (id) {
-    try { var r = await mlGet('/shipments/' + id + '/sla'); if (r && r.status) cache[id] = r.status; }
-    catch (e) { falhas++; }
-    if (++feitos % 50 === 0) { XP.aviso = 'Lendo SLA dos envios ' + feitos + '/' + falta.length + '…'; xpRender(); }
+    try {
+      var sla = await mlGet('/shipments/' + id + '/sla');
+      if (!sla || !/^(on_time|delayed|early)$/.test(sla.status || '')) { tmp[id] = 'sem'; }
+      else {
+        var dl = await mlGet('/shipments/' + id + '/delays');     // sem atraso: o ML responde vazio
+        var h = !!(dl && (dl.delays || []).some(function (x) { return x.type === 'handling_delayed'; }));
+        cache[id] = { d: String(sla.expected_date || '').slice(0, 10) || null, h: h ? 1 : 0 };
+      }
+    } catch (e) { falhas++; tmp[id] = 'falha'; }
+    if (++feitos % 50 === 0) { XP.aviso = 'Lendo atrasos dos envios ' + feitos + '/' + falta.length + '…'; xpRender(); }
   });
-  var fin = {}; Object.keys(cache).forEach(function (k) { if (/^(on_time|delayed|early)$/.test(cache[k])) fin[k] = cache[k]; });
-  try { localStorage.setItem(XP_SLA_KEY, JSON.stringify(fin)); } catch (e) {}
-  var atr = 0, base = 0, sem = 0;
-  ids.forEach(function (id) { var st = cache[id];
-    if (st === 'delayed') { atr++; base++; } else if (st === 'on_time' || st === 'early') base++; else sem++; });
-  return { atrasados: atr, base: base, semVeredito: sem - falhas > 0 ? sem - falhas : 0, falhas: falhas };
+  try { localStorage.setItem(XP_SLA_KEY, JSON.stringify(cache)); } catch (e) {}
+  var envios = [];
+  ids.forEach(function (id) { var c = cache[id]; if (c) envios.push({ id: id, d: c.d, h: c.h }); else if (tmp[id] === 'sem') sem++; });
+  return { envios: envios, semVeredito: sem, falhas: falhas };
 }
 
 async function xpBuscarReputacao() {
@@ -9613,6 +9625,7 @@ function xpTelaMetas(R) {
       '<td style="white-space:normal;min-width:240px" class="ec-sub">' +
         (avisos.length ? avisos.map(function (a) { return '<div style="color:#e5a23d">⚠ ' + ecEsc(a) + '</div>'; }).join('') : '') +
         ((l.apuracao && l.apuracao.detalhe) ? '<div>' + ecEsc(l.apuracao.detalhe) + '</div>' : '') +
+        (l.fonteId === 'envios_atrasados' ? xpExclusoesHtml(i, l, fech) : '') +
       '</td></tr>';
   }).join('');
 
@@ -9633,6 +9646,38 @@ function xpTelaMetas(R) {
     '<th>Quem</th><th>Indicador</th><th>Fonte</th><th class="r">Apurado</th><th class="r">Realizado</th><th class="r">Meta</th><th>Unidade</th><th>Direção</th><th class="r">Peso</th><th></th><th>Avisos</th>' +
     '</tr></thead><tbody>' + linhas + '</tbody></table></div>' +
     (fech ? '' : xpFormNovo(c)) + '</div>';
+}
+
+/* Atrasos por data de coleta prevista, para a Diretoria excluir uma data
+   inteira com motivo (ex.: coleta do ML não realizada). */
+function xpExclusoesHtml(i, l, fech) {
+  var exc = l.exclusoes || [], m = XP.ctx && XP.ctx.slaMes, por = {};
+  if (m && m.envios) m.envios.forEach(function (e) { if (e.h) por[e.d] = (por[e.d] || 0) + 1; });
+  exc.forEach(function (x) { if (!(x.data in por)) por[x.data] = null; });
+  var datas = Object.keys(por).sort(function (a, b) { return (por[b] || 0) - (por[a] || 0) || a.localeCompare(b); });
+  if (!datas.length) return '';
+  var fmt = function (d) { return d ? d.split('-').reverse().slice(0, 2).join('/') : 'sem data'; };
+  return '<div style="margin-top:6px"><b>Atrasos por data de coleta</b>' + datas.map(function (d) {
+    var x = exc.filter(function (e) { return e.data === d; })[0];
+    return '<div>' + fmt(d) + ': ' + (por[d] == null ? '—' : por[d]) + ' envio(s) ' +
+      (x ? '<span style="color:#e5a23d">excluída — ' + ecEsc(x.motivo) + ' (' + ecEsc(x.por || '') + ')</span>' +
+             (fech ? '' : ' <button class="btn-sm" onclick="xpExcluirData(' + i + ',\'' + d + '\',false)">desfazer</button>')
+         : (fech ? '' : ' <button class="btn-sm" onclick="xpExcluirData(' + i + ',\'' + d + '\',true)">excluir data</button>')) + '</div>';
+  }).join('') + '</div>';
+}
+function xpExcluirData(i, data, excluir) {
+  var c = xpCompetencia(); if (!c || !c.lancamentos[i]) return;
+  var l = c.lancamentos[i];
+  var lista = (l.exclusoes || []).filter(function (x) { return x.data !== data; });
+  if (excluir) {
+    var motivo = prompt('Motivo para excluir os envios com coleta prevista em ' + data.split('-').reverse().join('/') + ':', 'Coleta do ML não realizada');
+    if (!motivo) return;
+    lista.push({ data: data, motivo: motivo, por: xpQuem() || '', em: new Date().toISOString() });
+  }
+  l.exclusoes = lista;
+  if (XP.ctx) { var f = XP_FONTES[l.fonteId]; var r = f && f.apurar(XP.ctx, l);
+    if (r) { l.quantidade = r.quantidade; l.base = r.base; l.apuracao = Object.assign({}, l.apuracao || {}, { detalhe: r.detalhe || null, versao: f.versao }); } }
+  XP.view.editando = true; xpRender();
 }
 
 function xpFormNovo(c) {
@@ -9763,7 +9808,7 @@ function xpCopiarCompetencia(ant, nome) {
       var f = XP_FONTES[l.fonteId] || {};
       return Object.assign({}, l, { id: Math.random().toString(36).slice(2),
         direcao: f.direcao || l.direcao, unidade: f.unidade || l.unidade,
-        quantidade: null, base: null, final: null, apuracao: null, data: null, fonte: null });
+        quantidade: null, base: null, final: null, apuracao: null, data: null, fonte: null, exclusoes: [] });
     }),
   };
 }
