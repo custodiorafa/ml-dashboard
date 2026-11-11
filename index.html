@@ -3643,7 +3643,8 @@ function ecRenderCesta() {
       <div class="card-head" style="cursor:pointer;gap:10px;flex-wrap:wrap" onclick="ecCestaToggle(${i})">
         <span class="card-title" style="text-transform:none;letter-spacing:0">${open ? '▾' : '▸'} ${ecEsc(f.nome)}</span>
         <span>${ecPill(f.dec[0], f.dec[1])} <span class="ec-muted" style="font-size:11px">${ecEsc(f.dec[2])}</span></span>
-        ${f.nome !== EC_SEM_FORN ? `<button class="ec-lt" style="margin-left:auto" ${ecPodeEditar() ? '' : 'disabled'} onclick="event.stopPropagation();ecEditLTForn(${i})" title="Lead time deste fornecedor (vale para os SKUs dele sem lead time próprio)">Lead time ${ecCfg().ltForn[ecFornKey(f.nome)] ? ecCfg().ltForn[ecFornKey(f.nome)] + 'd*' : ecCfg().leadTime + 'd (padrão)'}</button>` : ''}</div>
+        <button class="btn-sm" style="margin-left:auto" onclick="event.stopPropagation();ecExportCesta(${i})" title="Baixar Excel só deste fornecedor">⬇ Excel</button>
+        ${f.nome !== EC_SEM_FORN ? `<button class="ec-lt" ${ecPodeEditar() ? '' : 'disabled'} onclick="event.stopPropagation();ecEditLTForn(${i})" title="Lead time deste fornecedor (vale para os SKUs dele sem lead time próprio)">Lead time ${ecCfg().ltForn[ecFornKey(f.nome)] ? ecCfg().ltForn[ecFornKey(f.nome)] + 'd*' : ecCfg().leadTime + 'd (padrão)'}</button>` : ''}</div>
       <div class="ec-strip ec-strip-sm" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
         ${ecStat('SKUs / unidades', `${ecInt(f.itens.length)} / ${ecInt(f.qtd)}`, f.agora ? `${f.agora} para comprar agora` : 'programar')}
         ${ecStat('Valor a preço de compra', f.vCompra > 0 ? ecMoney(f.vCompra) : '—', f.semPreco ? `<span class="c-orange">${f.semPreco} SKU${f.semPreco > 1 ? 's' : ''} sem preço — total parcial</span>` : 'preço do fornecedor')}
@@ -3673,14 +3674,16 @@ function ecRenderCesta() {
 }
 function ecCestaToggle(i) { const f = (EC._cesta || [])[i]; if (!f) return; EC.view.cestaOpen[f.nome] = !EC.view.cestaOpen[f.nome]; ecRenderCesta(); }
 function ecCestaAll(v) { EC.view.cestaOpen = {}; if (v) (EC._cesta || []).forEach(f => { EC.view.cestaOpen[f.nome] = true; }); ecRenderCesta(); }
-async function ecExportCesta() {
+async function ecExportCesta(idx) {
   if (!(await ccLoadXlsx())) return;
-  const n2 = v => v == null || !isFinite(v) ? '' : +v.toFixed(2); const fs = ecCesta();
+  const n2 = v => v == null || !isFinite(v) ? '' : +v.toFixed(2); const um = idx != null ? (EC._cesta || [])[idx] : null;
+  const fs = um ? ecCesta().filter(f => f.nome === um.nome) : ecCesta();
   const forn = fs.map(f => ({ 'Fornecedor': f.nome, 'Decisão': f.dec[0], 'Motivo': f.dec[2], 'SKUs': f.itens.length, 'Unidades': f.qtd, 'SKUs comprar agora': f.agora, 'Valor a preço de compra': n2(f.vCompra), 'SKUs sem preço de compra': f.semPreco, 'Valor a custo': n2(f.vCusto), 'Comprar até': f.ate || '', 'Cobertura antes (dias)': f.cobAntes == null ? '' : Math.round(f.cobAntes), 'Cobertura depois (dias)': f.cobDepois == null ? '' : Math.round(f.cobDepois), 'Em trânsito (un)': f.transito, 'Margem projetada': n2(f.margem), 'SKUs confiança baixa': f.baixa, 'Pedido mínimo': 'não informado', 'SKUs com MOQ': f.itens.filter(r => r.moq).length, 'SKUs com múltiplo de compra': f.itens.filter(r => r.mult).length, 'Condição de pagamento': 'não informado', 'Frete de entrada': 'não informado' }));
   const itens = []; fs.forEach(f => f.itens.forEach(r => { const c = ecConf(r); itens.push({ 'Fornecedor': f.nome, 'Referência fornecedor': r.refForn || '', 'SKU': r.sku, 'Produto': r.nome, 'Curva': r.curva, 'Recomendação': r.rec, 'Risco': r.risco, 'Estoque total': r.total, 'Em trânsito': r.transito, 'Previsão de chegada': (r.compra && r.compra.prevChegada) || '', 'Demanda diária': n2(r.rate), 'Cobertura atual (dias)': isFinite(r.cob) ? Math.round(r.cob) : '', 'Cobertura após (dias)': r.rate > 0 ? Math.round((r.total + r.transito + r.sugCompra) / r.rate) : '', 'Lead time': r.lt, 'Origem lead time': r.ltFonte, 'Qtd calculada': r.sugBruta, 'MOQ': r.moq || '', 'Múltiplo de compra': r.mult || '', 'Qtd sugerida': r.sugCompra, 'Preço de compra': r.precoCompra > 0 ? n2(r.precoCompra) : '', 'Origem preço': r.precoCompraFonte || '', 'Valor a preço de compra': r.precoCompra > 0 ? n2(r.sugCompra * r.precoCompra) : '', 'Custo unitário': r.custo > 0 ? n2(r.custo) : '', 'Valor a custo': r.custo > 0 ? n2(r.sugCompra * r.custo) : '', 'Comprar até': r.comprarAte || '', 'Margem unitária projetada': n2(r.margemUn), 'Confiança': c.nivel, 'Ressalvas': c.motivos.map(m => m.txt).join(' | ') }); }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(forn), 'Fornecedores'); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itens), 'Itens');
-  XLSX.writeFile(wb, `cesta_compra_fornecedor_${ecDay()}.xlsx`);
+  const slug = um ? '_' + um.nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) : '';
+  XLSX.writeFile(wb, `cesta_compra_fornecedor${slug}_${ecDay()}.xlsx`);
 }
 
 // ───────── filtros rápidos (usados nos alertas, KPIs e na tabela) ─────────
