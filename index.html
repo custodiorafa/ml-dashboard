@@ -2480,6 +2480,9 @@ const EC_DEFAULT_CFG = {
   blingIncluiFull: true,                     // saldo do Bling já contém o estoque Full
   impostoPct: 0,                             // % de impostos sobre a venda (para margem)
   ltSku: {},                                 // lead time por SKU {SKU: dias}
+  ltForn: {},                                // lead time por fornecedor {NOME DO FORNECEDOR: dias} (manual)
+  moqSku: {},                                // MOQ por SKU {SKU: un} (manual; vazio = 0, não aplicado)
+  multSku: {},                               // múltiplo de compra por SKU {SKU: un} (manual; vazio = 0, não aplicado)
 };
 function ecCfg() {
   if (EC.cfg) return EC.cfg;
@@ -2487,9 +2490,11 @@ function ecCfg() {
   try { c = JSON.parse(localStorage.getItem(EC_CFG_KEY) || '{}'); } catch (e) {}
   EC.cfg = { ...EC_DEFAULT_CFG, ...c,
     faixas: { ...EC_DEFAULT_CFG.faixas, ...(c.faixas || {}) }, alvo: { ...EC_DEFAULT_CFG.alvo, ...(c.alvo || {}) },
-    z: { ...EC_DEFAULT_CFG.z, ...(c.z || {}) }, abc: { ...EC_DEFAULT_CFG.abc, ...(c.abc || {}) }, ltSku: { ...(c.ltSku || {}) } };
+    z: { ...EC_DEFAULT_CFG.z, ...(c.z || {}) }, abc: { ...EC_DEFAULT_CFG.abc, ...(c.abc || {}) }, ltSku: { ...(c.ltSku || {}) },
+    ltForn: { ...(c.ltForn || {}) }, moqSku: { ...(c.moqSku || {}) }, multSku: { ...(c.multSku || {}) } };
   return EC.cfg;
 }
+const ecFornKey = n => String(n || '').trim().toUpperCase();
 function ecSaveCfg() { try { localStorage.setItem(EC_CFG_KEY, JSON.stringify(EC.cfg)); } catch (e) {} }
 
 // ───────── datas (fuso de Brasília) ─────────
@@ -2919,8 +2924,16 @@ function ecCompute() {
     const total = matriz + full;
     const transito = cp ? cp.transito || 0 : 0;
     // campos de compra do Bling (MOQ, lead time, múltiplo): só participam quando preenchidos
+    // ordem do lead time: manual do SKU → manual do fornecedor → Bling → padrão do módulo
+    // MOQ e múltiplo: manual do SKU → Bling → 0 (não aplicado)
     const bf = BUY[p.id] || null; const ltB = bf && bf[1] > 0 ? bf[1] : 0;
-    const lt = Number(cfg.ltSku[sku]) || ltB || cfg.leadTime;
+    const fornCalc = (p.forn && p.forn.nome) || cp?.fornNome || '';
+    const ltF = Number(cfg.ltForn[ecFornKey(fornCalc)]) || 0;
+    const lt = Number(cfg.ltSku[sku]) || ltF || ltB || cfg.leadTime;
+    const ltFonte = Number(cfg.ltSku[sku]) ? 'manual' : ltF ? 'fornecedor' : ltB ? 'Bling' : 'padrão';
+    const moqM = Number(cfg.moqSku[sku]) || 0, multM = Number(cfg.multSku[sku]) || 0;
+    const moq = moqM > 0 ? moqM : (bf && bf[0] > 0 ? bf[0] : 0), mult = multM > 1 ? multM : (bf && bf[2] > 1 ? bf[2] : 0);
+    const moqFonte = moqM > 0 ? 'manual' : moq ? 'Bling' : '', multFonte = multM > 1 ? 'manual' : mult ? 'Bling' : '';
 
     // Custos, preços, margem
     const custo = p.custo > 0 ? p.custo : (cp && cp.ultCusto > 0 ? cp.ultCusto : 0);
@@ -2942,7 +2955,7 @@ function ecCompute() {
     const margemPct = margemUn != null && preco > 0 ? margemUn / preco : null;
 
     rows.push({
-      sku, id: p.id, nome: p.nome, ativo, isKit, kitFisico, formato: p.formato, blingVirt, matriz, full, total, transito, lt, ltFonte: Number(cfg.ltSku[sku]) ? 'manual' : ltB ? 'Bling' : 'padrão', moq: bf && bf[0] > 0 ? bf[0] : 0, mult: bf && bf[2] > 1 ? bf[2] : 0, buyLido: !!bf,
+      sku, id: p.id, nome: p.nome, ativo, isKit, kitFisico, formato: p.formato, blingVirt, matriz, full, total, transito, lt, ltFonte, moq, mult, moqFonte, multFonte, buyLido: !!bf,
       custo, preco, tarifaUn, freteUn, freteFonte, impPct, impUn, impFonte: taxMap[sku] != null ? 'Bling' : 'padrão', margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
       v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, rev180, revCurva: cv.v, revCurvaBruta: cv.bruto, ruptCurva: cv.rupt, canc90, full90, tendPct, tend90Pct, tend, vol,
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
@@ -3255,7 +3268,7 @@ function ecConf(r) {
     }
     if (!(r.precoCompra > 0)) add(1, 'Sem preço de compra do fornecedor');
     if (!r.fornecedor) add(1, 'Sem fornecedor no cadastro');
-    if ((r.ltFonte || 'padrão') === 'padrão') add(1, `Lead time padrão (${cfg.leadTime}d), não informado para este SKU`);
+    if ((r.ltFonte || 'padrão') === 'padrão') add(1, `Lead time padrão (${cfg.leadTime}d), não informado para o SKU nem para o fornecedor`);
     if (r.transito > 0 && !(r.compra && r.compra.prevChegada)) add(2, 'Compra em trânsito sem previsão de chegada');
   }
   if (r.preco > 0 && r.freteFonte !== 'pedidos') add(1, r.freteFonte === '—' ? 'Frete sem fonte (considerado zero na margem)' : `Frete estimado (${r.freteFonte}), não o real dos pedidos`);
@@ -3463,7 +3476,7 @@ function ecMemo(sku) {
   // reposição
   const alvoDias = cfg.alvo[r.curva]; const alvoUn = r.rate * alvoDias; const brutoSug = r.consumoLT + r.ss + alvoUn - r.total - r.transito;
   const rupt = dem && isFinite(r.cob) ? ecAddDays(ecDay(), Math.floor(r.cob)) : null;
-  const repos = row('Lead time usado', `${r.lt} dias · ${r.ltFonte === 'manual' ? 'manual para este SKU' : r.ltFonte === 'Bling' ? 'campo "Lead time (dias)" do Bling' : 'padrão do módulo'}`)
+  const repos = row('Lead time usado', `${r.lt} dias · ${r.ltFonte === 'manual' ? 'manual para este SKU' : r.ltFonte === 'fornecedor' ? 'manual do fornecedor ' + ecEsc(r.fornecedor) : r.ltFonte === 'Bling' ? 'campo "Lead time (dias)" do Bling' : 'padrão do módulo (fornecedor sem lead time)'}`)
     + row('Consumo no lead time', dem ? `${n2(r.rate)} × ${r.lt} = ${n1(r.consumoLT)} un` : '—')
     + row('Estoque de segurança', dem ? `${ecInt(r.ss)} un` : '—')
     + (dem ? `<div class="ec-memo-f">segurança = z (curva ${r.curva}: ${cfg.z[r.curva]}) × desvio-padrão diário (${n2(r.sd)}) × √lead time (${r.lt})<br>= ${n2(cfg.z[r.curva] * r.sd * Math.sqrt(r.lt))} → arredonda para cima = <b>${ecInt(r.ss)} un</b></div>` : '')
@@ -3475,8 +3488,8 @@ function ecMemo(sku) {
   const compra = r.isKit ? `<div class="ec-memo-f">Kit virtual: compra sugerida sempre zero. Veja os componentes.</div>`
     : !dem ? `<div class="ec-memo-f">Sem demanda prevista: compra sugerida = 0.</div>`
     : `<div class="ec-memo-f">compra = consumo no lead time + segurança + alvo − estoque − trânsito<br>= ${n1(r.consumoLT)} + ${ecInt(r.ss)} + ${n1(alvoUn)} (${n2(r.rate)} × ${alvoDias}d) − ${ecInt(r.total)} − ${ecInt(r.transito)}<br>= ${n1(brutoSug)} → ${brutoSug <= 0 ? 'não precisa comprar' : 'arredonda para cima'} = <b>${ecInt(r.sugBruta != null ? r.sugBruta : r.sugCompra)} un</b></div>`
-      + row('MOQ (Bling)', r.moq ? ecInt(r.moq) + ' un' : na(ecBuyNa(r)))
-      + row('Múltiplo de compra (Bling)', r.mult ? 'de ' + ecInt(r.mult) + ' em ' + ecInt(r.mult) : na(ecBuyNa(r)))
+      + row('MOQ', r.moq ? ecInt(r.moq) + ' un · ' + (r.moqFonte === 'manual' ? 'manual' : 'Bling') : na('não preenchido — 0, não aplicado'))
+      + row('Múltiplo de compra', r.mult ? 'de ' + ecInt(r.mult) + ' em ' + ecInt(r.mult) + ' · ' + (r.multFonte === 'manual' ? 'manual' : 'Bling') : na('não preenchido — 0, não aplicado'))
       + (r.sugBruta != null && r.sugCompra !== r.sugBruta ? `<div class="ec-memo-f">ajuste de compra: ${ecInt(r.sugBruta)} un${r.moq > r.sugBruta ? ` → MOQ ${ecInt(r.moq)}` : ''}${r.mult ? ` → múltiplo de ${ecInt(r.mult)}` : ''} = <b>${ecInt(r.sugCompra)} un</b></div>` : '')
       + row('Pedido mínimo do fornecedor (R$)', na('não informado'))
       + (r.sugCompra > 0 ? row('Valor a custo', ecMoney2(r.sugCompra * r.custo)) + row('Valor a preço de compra', r.precoCompra ? ecMoney2(r.sugCompra * r.precoCompra) : na('sem preço de compra')) : '')
@@ -3592,7 +3605,8 @@ function ecRenderCesta() {
     return `<div class="card ec-sec" style="margin-bottom:10px">
       <div class="card-head" style="cursor:pointer;gap:10px;flex-wrap:wrap" onclick="ecCestaToggle(${i})">
         <span class="card-title" style="text-transform:none;letter-spacing:0">${open ? '▾' : '▸'} ${ecEsc(f.nome)}</span>
-        <span>${ecPill(f.dec[0], f.dec[1])} <span class="ec-muted" style="font-size:11px">${ecEsc(f.dec[2])}</span></span></div>
+        <span>${ecPill(f.dec[0], f.dec[1])} <span class="ec-muted" style="font-size:11px">${ecEsc(f.dec[2])}</span></span>
+        ${f.nome !== EC_SEM_FORN ? `<button class="ec-lt" style="margin-left:auto" onclick="event.stopPropagation();ecEditLTForn(${i})" title="Lead time deste fornecedor (vale para os SKUs dele sem lead time próprio)">Lead time ${ecCfg().ltForn[ecFornKey(f.nome)] ? ecCfg().ltForn[ecFornKey(f.nome)] + 'd*' : ecCfg().leadTime + 'd (padrão)'}</button>` : ''}</div>
       <div class="ec-strip ec-strip-sm" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
         ${ecStat('SKUs / unidades', `${ecInt(f.itens.length)} / ${ecInt(f.qtd)}`, f.agora ? `${f.agora} para comprar agora` : 'programar')}
         ${ecStat('Valor a preço de compra', f.vCompra > 0 ? ecMoney(f.vCompra) : '—', f.semPreco ? `<span class="c-orange">${f.semPreco} SKU${f.semPreco > 1 ? 's' : ''} sem preço — total parcial</span>` : 'preço do fornecedor')}
@@ -3602,7 +3616,7 @@ function ecRenderCesta() {
         ${ecStat('Em trânsito', ecInt(f.transito) + ' un', f.semPrev ? `<span class="c-orange">${f.semPrev} sem previsão de chegada</span>` : 'destes SKUs')}
         ${ecStat('Margem projetada', ecMoney(f.margem), f.semMargem ? `${f.semMargem} SKU${f.semMargem > 1 ? 's' : ''} sem margem calculada` : 'das unidades sugeridas')}
       </div>
-      ${open ? `<div style="padding:0 18px 6px;font-size:12px;color:var(--text2)">Pedido mínimo: ${na} · MOQ preenchido em ${f.itens.filter(r => r.moq).length} e múltiplo de compra em ${f.itens.filter(r => r.mult).length} de ${f.itens.length} SKUs (campos do Bling) · Condição de pagamento: ${na} · Frete de entrada: ${na} <span title="Esses dados não existem no Bling nem no Mercado Livre. Entram na próxima etapa, por cadastro manual do fornecedor.">ⓘ</span></div>
+      ${open ? `<div style="padding:0 18px 6px;font-size:12px;color:var(--text2)">Pedido mínimo: ${na} · MOQ preenchido em ${f.itens.filter(r => r.moq).length} e múltiplo de compra em ${f.itens.filter(r => r.mult).length} de ${f.itens.length} SKUs (edite na lista Itens em linha; vazio = 0) · Condição de pagamento: ${na} · Frete de entrada: ${na} <span title="Esses dados não existem no Bling nem no Mercado Livre. Entram na próxima etapa, por cadastro manual do fornecedor.">ⓘ</span></div>
       <div class="ec-table-wrap" style="margin:0 18px 14px"><table class="t ec-t" style="min-width:1120px"><thead><tr><th>Produto</th><th>Ref. fornecedor</th><th>Curva</th><th>Recomendação</th><th class="r">Estoque</th><th class="r">Trânsito</th><th class="r">Cobertura</th><th class="r">Qtd sugerida</th><th class="r">Preço compra</th><th class="r">Valor compra</th><th class="r">Valor a custo</th><th>Comprar até</th><th>Confiança</th></tr></thead><tbody>${f.itens.map(item).join('')}</tbody></table></div>` : ''}
     </div>`; };
   EC._cesta = fs;
@@ -4037,7 +4051,9 @@ const EC_COLS = [
   ['rate', 'Média mensal', r => (r.v90 / 3).toLocaleString('pt-BR', { maximumFractionDigits: 1 })],
   ['tendPct', 'Tendência %', r => r.vol >= 4 ? ecSigned(r.tendPct) : '—'], ['tend', 'Tendência', r => r.vol >= 4 ? ecEsc(r.tend) : '<span class="ec-muted">sem volume</span>', 's'],
   ['cob', 'Cobertura', r => r.rate > 0.001 ? `${ecDays(r.cob)}<div class="ec-sub">${(r.cob / 30).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} m · M ${ecDays(r.cobMatriz)} · F ${r.temFull ? ecDays(r.cobFull) : '—'}</div>` : '—'],
-  ['lt', 'Lead time', r => `<button class="ec-lt" onclick="ecEditLT('${ecEsc(r.sku)}')" title="Editar lead time deste SKU">${r.lt}d${ecCfg().ltSku[r.sku] ? '*' : ''}</button>${r.ltFonte === 'Bling' ? '<div class="ec-sub">Bling</div>' : ''}`],
+  ['lt', 'Lead time', r => `<button class="ec-lt" onclick="ecEditLT('${ecEsc(r.sku)}')" title="Editar lead time deste SKU">${r.lt}d${ecCfg().ltSku[r.sku] ? '*' : ''}</button>${r.ltFonte === 'Bling' ? '<div class="ec-sub">Bling</div>' : r.ltFonte === 'fornecedor' ? '<div class="ec-sub">fornecedor</div>' : ''}`],
+  ['moq', 'MOQ', r => r.isKit ? '—' : `<button class="ec-lt" onclick="ecEditBuy('moq','${ecEsc(r.sku)}')" title="Editar MOQ deste SKU (vazio = 0)">${r.moq ? ecInt(r.moq) : '0'}${r.moqFonte === 'manual' ? '*' : ''}</button>${r.moqFonte === 'Bling' ? '<div class="ec-sub">Bling</div>' : ''}`],
+  ['mult', 'Múltiplo', r => r.isKit ? '—' : `<button class="ec-lt" onclick="ecEditBuy('mult','${ecEsc(r.sku)}')" title="Editar múltiplo de compra deste SKU (vazio = 0)">${r.mult ? ecInt(r.mult) : '0'}${r.multFonte === 'manual' ? '*' : ''}</button>${r.multFonte === 'Bling' ? '<div class="ec-sub">Bling</div>' : ''}`],
   ['projetado', 'Projetado na reposição', r => r.rate > 0.001 ? `<span class="${r.projetado <= 0 ? 'c-red' : ''}">${ecInt(r.projetado)}</span><div class="ec-sub">consumo LT ${ecInt(r.consumoLT)}</div>` : '—'],
   ['ultimaVenda', 'Última venda', r => r.ultimaVenda ? ecFmtDate(r.ultimaVenda) : '&gt;180d', 's'],
   ['diasSemVenda', 'Dias sem venda', r => r.diasSemVenda > 180 ? '180+' : r.diasSemVenda],
@@ -4087,9 +4103,26 @@ function ecRenderItens() {
 function ecSetFilter(k) { EC.view.filter = k; EC.view.page = 0; ecRenderItens(); }
 function ecSort(k) { const s = EC.view.sort; EC.view.sort = { k, d: s.k === k ? -s.d : (['nome', 'fornecedor', 'sku', 'curva', 'rec', 'risco', 'tend', 'ativo', 'ultimaVenda'].includes(k) ? 1 : -1) }; ecRenderItens(); }
 function ecPage(d) { EC.view.page += d; ecRenderItens(); }
+function ecEditBuy(tipo, sku) {
+  const cfg = ecCfg(); const map = tipo === 'moq' ? cfg.moqSku : cfg.multSku; const nome = tipo === 'moq' ? 'MOQ (quantidade mínima de compra)' : 'Múltiplo de compra (ex.: caixa de 10)';
+  const v = prompt(`${nome} para ${sku}.\nDeixe vazio para zero (não aplicado).`, map[sku] || '');
+  if (v === null) return;
+  const n = parseInt(v, 10);
+  if (!v.trim() || !(n > 0)) delete map[sku]; else map[sku] = n;
+  ecSaveCfg(); ecCompute(); ecRender();
+}
+function ecEditLTForn(i) {
+  const f = (EC._cesta || [])[i]; if (!f || f.nome === EC_SEM_FORN) return;
+  const cfg = ecCfg(); const k = ecFornKey(f.nome);
+  const v = prompt(`Lead time (dias) do fornecedor ${f.nome}.\nVale para todos os SKUs dele que não têm lead time próprio.\nDeixe vazio para usar o padrão (${cfg.leadTime}d).`, cfg.ltForn[k] || '');
+  if (v === null) return;
+  const n = parseInt(v, 10);
+  if (!v.trim() || !(n > 0)) delete cfg.ltForn[k]; else cfg.ltForn[k] = n;
+  ecSaveCfg(); ecCompute(); ecRender();
+}
 function ecEditLT(sku) {
   const cfg = ecCfg(); const cur = cfg.ltSku[sku] || '';
-  const v = prompt(`Lead time (dias) para ${sku}.\nDeixe vazio para usar o padrão (${cfg.leadTime}d).`, cur);
+  const v = prompt(`Lead time (dias) para ${sku}.\nDeixe vazio para usar o do fornecedor ou o padrão (${cfg.leadTime}d).`, cur);
   if (v === null) return;
   const n = parseInt(v, 10);
   if (!v.trim() || !(n > 0)) delete cfg.ltSku[sku]; else cfg.ltSku[sku] = n;
@@ -4105,7 +4138,7 @@ function ecExportCSV() {
     ['Lead time', r => r.lt], ['Estoque segurança', r => r.ss], ['Estoque projetado', r => Math.round(r.projetado)], ['Última venda', r => r.ultimaVenda || ''], ['Dias sem venda', r => r.diasSemVenda],
     ['Risco ruptura', r => r.risco], ['Excesso un', r => r.excessoUn], ['Excesso R$', r => r.excessoR.toFixed(2)], ['Compra sugerida', r => r.sugCompra], ['Valor sugerido a preço de compra', r => (r.sugCompra * r.precoCompra).toFixed(2)], ['Valor sugerido a custo', r => (r.sugCompra * r.custo).toFixed(2)], ['Comprar até', r => r.comprarAte || ''], ['Envio Full', r => r.envioFull], ['Recomendação', r => r.rec],
     ['Última compra', r => r.compra?.ultData || ''], ['Qtd última compra', r => r.compra?.ultQtd || ''], ['Último custo', r => r.compra?.ultCusto || ''], ['Fornecedor (cadastro)', r => r.fornecedor], ['Referência fornecedor', r => r.refForn], ['Origem fornecedor', r => r.fornFonte], ['Fornecedor do último pedido', r => r.fornUltPedido],
-    ['Origem lead time', r => r.ltFonte], ['MOQ', r => r.moq || ''], ['Múltiplo de compra', r => r.mult || ''], ['Compra calculada antes do ajuste', r => r.sugBruta], ['Origem custo', r => r.custoFonte], ['Motivo do bloqueio', r => r.bloqueado ? ecBloqMotivo(r) : ''], ['Dias de estoque registrados (90d)', r => { const x = ecRupt(r); return x ? x.obs : ''; }], ['Dias sem estoque (registrados)', r => { const x = ecRupt(r); return x ? x.dias : ''; }], ['Confiança do dado', r => ecConf(r).nivel], ['Ressalvas', r => ecConf(r).motivos.map(m => m.txt).join(' | ')]];
+    ['Origem lead time', r => r.ltFonte], ['MOQ', r => r.moq || 0], ['Origem MOQ', r => r.moqFonte], ['Múltiplo de compra', r => r.mult || 0], ['Origem múltiplo', r => r.multFonte], ['Compra calculada antes do ajuste', r => r.sugBruta], ['Origem custo', r => r.custoFonte], ['Motivo do bloqueio', r => r.bloqueado ? ecBloqMotivo(r) : ''], ['Dias de estoque registrados (90d)', r => { const x = ecRupt(r); return x ? x.obs : ''; }], ['Dias sem estoque (registrados)', r => { const x = ecRupt(r); return x ? x.dias : ''; }], ['Confiança do dado', r => ecConf(r).nivel], ['Ressalvas', r => ecConf(r).motivos.map(m => m.txt).join(' | ')]];
   (EC.bling?.depositos || []).forEach(d => cols.splice(7, 0, ['Dep. ' + d.nome, r => r.deps[d.id] ? r.deps[d.id][1] : 0]));
   const esc = v => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const csv = '﻿' + cols.map(c => c[0]).join(';') + '\n' + rs.map(r => cols.map(c => esc(typeof c[1](r) === 'number' ? String(c[1](r)).replace('.', ',') : c[1](r))).join(';')).join('\n');
@@ -4132,7 +4165,7 @@ function ecOpenCfg() {
       <div><div class="ec-subhead">Reposição</div>
         ${inp('ec-lt', c.leadTime, 'Lead time padrão')}
         ${inp('ec-aA', c.alvo.A, 'Cobertura alvo — curva A')}${inp('ec-aB', c.alvo.B, 'Cobertura alvo — curva B')}${inp('ec-aC', c.alvo.C, 'Cobertura alvo — curva C')}
-        <div class="ec-muted" style="font-size:11px">Lead time por SKU: clique no valor na coluna "Lead time" dos Itens em linha (${Object.keys(c.ltSku).length} personalizados).</div></div>
+        <div class="ec-muted" style="font-size:11px">Lead time por SKU, MOQ e múltiplo: clique no valor nas colunas dos Itens em linha (${Object.keys(c.ltSku).length} lead times, ${Object.keys(c.moqSku).length} MOQs e ${Object.keys(c.multSku).length} múltiplos preenchidos). Vazio = 0, não aplicado.</div></div>
       <div><div class="ec-subhead">Faixas de cobertura</div>
         ${inp('ec-fc', c.faixas.crit, 'Crítico até')}${inp('ec-fa', c.faixas.aten, 'Atenção até')}${inp('ec-fs', c.faixas.saud, 'Saudável até (acima = excesso)')}
         <div class="ec-subhead" style="margin-top:12px">Full</div>
@@ -4144,10 +4177,25 @@ function ecOpenCfg() {
         <div class="ec-subhead" style="margin-top:12px">Curva ABC (receita 90d acumulada, sem ruptura)</div>
         ${inp('ec-abcA', Math.round(c.abc.A * 100), 'Corte A até', '%')}${inp('ec-abcB', Math.round(c.abc.B * 100), 'Corte B até', '%')}</div>
     </div>
+    <div class="card-body" style="padding-top:0">${ecLtFornHtml()}</div>
     <div class="card-body" style="padding-top:0">${ecBuyCfgHtml()}</div>
     <div class="ec-modal-foot"><button class="btn-sm" onclick="ecResetCfg()">Restaurar padrão</button><button class="btn-sm btn-primary" onclick="ecApplyCfg()">Salvar e recalcular</button></div>
   </div>`;
   m.style.display = 'flex';
+}
+function ecLtFornList() {
+  const c = ecCfg(); const m = {};
+  (EC.rows || []).forEach(r => { if (r.fornecedor) { const k = ecFornKey(r.fornecedor); if (!m[k]) m[k] = { k, nome: r.fornecedor, n: 0 }; m[k].n++; } });
+  Object.keys(c.ltForn).forEach(k => { if (!m[k]) m[k] = { k, nome: k, n: 0 }; });
+  return Object.values(m).sort((a, b) => (!!c.ltForn[b.k] - !!c.ltForn[a.k]) || b.n - a.n || a.nome.localeCompare(b.nome));
+}
+function ecLtFornHtml() {
+  const c = ecCfg(); const L = ecLtFornList(); EC._ltForn = L;
+  return `<div class="ec-subhead">Lead time por fornecedor (manual)</div>
+    <div class="ec-muted" style="font-size:11px;margin-bottom:8px">Vale para todos os SKUs do fornecedor que não têm lead time próprio. Vazio = padrão (${c.leadTime}d). Ordem usada: SKU → fornecedor → Bling → padrão.</div>
+    <div class="ec-table-wrap" style="max-height:260px;overflow:auto"><table class="t ec-t"><thead><tr><th>Fornecedor</th><th class="r">SKUs</th><th class="r">Lead time (dias)</th></tr></thead><tbody>
+    ${L.length ? L.map((f, i) => `<tr><td>${ecEsc(f.nome)}</td><td class="r mono">${f.n || '—'}</td><td class="r"><input type="number" class="ec-ltf" data-i="${i}" min="0" step="1" value="${c.ltForn[f.k] || ''}" placeholder="${c.leadTime}" style="width:80px"></td></tr>`).join('') : '<tr><td colspan="3" class="ec-muted">Carregue o módulo para listar os fornecedores.</td></tr>'}
+    </tbody></table></div>`;
 }
 function ecBlingAuth() {
   const u = (document.getElementById('ec-burl').value || '').trim().replace(/\/+$/, '');
@@ -4168,10 +4216,11 @@ function ecApplyCfg() {
   c.blingIncluiFull = document.getElementById('ec-bif').checked; c.impostoPct = pos(g('ec-imp'), 0);
   c.abc = { A: ecClamp(pos(g('ec-abcA'), 70) / 100, 0.3, 0.95), B: ecClamp(pos(g('ec-abcB'), 90) / 100, 0.5, 0.99) };
   if (c.abc.B <= c.abc.A) c.abc.B = Math.min(0.99, c.abc.A + 0.1);
+  document.querySelectorAll('.ec-ltf').forEach(el => { const f = (EC._ltForn || [])[+el.dataset.i]; if (!f) return; const n = parseInt(el.value, 10); if (n > 0) c.ltForn[f.k] = n; else delete c.ltForn[f.k]; });
   ecSaveCfg(); ecCloseCfg();
   if (blingMudou || !EC.bling) ecLoad(true); else { ecCompute(); ecRender(); }
 }
-function ecResetCfg() { const lt = ecCfg().ltSku, cc = ecCfg().ccIds; EC.cfg = { ...JSON.parse(JSON.stringify(EC_DEFAULT_CFG)), ltSku: lt }; if (cc) EC.cfg.ccIds = cc; ecSaveCfg(); ecOpenCfg(); }
+function ecResetCfg() { const o = ecCfg(), lt = o.ltSku, cc = o.ccIds; EC.cfg = { ...JSON.parse(JSON.stringify(EC_DEFAULT_CFG)), ltSku: lt, ltForn: o.ltForn, moqSku: o.moqSku, multSku: o.multSku }; if (cc) EC.cfg.ccIds = cc; ecSaveCfg(); ecOpenCfg(); }
 
 // ───────── Notificações (sem repetição diária) ─────────
 // Guarda o último nível notificado por SKU/tipo. Notifica de novo só se piorar, mudar de faixa ou voltar após resolvido.
