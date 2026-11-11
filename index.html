@@ -3708,7 +3708,7 @@ const EC_FILTERS = {
   fullbaixo: { label: 'Full baixo', fn: r => r.fullStatus === 'BAIXO' || r.fullStatus === 'CRÍTICO' },
   fullcrit: { label: 'Full crítico', fn: r => r.fullStatus === 'CRÍTICO', hidden: true },
   fullexc: { label: 'Full excessivo', fn: r => r.fullStatus === 'EXCESSIVO' },
-  enviofull: { label: 'Enviar ao Full', fn: r => r.envioFull > 0, hidden: true },
+  enviofull: { label: 'Enviar ao Full', fn: r => r.envioFull > 0 },
   ativos: { label: 'Ativos', fn: r => r.ativo && r.relevante },
   forndiv: { label: 'Fornecedor ≠ último pedido', fn: r => r.fornDiverge && r.relevante, hidden: true },
   fulldiv: { label: 'Divergência Full Bling × ML', fn: r => !r.isKit && r.concFull && r.concFull.st !== 'OK', hidden: true },
