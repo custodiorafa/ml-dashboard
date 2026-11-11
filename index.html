@@ -673,6 +673,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
 .ec-desc { display:inline-block; max-width:280px; overflow:hidden; text-overflow:ellipsis; vertical-align:bottom; }
 .ec-tag { font:600 9px var(--mono); padding:1px 5px; border-radius:4px; background:var(--surface3); color:var(--text2); }
 .ec-lt { background:none; border:1px dashed var(--border2); color:var(--text); border-radius:6px; padding:2px 6px; font:12px var(--mono); cursor:pointer; }
+.ec-lt:disabled { cursor:default; border-style:solid; border-color:transparent; opacity:.85; }
 .ec-pager { display:flex; justify-content:space-between; align-items:center; padding:10px 16px; border-top:1px solid var(--border); }
 .ec-modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:1000; align-items:center; justify-content:center; padding:16px; }
 .ec-modal-box { background:var(--surface); border:1px solid var(--border2); border-radius:14px; width:min(980px,100%); max-height:90vh; overflow:auto; }
@@ -2495,6 +2496,40 @@ function ecCfg() {
   return EC.cfg;
 }
 const ecFornKey = n => String(n || '').trim().toUpperCase();
+// ───────── Parâmetros de compra compartilhados (lead time por SKU/fornecedor, MOQ, múltiplo) ─────────
+// Ficam no Worker de pós-venda (KV), não no navegador: todos os acessos leem os mesmos valores.
+// Só o acesso master (versão do administrador, com a chave) grava; a versão de equipe só consulta.
+const EC_PARAM_KEYS = ['ltSku', 'ltForn', 'moqSku', 'multSku'];
+const ecPodeEditar = () => !window.EQUIPE_MODO;
+async function ecParamsLoad() {
+  const c = ecCfg();
+  try {
+    const p = await pvApi('/ec/params', { ms: 15000 });
+    const vazio = !p || !(p.rev > 0);
+    const temLocal = EC_PARAM_KEYS.some(k => Object.keys(c[k] || {}).length);
+    if (vazio && temLocal && ecPodeEditar()) { await ecParamsSave(); return; } // 1ª vez: sobe o que já estava neste navegador
+    EC_PARAM_KEYS.forEach(k => { c[k] = { ...((p && p[k]) || {}) }; });
+    EC.params = { ok: true, rev: (p && p.rev) || 0, em: p && p.em, por: p && p.por };
+    ecSaveCfg();
+  } catch (e) { EC.params = { ok: false, erro: e.message, rev: EC.params ? EC.params.rev : null }; }
+}
+async function ecParamsSave() {
+  if (!ecPodeEditar()) { showToast('Acesso de consulta: só o acesso master altera os parâmetros de compra.', 'warn'); return false; }
+  const c = ecCfg(); const body = { rev: EC.params && EC.params.ok ? EC.params.rev : undefined, usuario: 'master' };
+  EC_PARAM_KEYS.forEach(k => { body[k] = c[k] || {}; });
+  try {
+    const p = await pvApi('/ec/params', { method: 'POST', body, ms: 15000 });
+    EC.params = { ok: true, rev: p.rev, em: p.em, por: p.por }; ecSaveCfg(); return true;
+  } catch (e) {
+    showToast('Parâmetro NÃO salvo no servidor: ' + ecEsc(e.message) + '. Os outros acessos não vão ver essa alteração.', 'err');
+    try { await ecParamsLoad(); } catch (e2) {}
+    return false;
+  }
+}
+async function ecParamChange(fn) { // aplica a mudança, grava no servidor e recalcula
+  if (!ecPodeEditar()) { showToast('Acesso de consulta: só o acesso master altera os parâmetros de compra.', 'warn'); return; }
+  fn(ecCfg()); ecSaveCfg(); await ecParamsSave(); ecCompute(); ecRender();
+}
 function ecSaveCfg() { try { localStorage.setItem(EC_CFG_KEY, JSON.stringify(EC.cfg)); } catch (e) {} }
 
 // ───────── datas (fuso de Brasília) ─────────
@@ -2710,6 +2745,8 @@ async function ecLoad(force = false) {
     await ecFetchFullInv(force);
     try { EC.snaps = (await blingApi('/bling/snapshots')).snapshots || []; } catch (e) { EC.snaps = []; }
     await ecStkLoad();
+    ecProgress('Lendo parâmetros de compra…', null);
+    await ecParamsLoad();
     ecCompute();
     EC.loadedAt = Date.now();
     try { await ecStkSync(); } catch (e) { EC.stk = null; }
@@ -3606,7 +3643,7 @@ function ecRenderCesta() {
       <div class="card-head" style="cursor:pointer;gap:10px;flex-wrap:wrap" onclick="ecCestaToggle(${i})">
         <span class="card-title" style="text-transform:none;letter-spacing:0">${open ? '▾' : '▸'} ${ecEsc(f.nome)}</span>
         <span>${ecPill(f.dec[0], f.dec[1])} <span class="ec-muted" style="font-size:11px">${ecEsc(f.dec[2])}</span></span>
-        ${f.nome !== EC_SEM_FORN ? `<button class="ec-lt" style="margin-left:auto" onclick="event.stopPropagation();ecEditLTForn(${i})" title="Lead time deste fornecedor (vale para os SKUs dele sem lead time próprio)">Lead time ${ecCfg().ltForn[ecFornKey(f.nome)] ? ecCfg().ltForn[ecFornKey(f.nome)] + 'd*' : ecCfg().leadTime + 'd (padrão)'}</button>` : ''}</div>
+        ${f.nome !== EC_SEM_FORN ? `<button class="ec-lt" style="margin-left:auto" ${ecPodeEditar() ? '' : 'disabled'} onclick="event.stopPropagation();ecEditLTForn(${i})" title="Lead time deste fornecedor (vale para os SKUs dele sem lead time próprio)">Lead time ${ecCfg().ltForn[ecFornKey(f.nome)] ? ecCfg().ltForn[ecFornKey(f.nome)] + 'd*' : ecCfg().leadTime + 'd (padrão)'}</button>` : ''}</div>
       <div class="ec-strip ec-strip-sm" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
         ${ecStat('SKUs / unidades', `${ecInt(f.itens.length)} / ${ecInt(f.qtd)}`, f.agora ? `${f.agora} para comprar agora` : 'programar')}
         ${ecStat('Valor a preço de compra', f.vCompra > 0 ? ecMoney(f.vCompra) : '—', f.semPreco ? `<span class="c-orange">${f.semPreco} SKU${f.semPreco > 1 ? 's' : ''} sem preço — total parcial</span>` : 'preço do fornecedor')}
@@ -4051,9 +4088,9 @@ const EC_COLS = [
   ['rate', 'Média mensal', r => (r.v90 / 3).toLocaleString('pt-BR', { maximumFractionDigits: 1 })],
   ['tendPct', 'Tendência %', r => r.vol >= 4 ? ecSigned(r.tendPct) : '—'], ['tend', 'Tendência', r => r.vol >= 4 ? ecEsc(r.tend) : '<span class="ec-muted">sem volume</span>', 's'],
   ['cob', 'Cobertura', r => r.rate > 0.001 ? `${ecDays(r.cob)}<div class="ec-sub">${(r.cob / 30).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} m · M ${ecDays(r.cobMatriz)} · F ${r.temFull ? ecDays(r.cobFull) : '—'}</div>` : '—'],
-  ['lt', 'Lead time', r => `<button class="ec-lt" onclick="ecEditLT('${ecEsc(r.sku)}')" title="Editar lead time deste SKU">${r.lt}d${ecCfg().ltSku[r.sku] ? '*' : ''}</button>${r.ltFonte === 'Bling' ? '<div class="ec-sub">Bling</div>' : r.ltFonte === 'fornecedor' ? '<div class="ec-sub">fornecedor</div>' : ''}`],
-  ['moq', 'MOQ', r => r.isKit ? '—' : `<button class="ec-lt" onclick="ecEditBuy('moq','${ecEsc(r.sku)}')" title="Editar MOQ deste SKU (vazio = 0)">${r.moq ? ecInt(r.moq) : '0'}${r.moqFonte === 'manual' ? '*' : ''}</button>${r.moqFonte === 'Bling' ? '<div class="ec-sub">Bling</div>' : ''}`],
-  ['mult', 'Múltiplo', r => r.isKit ? '—' : `<button class="ec-lt" onclick="ecEditBuy('mult','${ecEsc(r.sku)}')" title="Editar múltiplo de compra deste SKU (vazio = 0)">${r.mult ? ecInt(r.mult) : '0'}${r.multFonte === 'manual' ? '*' : ''}</button>${r.multFonte === 'Bling' ? '<div class="ec-sub">Bling</div>' : ''}`],
+  ['lt', 'Lead time', r => `<button class="ec-lt" ${ecPodeEditar() ? '' : 'disabled'} onclick="ecEditLT('${ecEsc(r.sku)}')" title="${ecPodeEditar() ? 'Editar lead time deste SKU' : 'Só o acesso master altera'}">${r.lt}d${ecCfg().ltSku[r.sku] ? '*' : ''}</button>${r.ltFonte === 'Bling' ? '<div class="ec-sub">Bling</div>' : r.ltFonte === 'fornecedor' ? '<div class="ec-sub">fornecedor</div>' : ''}`],
+  ['moq', 'MOQ', r => r.isKit ? '—' : `<button class="ec-lt" ${ecPodeEditar() ? '' : 'disabled'} onclick="ecEditBuy('moq','${ecEsc(r.sku)}')" title="Editar MOQ deste SKU (vazio = 0)">${r.moq ? ecInt(r.moq) : '0'}${r.moqFonte === 'manual' ? '*' : ''}</button>${r.moqFonte === 'Bling' ? '<div class="ec-sub">Bling</div>' : ''}`],
+  ['mult', 'Múltiplo', r => r.isKit ? '—' : `<button class="ec-lt" ${ecPodeEditar() ? '' : 'disabled'} onclick="ecEditBuy('mult','${ecEsc(r.sku)}')" title="Editar múltiplo de compra deste SKU (vazio = 0)">${r.mult ? ecInt(r.mult) : '0'}${r.multFonte === 'manual' ? '*' : ''}</button>${r.multFonte === 'Bling' ? '<div class="ec-sub">Bling</div>' : ''}`],
   ['projetado', 'Projetado na reposição', r => r.rate > 0.001 ? `<span class="${r.projetado <= 0 ? 'c-red' : ''}">${ecInt(r.projetado)}</span><div class="ec-sub">consumo LT ${ecInt(r.consumoLT)}</div>` : '—'],
   ['ultimaVenda', 'Última venda', r => r.ultimaVenda ? ecFmtDate(r.ultimaVenda) : '&gt;180d', 's'],
   ['diasSemVenda', 'Dias sem venda', r => r.diasSemVenda > 180 ? '180+' : r.diasSemVenda],
@@ -4105,28 +4142,28 @@ function ecSort(k) { const s = EC.view.sort; EC.view.sort = { k, d: s.k === k ? 
 function ecPage(d) { EC.view.page += d; ecRenderItens(); }
 function ecEditBuy(tipo, sku) {
   const cfg = ecCfg(); const map = tipo === 'moq' ? cfg.moqSku : cfg.multSku; const nome = tipo === 'moq' ? 'MOQ (quantidade mínima de compra)' : 'Múltiplo de compra (ex.: caixa de 10)';
+  if (!ecPodeEditar()) return;
   const v = prompt(`${nome} para ${sku}.\nDeixe vazio para zero (não aplicado).`, map[sku] || '');
   if (v === null) return;
   const n = parseInt(v, 10);
-  if (!v.trim() || !(n > 0)) delete map[sku]; else map[sku] = n;
-  ecSaveCfg(); ecCompute(); ecRender();
+  ecParamChange(c => { const m = tipo === 'moq' ? c.moqSku : c.multSku; if (!v.trim() || !(n > 0)) delete m[sku]; else m[sku] = n; });
 }
 function ecEditLTForn(i) {
   const f = (EC._cesta || [])[i]; if (!f || f.nome === EC_SEM_FORN) return;
   const cfg = ecCfg(); const k = ecFornKey(f.nome);
+  if (!ecPodeEditar()) return;
   const v = prompt(`Lead time (dias) do fornecedor ${f.nome}.\nVale para todos os SKUs dele que não têm lead time próprio.\nDeixe vazio para usar o padrão (${cfg.leadTime}d).`, cfg.ltForn[k] || '');
   if (v === null) return;
   const n = parseInt(v, 10);
-  if (!v.trim() || !(n > 0)) delete cfg.ltForn[k]; else cfg.ltForn[k] = n;
-  ecSaveCfg(); ecCompute(); ecRender();
+  ecParamChange(c => { if (!v.trim() || !(n > 0)) delete c.ltForn[k]; else c.ltForn[k] = n; });
 }
 function ecEditLT(sku) {
   const cfg = ecCfg(); const cur = cfg.ltSku[sku] || '';
+  if (!ecPodeEditar()) return;
   const v = prompt(`Lead time (dias) para ${sku}.\nDeixe vazio para usar o do fornecedor ou o padrão (${cfg.leadTime}d).`, cur);
   if (v === null) return;
   const n = parseInt(v, 10);
-  if (!v.trim() || !(n > 0)) delete cfg.ltSku[sku]; else cfg.ltSku[sku] = n;
-  ecSaveCfg(); ecCompute(); ecRender();
+  ecParamChange(c => { if (!v.trim() || !(n > 0)) delete c.ltSku[sku]; else c.ltSku[sku] = n; });
 }
 function ecExportCSV() {
   const rs = ecFilteredRows();
@@ -4192,9 +4229,11 @@ function ecLtFornList() {
 function ecLtFornHtml() {
   const c = ecCfg(); const L = ecLtFornList(); EC._ltForn = L;
   return `<div class="ec-subhead">Lead time por fornecedor (manual)</div>
-    <div class="ec-muted" style="font-size:11px;margin-bottom:8px">Vale para todos os SKUs do fornecedor que não têm lead time próprio. Vazio = padrão (${c.leadTime}d). Ordem usada: SKU → fornecedor → Bling → padrão.</div>
+    <div class="ec-muted" style="font-size:11px;margin-bottom:8px">Vale para todos os SKUs do fornecedor que não têm lead time próprio. Vazio = padrão (${c.leadTime}d). Ordem usada: SKU → fornecedor → Bling → padrão.<br>
+      ${EC.params && EC.params.ok ? `Parâmetros compartilhados com todos os acessos${EC.params.em ? ' · última alteração ' + new Date(EC.params.em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}.` : `<span class="c-orange">Servidor de parâmetros indisponível${EC.params && EC.params.erro ? ' (' + ecEsc(EC.params.erro) + ')' : ''} — valores deste navegador.</span>`}
+      ${ecPodeEditar() ? '' : ' <b>Só o acesso master altera.</b>'}</div>
     <div class="ec-table-wrap" style="max-height:260px;overflow:auto"><table class="t ec-t"><thead><tr><th>Fornecedor</th><th class="r">SKUs</th><th class="r">Lead time (dias)</th></tr></thead><tbody>
-    ${L.length ? L.map((f, i) => `<tr><td>${ecEsc(f.nome)}</td><td class="r mono">${f.n || '—'}</td><td class="r"><input type="number" class="ec-ltf" data-i="${i}" min="0" step="1" value="${c.ltForn[f.k] || ''}" placeholder="${c.leadTime}" style="width:80px"></td></tr>`).join('') : '<tr><td colspan="3" class="ec-muted">Carregue o módulo para listar os fornecedores.</td></tr>'}
+    ${L.length ? L.map((f, i) => `<tr><td>${ecEsc(f.nome)}</td><td class="r mono">${f.n || '—'}</td><td class="r"><input type="number" class="ec-ltf" data-i="${i}" min="0" step="1" value="${c.ltForn[f.k] || ''}" placeholder="${c.leadTime}" style="width:80px" ${ecPodeEditar() ? '' : 'disabled'}></td></tr>`).join('') : '<tr><td colspan="3" class="ec-muted">Carregue o módulo para listar os fornecedores.</td></tr>'}
     </tbody></table></div>`;
 }
 function ecBlingAuth() {
@@ -4216,8 +4255,10 @@ function ecApplyCfg() {
   c.blingIncluiFull = document.getElementById('ec-bif').checked; c.impostoPct = pos(g('ec-imp'), 0);
   c.abc = { A: ecClamp(pos(g('ec-abcA'), 70) / 100, 0.3, 0.95), B: ecClamp(pos(g('ec-abcB'), 90) / 100, 0.5, 0.99) };
   if (c.abc.B <= c.abc.A) c.abc.B = Math.min(0.99, c.abc.A + 0.1);
-  document.querySelectorAll('.ec-ltf').forEach(el => { const f = (EC._ltForn || [])[+el.dataset.i]; if (!f) return; const n = parseInt(el.value, 10); if (n > 0) c.ltForn[f.k] = n; else delete c.ltForn[f.k]; });
+  let ltMudou = false;
+  if (ecPodeEditar()) document.querySelectorAll('.ec-ltf').forEach(el => { const f = (EC._ltForn || [])[+el.dataset.i]; if (!f) return; const n = parseInt(el.value, 10), ant = c.ltForn[f.k] || 0; if ((n > 0 ? n : 0) !== ant) ltMudou = true; if (n > 0) c.ltForn[f.k] = n; else delete c.ltForn[f.k]; });
   ecSaveCfg(); ecCloseCfg();
+  if (ltMudou) ecParamsSave().then(() => { ecCompute(); ecRender(); });
   if (blingMudou || !EC.bling) ecLoad(true); else { ecCompute(); ecRender(); }
 }
 function ecResetCfg() { const o = ecCfg(), lt = o.ltSku, cc = o.ccIds; EC.cfg = { ...JSON.parse(JSON.stringify(EC_DEFAULT_CFG)), ltSku: lt, ltForn: o.ltForn, moqSku: o.moqSku, multSku: o.multSku }; if (cc) EC.cfg.ccIds = cc; ecSaveCfg(); ecOpenCfg(); }
