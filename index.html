@@ -2818,7 +2818,7 @@ function ecWinsorize(daily, n) {
   return sl.map(v => Math.min(v, cap));
 }
 
-function ecNewSeries(H) { const z = () => new Array(H).fill(0); return { q: z(), r: z(), f: z(), c: z(), fq: z(), qk: z(), imp: z(), impR: z(), fr: z(), frQ: z() }; }
+function ecNewSeries(H) { const z = () => new Array(H).fill(0); return { q: z(), r: z(), f: z(), c: z(), fq: z(), qk: z(), rk: z(), imp: z(), impR: z(), fr: z(), frQ: z() }; }
 
 function ecCompute() {
   const cfg = ecCfg(); const today = ecDay();
@@ -2883,16 +2883,20 @@ function ecCompute() {
   prods.forEach(p => { if (!p.codigo || parents.has(p.id) || p.formato === 'V') return; const k = normSku(p.codigo); if (!bySku[k]) bySku[k] = p; });
 
   // Kits (formato E): a venda do kit vira consumo dos componentes (qtd × composição)
-  const idToSku = {}; prods.forEach(p => { if (p.codigo) idToSku[p.id] = normSku(p.codigo); });
+  const idToSku = {}, idToProd = {}; prods.forEach(p => { idToProd[p.id] = p; if (p.codigo) idToSku[p.id] = normSku(p.codigo); });
   let kitsComComp = 0;
   prods.forEach(p => {
     if (p.formato !== 'E' || !p.comp || p.comp.t === 'F' || !p.comp.c || !p.comp.c.length) return; // kit físico tem estoque próprio
     kitsComComp++;
     const ks = S[normSku(p.codigo)]; if (!ks) return;
-    p.comp.c.forEach(([cid, qty]) => {
-      const cs = idToSku[cid]; if (!cs || cs === normSku(p.codigo)) return;
-      const t = S[cs] || (S[cs] = ecNewSeries(H));
-      for (let i = 0; i < H; i++) if (ks.q[i]) t.qk[i] += ks.q[i] * qty;
+    // receita do kit rateada entre os componentes (curva por produto simples): peso = qtd × custo; sem custo em algum → peso = qtd
+    const comps = p.comp.c.filter(([cid]) => idToSku[cid] && idToSku[cid] !== normSku(p.codigo));
+    const pc = comps.map(([cid, qty]) => { const c = idToProd[cid]; return qty * (c && c.custo > 0 ? c.custo : 0); });
+    const usaCusto = pc.length && pc.every(x => x > 0); const totP = usaCusto ? pc.reduce((a, b) => a + b, 0) : comps.reduce((a, [, q]) => a + q, 0);
+    comps.forEach(([cid, qty], j) => {
+      const cs = idToSku[cid];
+      const t = S[cs] || (S[cs] = ecNewSeries(H)); const w = totP > 0 ? (usaCusto ? pc[j] : qty) / totP : 0;
+      for (let i = 0; i < H; i++) { if (ks.q[i]) t.qk[i] += ks.q[i] * qty; if (ks.r[i]) t.rk[i] += ks.r[i] * w; }
     });
   });
   EC.kitsComComp = kitsComComp;
@@ -2920,7 +2924,8 @@ function ecCompute() {
     const prev30 = q ? ecSum(q, 30, 60) : 0, prev90 = q ? ecSum(q, 90, 180) : 0;
     const rev90 = s ? ecSum(s.r, 0, 90) : 0, rev30 = s ? ecSum(s.r, 0, 30) : 0, fee90 = s ? ecSum(s.f, 0, 90) : 0;
     const rev180 = s ? ecSum(s.r, 0, 180) : 0;
-    const cv = s ? ecCurvaRev(sku, k => s.r[k], EC_CURVA_DIAS, 1) : { v: 0, bruto: 0, rupt: 0 };   // curva ABC (90d fechados, sem ruptura)
+    const cv = s ? ecCurvaRev(sku, k => s.r[k], EC_CURVA_DIAS, 1) : { v: 0, bruto: 0, rupt: 0 };   // curva por anúncio: venda do próprio SKU anunciado (90d fechados, sem ruptura)
+    const cvP = s && !isKit ? ecCurvaRev(sku, k => s.r[k] + s.rk[k], EC_CURVA_DIAS, 1) : { v: 0 };   // curva por produto simples: venda direta + receita rateada dos kits
     const canc90 = s ? ecSum(s.c, 0, 90) : 0;
     const full90 = s ? ecSum(s.fq, 0, 90) : 0;
     let lastIdx = -1; if (q) for (let i = 0; i < H; i++) if (q[i] > 0) { lastIdx = i; break; }
@@ -2994,7 +2999,7 @@ function ecCompute() {
     rows.push({
       sku, id: p.id, nome: p.nome, ativo, isKit, kitFisico, formato: p.formato, blingVirt, matriz, full, total, transito, lt, ltFonte, moq, mult, moqFonte, multFonte, buyLido: !!bf,
       custo, preco, tarifaUn, freteUn, freteFonte, impPct, impUn, impFonte: taxMap[sku] != null ? 'Bling' : 'padrão', margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
-      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, rev180, revCurva: cv.v, revCurvaBruta: cv.bruto, ruptCurva: cv.rupt, canc90, full90, tendPct, tend90Pct, tend, vol,
+      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, rev180, revCurva: cv.v, revCurvaAn: cv.v, revCurvaProd: cvP.v, revKit90: s && !isKit ? ecSum(s.rk, 0, 90) : 0, revCurvaBruta: cv.bruto, ruptCurva: cv.rupt, canc90, full90, tendPct, tend90Pct, tend, vol,
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
       deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds) || full > 0, anuncioFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
       compra: cp,
@@ -3010,12 +3015,21 @@ function ecCompute() {
   }
 
   // ── 6. Curva ABC (receita 90d fechados sem dias de ruptura — mesma curva do Radar Curva A)
-  const totRev = rows.reduce((a, r) => a + r.revCurva, 0) || 1;
-  let acc = 0;
-  [...rows].sort((a, b) => b.revCurva - a.revCurva).forEach(r => {
-    const before = acc / totRev; acc += r.revCurva;
-    r.curva = r.revCurva <= 0 ? 'C' : before < cfg.abc.A ? 'A' : before < cfg.abc.B ? 'B' : 'C';
-  });
+  // Duas curvas:
+  //  • por anúncio (curvaAn): todos os SKUs anunciados, kits inclusive, pela venda do próprio anúncio → abastecimento Full, análise e gestão das contas
+  //  • por produto simples (curvaProd): só produtos físicos, venda direta + receita dos kits rateada → abastecimento do estoque (compra)
+  const abc = (lista, campo, alvo) => {
+    const tot = lista.reduce((a, r) => a + r[campo], 0) || 1; let acc = 0;
+    [...lista].sort((a, b) => b[campo] - a[campo]).forEach((r, i) => {
+      const before = acc / tot; acc += r[campo];
+      r[alvo] = r[campo] <= 0 ? 'C' : before < cfg.abc.A ? 'A' : before < cfg.abc.B ? 'B' : 'C';
+      r[alvo + 'Pos'] = r[campo] > 0 ? i + 1 : null; r[alvo + 'Pct'] = acc / tot;
+    });
+  };
+  abc(rows, 'revCurvaAn', 'curvaAn');
+  abc(rows.filter(r => !r.isKit), 'revCurvaProd', 'curvaProd');
+  // r.curva = curva usada nas decisões de estoque/compra: produto simples; kit (sem compra própria) usa a do anúncio
+  rows.forEach(r => { if (r.isKit) { r.curvaProd = null; r.curva = r.curvaAn; } else { r.curva = r.curvaProd; r.revCurva = r.revCurvaProd; } });
 
   // ── 7. Cobertura, risco, projeção, compra, excesso, Full, recomendação
   const F = cfg.faixas;
@@ -3228,7 +3242,7 @@ function ecAggregate(rows) {
   // ABC
   a.abc = {};
   ['A', 'B', 'C'].forEach(c => {
-    const rs = rows.filter(r => r.curva === c);
+    const rs = rows.filter(r => !r.isKit && r.curva === c);
     a.abc[c] = {
       n: rs.length, nVenda: rs.filter(r => r.revCurva > 0).length,
       receita: rs.reduce((s, r) => s + r.revCurva, 0),
@@ -3491,7 +3505,9 @@ function ecMemo(sku) {
   const base = tf ? r.rate / tf : r.rate; const bruta = 0.15 * Math.min(a7, 2 * a30 + 0.1) + 0.35 * a30 + 0.30 * a60 + 0.20 * a90;
   const cortou = bruta > base * 1.02;
   const dv = ecDiasVenda()[r.sku] || 0;
-  const demanda = row('Vendas 7 / 30 / 60 / 90 dias', `${ecInt(r.v7)} / ${ecInt(r.v30)} / ${ecInt(r.v60)} / ${ecInt(r.v90)} un`)
+  const curvas = row('Curva por produto (estoque/compra)', r.isKit ? na('kit virtual — a compra é nos componentes') : `${r.curvaProd} · ${r.curvaProdPos ? r.curvaProdPos + 'º · ' : ''}receita ${ecMoney(r.revCurvaProd)}${r.revKit90 ? ` (${ecMoney(r.revKit90)} vindos de kits)` : ''}`)
+    + row('Curva por anúncio (Full e contas)', `${r.curvaAn} · ${r.curvaAnPos ? r.curvaAnPos + 'º · ' : ''}receita ${ecMoney(r.revCurvaAn)}`);
+  const demanda = curvas + row('Vendas 7 / 30 / 60 / 90 dias', `${ecInt(r.v7)} / ${ecInt(r.v30)} / ${ecInt(r.v60)} / ${ecInt(r.v90)} un`)
     + (r.vKit90 ? row('das quais via kits (90d)', ecInt(r.vKit90) + ' un') : '')
     + row('Médias diárias 7 / 30 / 60 / 90', `${n2(a7)} / ${n2(a30)} / ${n2(a60)} / ${n2(a90)}`)
     + row('Dias com venda em 90', dv)
@@ -3578,7 +3594,8 @@ function ecComo() {
     ['Estoque a custo', 'unidades × custo usado', '—', 'posição de hoje', `kits virtuais; ${a.semCusto} SKUs sem custo ficam em zero`],
     ['Estoque a preço de referência', 'unidades × preço médio real de 90d (ou do anúncio)', '—', 'posição de hoje', 'kits virtuais'],
     ['Cobertura geral', `unidades em estoque (${ecInt(a.unidades)})`, 'soma da demanda diária prevista', 'posição de hoje', 'kits virtuais'],
-    ['Curva ABC', 'receita acumulada do SKU (dias de ruptura descontados: receita ÷ dias com estoque × 90)', 'receita total da curva', '90 dias fechados', 'sem receita = curva C; dia sem estoque e sem venda não conta'],
+    ['Curva por produto (estoque/compra)', 'receita do produto simples: venda direta + receita dos kits rateada pelos componentes (peso = qtd × custo); dias de ruptura descontados', 'receita total dos produtos simples', '90 dias fechados', 'kits virtuais ficam fora; sem receita = curva C'],
+    ['Curva por anúncio (Full e contas)', 'receita do próprio SKU anunciado, kits inclusive (dias de ruptura descontados)', 'receita total dos anúncios', '90 dias fechados', 'usada no envio ao Full, Precificação, Promoções e Central Comercial'],
     ['Valor sugerido de compra', 'compra sugerida × custo (e × preço de compra)', '—', 'lead time + cobertura alvo', 'bloqueados e kits virtuais'],
     ['% ruptura e % risco (saúde)', 'SKUs em ruptura / em risco', `${a.nDemanda} SKUs com demanda`, 'hoje', 'SKUs sem demanda'],
     ['Confiança alta %', 'SKUs sem ressalva grave e com menos de 3 pontos de ressalva', `${rel.length} SKUs relevantes`, 'hoje', 'SKUs não relevantes'],
@@ -3698,9 +3715,12 @@ const EC_FILTERS = {
   risco: { label: 'Risco de ruptura', fn: r => r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO },
   ruptura: { label: 'Em ruptura', fn: r => r.ruptura, hidden: true },
   riscoA: { label: 'Curva A em risco', fn: r => r.curva === 'A' && (r.risco === EC_RISK.CRIT || r.risco === EC_RISK.ALTO), hidden: true },
-  A: { label: 'Curva A', fn: r => r.relevante && r.curva === 'A' },
-  B: { label: 'Curva B', fn: r => r.relevante && r.curva === 'B' },
-  C: { label: 'Curva C', fn: r => r.relevante && r.curva === 'C' },
+  A: { label: 'Produto A', fn: r => r.relevante && r.curva === 'A' },
+  B: { label: 'Produto B', fn: r => r.relevante && r.curva === 'B' },
+  C: { label: 'Produto C', fn: r => r.relevante && r.curva === 'C' },
+  anA: { label: 'Anúncio A', fn: r => r.curvaAn === 'A' && (r.relevante || r.isKit) },
+  anB: { label: 'Anúncio B', fn: r => r.curvaAn === 'B' && (r.relevante || r.isKit), hidden: true },
+  anC: { label: 'Anúncio C', fn: r => r.curvaAn === 'C' && (r.relevante || r.isKit), hidden: true },
   cresc: { label: 'Crescendo', fn: r => r.tend === EC_TREND.UP || r.tend === EC_TREND.UP2 },
   queda: { label: 'Caindo', fn: r => r.tend === EC_TREND.DOWN || r.tend === EC_TREND.DOWN2 },
   excesso: { label: 'Excesso', fn: r => r.excessoUn > 0 },
@@ -3804,7 +3824,7 @@ function ecRenderDash() {
   const aumentar = EC.rows.filter(EC_FILTERS.aumentar.fn).sort((x, y) => y.ajustePct - x.ajustePct).slice(0, 5);
   const reduzir = EC.rows.filter(r => r.rec === EC_REC.REDUZIR).sort((x, y) => y.excessoR - x.excessoR).slice(0, 5);
   const semGiro = EC.rows.filter(EC_FILTERS.semgiro.fn).sort((x, y) => y.valorCusto - x.valorCusto).slice(0, 8);
-  const envios = EC.rows.filter(r => r.envioFull > 0).sort((x, y) => x.cobFull - y.cobFull).slice(0, 8);
+  const envios = EC.rows.filter(r => r.envioFull > 0).sort((x, y) => (x.curvaAn || 'C').localeCompare(y.curvaAn || 'C') || x.cobFull - y.cobFull).slice(0, 8);
   const mBaixa = EC.rows.filter(EC_FILTERS.margembaixa.fn).sort((x, y) => y.rev90 - x.rev90).slice(0, 5);
   const mBoa = EC.rows.filter(EC_FILTERS.margemboa.fn).sort((x, y) => y.rev90 - x.rev90).slice(0, 5);
   const avisos = [];
@@ -3937,8 +3957,8 @@ function ecRenderDash() {
         <span onclick="ecOpenFilter('fullexc')">🟡 Excesso no Full: <b>${a.full.excessivo}</b></span>
       </div>
       <div class="ec-subhead" style="margin-top:12px">Sugestão de envio para o Full — ${ecInt(a.full.envioUn)} un em ${a.full.envioSkus} SKUs</div>
-      ${envios.length ? `<table class="t ec-t"><thead><tr><th>Produto</th><th class="r">Full</th><th class="r">Cob. atual</th><th class="r">Enviar</th><th class="r">Cob. após</th></tr></thead><tbody>
-      ${envios.map(r => `<tr><td>${ecProd(r)}</td><td class="r mono">${ecInt(r.full)}</td><td class="r mono">${ecDays(r.cobFull)}</td><td class="r mono"><b>${ecInt(r.envioFull)}</b></td><td class="r mono">${ecDays(r.cobFullApos)}</td></tr>`).join('')}
+      ${envios.length ? `<table class="t ec-t"><thead><tr><th>Produto</th><th>Curva anúncio</th><th class="r">Full</th><th class="r">Cob. atual</th><th class="r">Enviar</th><th class="r">Cob. após</th></tr></thead><tbody>
+      ${envios.map(r => `<tr><td>${ecProd(r)}</td><td>${ecCurva(r.curvaAn)}</td><td class="r mono">${ecInt(r.full)}</td><td class="r mono">${ecDays(r.cobFull)}</td><td class="r mono"><b>${ecInt(r.envioFull)}</b></td><td class="r mono">${ecDays(r.cobFullApos)}</td></tr>`).join('')}
       </tbody></table>${a.full.envioSkus > 8 ? `<button class="ec-link" onclick="ecOpenFilter('enviofull')">ver todos →</button>` : ''}` : '<div class="ec-muted">Nenhum envio necessário agora.</div>'}
     </div></div>
   </div>
@@ -4079,7 +4099,8 @@ const EC_COLS = [
   ['nome', 'Descrição', r => `<span class="ec-desc" title="${ecEsc(r.nome)}">${ecEsc(r.nome)}</span>${r.isKit ? ' <span class="ec-tag">kit</span>' : r.kitFisico ? ' <span class="ec-tag">kit físico</span>' : ''}`, 's'],
   ['fornecedor', 'Fornecedor / Ref.', r => r.fornecedor || r.refForn ? `<span class="ec-desc" style="max-width:200px" title="${ecEsc(r.fornecedor)}${r.fornQtd > 1 ? ' (padrão de ' + r.fornQtd + ' fornecedores)' : ''}">${ecEsc(r.fornecedor || '—')}</span>${r.fornDiverge ? ` <span class="c-orange" title="Último pedido foi de ${ecEsc(r.fornUltPedido)} — diferente do fornecedor padrão do cadastro">⚠</span>` : ''}<div class="ec-sub">${r.refForn ? 'ref. ' + ecEsc(r.refForn) : ''}${r.fornFonte === 'pedido' ? (r.refForn ? ' · ' : '') + 'últ. pedido' : ''}</div>` : '<span class="ec-muted">—</span>', 's'],
   ['ativo', 'Status', r => r.ativo ? 'Ativo' : '<span class="c-orange">Inativo</span>', 's'],
-  ['curva', 'Curva', r => ecCurva(r.curva), 's'],
+  ['curva', 'Curva produto', r => r.isKit ? '<span class="ec-sub">kit</span>' : ecCurva(r.curvaProd), 's'],
+  ['curvaAn', 'Curva anúncio', r => r.revCurvaAn > 0 || r.temFull || (r.mlIds || []).length ? ecCurva(r.curvaAn) : '<span class="ec-sub">sem anúncio</span>', 's'],
   ['matriz', 'Matriz', r => ecInt(r.matriz)], ['full', 'Full', r => r.temFull || r.full ? ecInt(r.full) : '—'], ['total', 'Total', r => `<b>${ecInt(r.total)}</b>`],
   ['transito', 'Trânsito', r => r.transito ? ecInt(r.transito) + (r.compra?.prevChegada ? `<div class="ec-sub">${ecFmtDate(r.compra.prevChegada)}</div>` : '') : '—'],
   ['custo', 'Custo un.', r => r.custo ? `${ecMoney2(r.custo)}<div class="ec-sub">${r.custoFonte === 'Bling' ? 'cadastro Bling' : 'última compra'}</div>` : '<span class="c-orange">sem custo</span>'],
@@ -4141,7 +4162,7 @@ function ecRenderItens() {
   qi.addEventListener('input', () => { EC.view.q = qi.value; EC.view.page = 0; clearTimeout(EC._qt); EC._qt = setTimeout(() => { ecRenderItens(); const n = document.getElementById('ec-q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250); });
 }
 function ecSetFilter(k) { EC.view.filter = k; EC.view.page = 0; ecRenderItens(); }
-function ecSort(k) { const s = EC.view.sort; EC.view.sort = { k, d: s.k === k ? -s.d : (['nome', 'fornecedor', 'sku', 'curva', 'rec', 'risco', 'tend', 'ativo', 'ultimaVenda'].includes(k) ? 1 : -1) }; ecRenderItens(); }
+function ecSort(k) { const s = EC.view.sort; EC.view.sort = { k, d: s.k === k ? -s.d : (['nome', 'fornecedor', 'sku', 'curva', 'curvaAn', 'rec', 'risco', 'tend', 'ativo', 'ultimaVenda'].includes(k) ? 1 : -1) }; ecRenderItens(); }
 function ecPage(d) { EC.view.page += d; ecRenderItens(); }
 function ecEditBuy(tipo, sku) {
   const cfg = ecCfg(); const map = tipo === 'moq' ? cfg.moqSku : cfg.multSku; const nome = tipo === 'moq' ? 'MOQ (quantidade mínima de compra)' : 'Múltiplo de compra (ex.: caixa de 10)';
@@ -4170,7 +4191,7 @@ function ecEditLT(sku) {
 }
 function ecExportCSV() {
   const rs = ecFilteredRows();
-  const cols = [['SKU', r => r.sku], ['Descrição', r => r.nome], ['Status', r => r.ativo ? 'Ativo' : 'Inativo'], ['Curva', r => r.curva], ['Estoque Matriz', r => r.matriz], ['Estoque Full', r => r.full], ['Estoque Total', r => r.total], ['Em trânsito', r => r.transito],
+  const cols = [['SKU', r => r.sku], ['Descrição', r => r.nome], ['Status', r => r.ativo ? 'Ativo' : 'Inativo'], ['Curva produto', r => r.isKit ? '' : r.curvaProd], ['Curva anúncio', r => r.curvaAn], ['Estoque Matriz', r => r.matriz], ['Estoque Full', r => r.full], ['Estoque Total', r => r.total], ['Em trânsito', r => r.transito],
     ['Custo unitário', r => r.custo], ['Preço de compra (fornecedor)', r => r.precoCompra], ['Origem preço compra', r => r.precoCompraFonte], ['Fator custo/compra', r => r.custo && r.precoCompra ? (r.custo / r.precoCompra).toFixed(2) : ''], ['Estoque a custo', r => r.valorCusto], ['Preço venda', r => r.preco.toFixed(2)], ['Potencial venda', r => r.valorVenda.toFixed(2)], ['Tarifa ML un.', r => r.tarifaUn ? r.tarifaUn.toFixed(2) : ''], ['Frete un.', r => r.freteUn != null ? r.freteUn.toFixed(2) : ''], ['Origem frete', r => r.freteFonte], ['Imposto %', r => r.impPct], ['Origem imposto', r => r.impFonte], ['Imposto un.', r => r.impUn != null ? r.impUn.toFixed(2) : ''], ['Margem R$', r => r.margemUn != null ? r.margemUn.toFixed(2) : ''], ['Margem %', r => r.margemPct != null ? (r.margemPct * 100).toFixed(1) : ''],
     ['Venda 7D', r => r.v7], ['Venda 15D', r => r.v15], ['Venda 30D', r => r.v30], ['Venda 60D', r => r.v60], ['Venda 90D', r => r.v90], ['Consumo via kits 90D', r => r.vKit90], ['Média mensal', r => (r.v90 / 3).toFixed(1)], ['Tendência %', r => (r.tendPct * 100).toFixed(0)], ['Tendência', r => r.tend],
     ['Previsão 30d', r => r.prev.d30.toFixed(1)], ['Previsão 60d', r => r.prev.d60.toFixed(1)], ['Previsão 90d', r => r.prev.d90.toFixed(1)],
@@ -4961,7 +4982,7 @@ const ecDayOf = iso => { const d = new Date(iso); return isNaN(d) ? '' : new Dat
 // ───────── cálculo ─────────
 function ccFilter(rows) {
   const v = CC.view; const q = v.q.trim().toLowerCase();
-  const curvaOf = {}; if (v.curva) EC.rows.forEach(r => { curvaOf[r.sku] = r.curva; });
+  const curvaOf = {}; if (v.curva) EC.rows.forEach(r => { curvaOf[r.sku] = r.curvaAn; });
   const B = CC.buyers || {};
   return rows.filter(x => (!q || (x.s + ' ' + x.t + ' ' + x.o).toLowerCase().includes(q)) && (!v.curva || curvaOf[x.s] === v.curva)
     && (!v.uf || (B[x.b] && B[x.b].uf === v.uf)) && (!v.pj || ccTipo(B[x.b]) === v.pj)
@@ -6456,8 +6477,8 @@ function pxCompute() {
     rows.push({
       id: it.id, it, title: it.title || '', sku, link: it.permalink, catalogo: !!it.catalog_listing, full: it.shipping?.logistic_type === 'fulfillment', inScope,
       my, regular, ref, ptw, st, gap, alvo, custo, feePct, impPct, freteAt, freteFonte: fx ? 'ML' : ec && ec.freteUn != null ? ec.freteFonte : '—', mAt: marg, piso, margAtual, margAlvo, podeReagir, ativas, cands, candPreco, caminho,
-      var1, var7, baixou, acao, tone, curva: ec ? ec.curva : null,
-      prio: rk * 1e6 - (ec && ec.curva === 'A' ? 3e5 : ec && ec.curva === 'B' ? 1e5 : 0) - Math.min(9e4, Math.abs(gap || 0) * 1e5),
+      var1, var7, baixou, acao, tone, curva: ec ? ec.curvaAn : null,
+      prio: rk * 1e6 - (ec && ec.curvaAn === 'A' ? 3e5 : ec && ec.curvaAn === 'B' ? 1e5 : 0) - Math.min(9e4, Math.abs(gap || 0) * 1e5),
     });
   });
   PX.rows = rows;
@@ -6918,7 +6939,7 @@ function prCompute() {
       price: it.price, orig, best, desc, loaded, ps, act, pend, cand, actTypes, candTypes, pendTypes, lgLive, lgNext,
       nAct: actTypes.size, nCand: candTypes.size, nPend: pendTypes.size + (lgNext ? 1 : 0), ends, endsSoon: ends && ends.getTime() < d7, ends3: ends && ends.getTime() < d3,
       temCupom: actTypes.has('SELLER_COUPON_CAMPAIGN'), temDesconto: [...actTypes].some(t => PR_PRICE_TYPES.has(t)),
-      s30, curva: ec ? ec.curva : null, risco: ec ? ec.risco : null, excesso: ec ? ec.excessoUn > 0 || (ec.total > 0 && ec.diasSemVenda > 90) : false,
+      s30, curva: ec ? ec.curvaAn : null, risco: ec ? ec.risco : null, excesso: ec ? ec.excessoUn > 0 || (ec.total > 0 && ec.diasSemVenda > 90) : false,
       custo, margemPromo, margemPromoPct, receita30: s30 * best,
     };
     // recomendação do estrategista
