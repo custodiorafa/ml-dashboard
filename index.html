@@ -1213,6 +1213,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
           <div class="ec-subtabs">
             <button class="ec-subtab active" data-t="dash" onclick="ecSetTab('dash')">Dashboard</button>
             <button class="ec-subtab" data-t="itens" onclick="ecSetTab('itens')">Itens em linha</button>
+            <button class="ec-subtab" data-t="full" onclick="ecSetTab('full')">Gestão Full</button>
             <button class="ec-subtab" data-t="cesta" onclick="ecSetTab('cesta')">Cesta por fornecedor</button>
             <button class="ec-subtab" data-t="conc" onclick="ecSetTab('conc')">Conciliação</button>
           </div>
@@ -1228,6 +1229,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
       <div id="ec-itens" style="display:none"></div>
       <div id="ec-conc" style="display:none"></div>
       <div id="ec-cesta" style="display:none"></div>
+      <div id="ec-full" style="display:none"></div>
       <div class="ec-modal" id="ec-cfg" onclick="if(event.target===this)ecCloseCfg()"></div>
       <div class="ec-modal ec-side" id="ec-memo" onclick="if(event.target===this)ecMemoClose()"></div>
       <div id="ec-tip"></div>
@@ -2477,7 +2479,8 @@ const EC_DEFAULT_CFG = {
   alvo: { A: 45, B: 30, C: 20 },             // cobertura desejada após a reposição (dias)
   z: { A: 1.65, B: 1.28, C: 1.04 },          // nível de serviço do estoque de segurança (95% / 90% / 85%)
   abc: { A: 0.70, B: 0.90 },                 // cortes da curva ABC (receita 90d acumulada, sem dias de ruptura)
-  fullAlvo: 30, fullMax: 60,                 // cobertura alvo e máxima no Full (dias)
+  fullAlvo: 30, fullMax: 60,                 // (legado) cobertura alvo e máxima no Full (dias)
+  fullRegra: { A: { alvo: 25, gatilho: 15 }, B: { alvo: 15, gatilho: 10 }, bCresc: 0.10, base: 30 }, // Gestão Full: alvo e gatilho por curva de anúncio
   blingIncluiFull: true,                     // saldo do Bling já contém o estoque Full
   impostoPct: 0,                             // % de impostos sobre a venda (para margem)
   ltSku: {},                                 // lead time por SKU {SKU: dias}
@@ -2492,6 +2495,7 @@ function ecCfg() {
   EC.cfg = { ...EC_DEFAULT_CFG, ...c,
     faixas: { ...EC_DEFAULT_CFG.faixas, ...(c.faixas || {}) }, alvo: { ...EC_DEFAULT_CFG.alvo, ...(c.alvo || {}) },
     z: { ...EC_DEFAULT_CFG.z, ...(c.z || {}) }, abc: { ...EC_DEFAULT_CFG.abc, ...(c.abc || {}) }, ltSku: { ...(c.ltSku || {}) },
+    fullRegra: { ...EC_DEFAULT_CFG.fullRegra, ...(c.fullRegra || {}), A: { ...EC_DEFAULT_CFG.fullRegra.A, ...((c.fullRegra || {}).A || {}) }, B: { ...EC_DEFAULT_CFG.fullRegra.B, ...((c.fullRegra || {}).B || {}) } },
     ltForn: { ...(c.ltForn || {}) }, moqSku: { ...(c.moqSku || {}) }, multSku: { ...(c.multSku || {}) } };
   return EC.cfg;
 }
@@ -2509,6 +2513,7 @@ async function ecParamsLoad() {
     const temLocal = EC_PARAM_KEYS.some(k => Object.keys(c[k] || {}).length);
     if (vazio && temLocal && ecPodeEditar()) { await ecParamsSave(); return; } // 1ª vez: sobe o que já estava neste navegador
     EC_PARAM_KEYS.forEach(k => { c[k] = { ...((p && p[k]) || {}) }; });
+    if (p && p.fullRegra && p.fullRegra.A && p.fullRegra.B) c.fullRegra = { ...EC_DEFAULT_CFG.fullRegra, ...p.fullRegra, A: { ...p.fullRegra.A }, B: { ...p.fullRegra.B } };
     EC.params = { ok: true, rev: (p && p.rev) || 0, em: p && p.em, por: p && p.por };
     ecSaveCfg();
   } catch (e) { EC.params = { ok: false, erro: e.message, rev: EC.params ? EC.params.rev : null }; }
@@ -2516,7 +2521,7 @@ async function ecParamsLoad() {
 async function ecParamsSave() {
   if (!ecPodeEditar()) { showToast('Acesso de consulta: só o acesso master altera os parâmetros de compra.', 'warn'); return false; }
   const c = ecCfg(); const body = { rev: EC.params && EC.params.ok ? EC.params.rev : undefined, usuario: 'master' };
-  EC_PARAM_KEYS.forEach(k => { body[k] = c[k] || {}; });
+  EC_PARAM_KEYS.forEach(k => { body[k] = c[k] || {}; }); body.fullRegra = c.fullRegra;
   try {
     const p = await pvApi('/ec/params', { method: 'POST', body, ms: 15000 });
     EC.params = { ok: true, rev: p.rev, em: p.em, por: p.por }; ecSaveCfg(); return true;
@@ -2747,6 +2752,8 @@ async function ecLoad(force = false) {
     await ecStkLoad();
     ecProgress('Lendo parâmetros de compra…', null);
     await ecParamsLoad();
+    ecProgress('Lendo envios programados para o Full…', null);
+    await ecEnviosLoad();
     ecCompute();
     EC.loadedAt = Date.now();
     try { await ecStkSync(); } catch (e) { EC.stk = null; }
@@ -2999,7 +3006,7 @@ function ecCompute() {
     rows.push({
       sku, id: p.id, nome: p.nome, ativo, isKit, kitFisico, formato: p.formato, blingVirt, matriz, full, total, transito, lt, ltFonte, moq, mult, moqFonte, multFonte, buyLido: !!bf,
       custo, preco, tarifaUn, freteUn, freteFonte, impPct, impUn, impFonte: taxMap[sku] != null ? 'Bling' : 'padrão', margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
-      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, rev180, revCurva: cv.v, revCurvaAn: cv.v, revCurvaProd: cvP.v, revKit90: s && !isKit ? ecSum(s.rk, 0, 90) : 0, revCurvaBruta: cv.bruto, ruptCurva: cv.rupt, canc90, full90, tendPct, tend90Pct, tend, vol,
+      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, rev180, revCurva: cv.v, revCurvaAn: cv.v, revCurvaProd: cvP.v, revKit90: s && !isKit ? ecSum(s.rk, 0, 90) : 0, revCurvaBruta: cv.bruto, ruptCurva: cv.rupt, vDir30: s ? ecSum(s.q, 0, 30) : 0, vDirPrev30: s ? ecSum(s.q, 30, 60) : 0, vDir90: s ? ecSum(s.q, 0, 90) : 0, fq30: s ? ecSum(s.fq, 0, 30) : 0, mlTemProprio: !!(m && m.ownIds && m.ownIds.length), canc90, full90, tendPct, tend90Pct, tend, vol,
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
       deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds) || full > 0, anuncioFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
       compra: cp,
@@ -3088,15 +3095,41 @@ function ecCompute() {
     // giro: alto = vende e cobre até 60 dias
     r.giro = rate > 0.001 && r.v30 > 0 && r.cob <= 60 ? 'ALTO' : 'BAIXO';
 
-    // Full: envio sugerido
-    r.envioFull = 0; r.fullStatus = '';
-    if (r.temFull && r.fullRate > 0.03) {
-      const reservaMatriz = Math.ceil((rate - r.fullRate) * r.lt);
-      const alvoFull = r.fullRate * cfg.fullAlvo;
-      r.envioFull = Math.max(0, Math.min(Math.ceil(alvoFull - r.full), Math.floor(r.matriz - reservaMatriz)));
-      r.cobFullApos = (r.full + r.envioFull) / r.fullRate;
-      r.fullStatus = r.cobFull <= 7 ? 'CRÍTICO' : r.cobFull < F.crit ? 'BAIXO' : r.cobFull > cfg.fullMax ? 'EXCESSIVO' : 'OK';
-    } else if (r.full > 0 && r.fullRate <= 0.03) { r.fullStatus = 'EXCESSIVO'; r.cobFullApos = r.cobFull; }
+    // ── Gestão Full (regras por curva de ANÚNCIO, demanda dos últimos 30 dias, estoque Full do ML + envios programados)
+    //  A: alvo ${alvo}d, aciona quando Full+programado ≤ gatilho · B: só com crescimento (30d × 30d anteriores) · C / B sem crescimento: não envia
+    {
+      const FR = cfg.fullRegra; const base = FR.base || 30;
+      r.fullDisp = r.anuncioFull ? Math.max(0, r.fullML || 0) : 0;
+      r.fullProg = (EC.fullProg && EC.fullProg[r.sku]) || 0;
+      r.fullPos = r.fullDisp + r.fullProg;
+      // parte da venda que passa pelo Full: 100% se só tem anúncio Full; com anúncio próprio também, usa o histórico (mín. 30%)
+      const vBase = base === 30 ? r.vDir30 : r.vDir30 * base / 30;
+      r.fullShare = !r.anuncioFull ? 0 : !r.mlTemProprio ? 1 : (r.vDir90 > 0 ? Math.max(0.3, Math.min(1, r.full90 / r.vDir90)) : 0.5);
+      r.fullRate = r.anuncioFull ? (vBase / base) * r.fullShare : 0;
+      r.tendDir = r.vDirPrev30 > 0 ? (r.vDir30 - r.vDirPrev30) / r.vDirPrev30 : (r.vDir30 > 0 ? 1 : 0);
+      r.fullRegra = !r.anuncioFull ? '' : r.curvaAn === 'A' ? 'A' : (r.curvaAn === 'B' && r.vDir30 >= 4 && r.tendDir >= FR.bCresc) ? 'B' : '';
+      const R = r.fullRegra ? FR[r.fullRegra] : null;
+      r.fullAlvoD = R ? R.alvo : 0; r.fullGatilhoD = R ? R.gatilho : 0;
+      r.cobFull = r.fullRate > 0 ? r.fullDisp / r.fullRate : (r.fullDisp > 0 ? Infinity : 0);
+      r.cobFullPos = r.fullRate > 0 ? r.fullPos / r.fullRate : (r.fullPos > 0 ? Infinity : 0);
+      r.envioFull = 0; r.fullNecessidade = 0; r.fullFaltaMatriz = 0; r.fullStatus = ''; r.fullAcao = ''; r.fullDiasGatilho = null;
+      const reservaMatriz = Math.max(0, Math.ceil((rate - r.fullRate) * Math.min(r.lt, 15)));   // o que a Matriz precisa guardar p/ as outras vendas
+      r.fullMatrizDisp = Math.max(0, Math.floor(r.matriz - reservaMatriz));
+      if (R && r.fullRate > 0.02) {
+        const exc = Math.max(R.alvo * 2, R.alvo + 20);
+        if (r.cobFullPos <= R.gatilho) {
+          r.fullNecessidade = Math.max(0, Math.ceil(R.alvo * r.fullRate - r.fullPos));
+          r.envioFull = Math.min(r.fullNecessidade, r.fullMatrizDisp);
+          r.fullFaltaMatriz = r.fullNecessidade - r.envioFull;
+          r.fullStatus = r.fullDisp <= 0 && r.fullProg <= 0 ? 'CRÍTICO' : r.cobFull <= 7 && r.fullProg <= 0 ? 'CRÍTICO' : 'BAIXO';
+          r.fullAcao = r.envioFull > 0 ? (r.fullFaltaMatriz > 0 ? 'Enviar o que tem e comprar' : 'Enviar agora') : 'Sem saldo na Matriz: comprar';
+        } else if (r.cobFullPos > exc) { r.fullStatus = 'EXCESSIVO'; r.fullAcao = 'Excesso no Full: não enviar'; }
+        else { r.fullStatus = 'OK'; r.fullDiasGatilho = r.cobFullPos - R.gatilho; r.fullAcao = 'Aguardar'; }
+      } else if (r.anuncioFull && r.fullDisp > 0 && (r.fullRate <= 0.02 || r.cobFull > cfg.fullMax)) {
+        r.fullStatus = 'EXCESSIVO'; r.fullAcao = r.fullRegra ? 'Excesso no Full' : 'Fora da regra e com estoque parado no Full';
+      } else if (r.anuncioFull) { r.fullAcao = r.curvaAn === 'B' ? 'Curva B sem crescimento: não enviar' : r.curvaAn === 'C' ? 'Curva C: não enviar' : 'Sem venda'; }
+      r.cobFullApos = r.fullRate > 0 ? (r.fullPos + r.envioFull) / r.fullRate : r.cobFull;
+    }
 
     // kits: estoque vem dos componentes — a decisão de compra é nos componentes
     if (r.isKit) {
@@ -3776,6 +3809,223 @@ const ecPill = (txt, tone) => `<span class="ec-pill ec-t-${tone}">${ecEsc(txt)}<
 
 // ───────── navegação ─────────
 function ecOpen() { if (!EC.rows.length && !EC.loading) ecLoad(false); else ecRender(); }
+
+// ═════════════════════════ GESTÃO FULL ═════════════════════════
+// Envio ao Full por curva de ANÚNCIO, demanda dos últimos 30 dias, estoque Full do ML + envios programados (registrados aqui, com data).
+// Envios programados ficam no Worker de pós-venda (KV, rota /ec/envios): todos leem, só o acesso master grava.
+// A baixa é automática: o recebimento no CD (operações de estoque Full do ML) desconta o que estava programado.
+const EC_ENV_ATIVOS = ['programado', 'enviado'];
+const EC_ENV_VALIDADE = 21; // dias após a data do envio sem recebimento: deixa de contar e pede conferência
+function ecInvMap() { // SKU → inventory_ids Full e MLBs (anúncios do ML)
+  const m = {};
+  (state.items || []).forEach(it => {
+    const skus = mlItemSkus(it); const full = it.shipping?.logistic_type === 'fulfillment';
+    skus.forEach(sku => { const x = m[sku] || (m[sku] = { inv: [], ids: [] }); x.ids.push(it.id); if (full && skus.length === 1 && it.inventory_id && !x.inv.includes(it.inventory_id)) x.inv.push(it.inventory_id); });
+    if (full && skus.length > 1) (it.variations || []).forEach(v => { const a = (v.attributes || []).find(z => z.id === 'SELLER_SKU'); const sk = normSku(v.seller_custom_field || (a && a.value_name)); if (sk && v.inventory_id) { const x = m[sk] || (m[sk] = { inv: [], ids: [] }); if (!x.inv.includes(v.inventory_id)) x.inv.push(v.inventory_id); } });
+  });
+  return m;
+}
+async function ecEnviosLoad() {
+  try { const p = await pvApi('/ec/envios', { ms: 15000 }); EC.envios = { ok: true, rev: p.rev || 0, lista: Array.isArray(p.envios) ? p.envios : [], em: p.em }; }
+  catch (e) { EC.envios = { ok: false, erro: e.message, rev: null, lista: (EC.envios && EC.envios.lista) || [] }; }
+  try { await ecEnviosRecebidos(); } catch (e) { EC.envRecErro = e.message; }
+  ecEnviosPend();
+}
+// recebimentos no CD desde a data do envio mais antigo em aberto, por inventory_id → distribuídos FIFO entre os envios
+async function ecEnviosRecebidos() {
+  EC.envRec = {}; const L = (EC.envios.lista || []).filter(e => EC_ENV_ATIVOS.includes(e.status) && e.data && e.data <= ecDay());
+  if (!L.length || !state.sellerId || typeof mlGet !== 'function') return;
+  const inv = ecInvMap(); const desde = {}; // inventory → data mais antiga
+  L.forEach(e => Object.keys(e.itens || {}).forEach(sku => (inv[sku]?.inv || []).forEach(i => { if (!desde[i] || e.data < desde[i]) desde[i] = e.data; })));
+  const recInv = {}; const ids = Object.keys(desde).slice(0, 120);
+  for (let k = 0; k < ids.length; k += 6) {
+    await Promise.all(ids.slice(k, k + 6).map(async i => {
+      try {
+        const o = await mlGet(`/stock/fulfillment/operations/search?seller_id=${state.sellerId}&inventory_id=${i}&date_from=${desde[i]}&date_to=${ecDay()}`);
+        recInv[i] = ((o && o.results) || []).filter(x => /INBOUND/i.test(x.type || '')).map(x => {
+          const d = x.detail || {}; const q = (d.available_quantity > 0 ? d.available_quantity : 0) + (d.not_available_detail || []).reduce((a, n) => a + (n.quantity > 0 ? n.quantity : 0), 0);
+          return { dia: String(x.date_created || '').slice(0, 10), q };
+        }).filter(x => x.q > 0);
+      } catch (e) { recInv[i] = null; }
+    }));
+  }
+  // por SKU: lista de recebimentos (datas) somando os inventories do SKU
+  const recSku = {};
+  Object.entries(inv).forEach(([sku, x]) => { const r = []; x.inv.forEach(i => (recInv[i] || []).forEach(z => r.push({ ...z }))); if (r.length) recSku[sku] = r.sort((a, b) => a.dia.localeCompare(b.dia)); });
+  [...L].sort((a, b) => a.data.localeCompare(b.data)).forEach(e => {
+    Object.entries(e.itens || {}).forEach(([sku, q]) => {
+      let falta = q, got = 0;
+      (recSku[sku] || []).forEach(z => { if (falta <= 0 || z.dia < e.data || z.q <= 0) return; const t = Math.min(falta, z.q); z.q -= t; falta -= t; got += t; });
+      if (got) (EC.envRec[e.id] || (EC.envRec[e.id] = {}))[sku] = got;
+    });
+  });
+}
+function ecEnvioPend(e) { // quanto do envio ainda não chegou (por SKU) e se ainda conta
+  const rec = (EC.envRec || {})[e.id] || {}; const p = {}; let tot = 0, totQ = 0;
+  Object.entries(e.itens || {}).forEach(([sku, q]) => { const f = Math.max(0, q - (rec[sku] || 0)); totQ += q; if (f) { p[sku] = f; tot += f; } });
+  const dias = e.data ? ecDaysBetween(e.data, ecDay()) : 0;
+  const vencido = dias > EC_ENV_VALIDADE && tot > 0;
+  return { p, tot, totQ, recebido: totQ - tot, vencido, conta: EC_ENV_ATIVOS.includes(e.status) && !vencido && tot > 0 };
+}
+function ecEnviosPend() {
+  const m = {}; (EC.envios?.lista || []).forEach(e => { const x = ecEnvioPend(e); if (x.conta) Object.entries(x.p).forEach(([sku, q]) => { m[sku] = (m[sku] || 0) + q; }); });
+  EC.fullProg = m;
+}
+async function ecEnviosSalvar(lista) {
+  if (!ecPodeEditar()) { showToast('Acesso de consulta: só o acesso master altera os envios programados.', 'warn'); return false; }
+  try {
+    const p = await pvApi('/ec/envios', { method: 'POST', body: { envios: lista, rev: EC.envios && EC.envios.ok ? EC.envios.rev : undefined, usuario: 'master' }, ms: 15000 });
+    EC.envios = { ok: true, rev: p.rev, lista: p.envios || [], em: p.em }; ecEnviosPend(); ecCompute(); ecRender(); return true;
+  } catch (e) { showToast('Envio NÃO salvo no servidor: ' + ecEsc(e.message), 'err'); try { await ecEnviosLoad(); ecCompute(); ecRender(); } catch (e2) {} return false; }
+}
+function ecEnvioNovo(usarSugestao) {
+  if (!ecPodeEditar()) return;
+  const sug = usarSugestao ? EC.rows.filter(r => r.envioFull > 0).sort((a, b) => (a.curvaAn || 'C').localeCompare(b.curvaAn || 'C') || a.cobFullPos - b.cobFullPos) : [];
+  EC._envEdit = { id: '', data: ecDay(-2), obs: '', itens: sug.map(r => r.sku + ' ' + r.envioFull).join('\n'), novo: true };
+  ecEnvioModal();
+}
+function ecEnvioEditar(id) {
+  const e = (EC.envios?.lista || []).find(x => x.id === id); if (!e || !ecPodeEditar()) return;
+  EC._envEdit = { id: e.id, data: e.data, obs: e.obs || '', itens: Object.entries(e.itens || {}).map(([k, v]) => k + ' ' + v).join('\n'), novo: false, orig: e };
+  ecEnvioModal();
+}
+function ecEnvioModal() {
+  const x = EC._envEdit; const el = document.getElementById('ec-cfg');
+  el.innerHTML = `<div class="ec-modal-box" style="max-width:560px"><div class="card-head"><span class="card-title">${x.novo ? 'Registrar envio programado' : 'Editar envio ' + ecEsc(x.id)}</span><button class="ec-iconbtn" onclick="ecCloseCfg()">✕</button></div>
+    <div class="card-body">
+      <div class="ec-muted" style="font-size:12px;margin-bottom:10px">O que estiver aqui entra no cálculo como estoque já a caminho do Full até o CD registrar o recebimento (baixa automática) ou até ${EC_ENV_VALIDADE} dias depois da data, quando o painel pede conferência.</div>
+      <style>#ec-cfg .env-f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text2);margin-bottom:10px}#ec-cfg .env-f input,#ec-cfg .env-f textarea{background:var(--bg2);border:1px solid var(--border2);color:var(--text);padding:7px 9px;border-radius:8px}</style>
+      <label class="env-f">Nº do envio no Mercado Livre<input id="env-id" value="${ecEsc(x.id)}" ${x.novo ? '' : 'disabled'} placeholder="ex.: 78708582"></label>
+      <label class="env-f">Data de envio (coleta/entrega no CD)<input id="env-data" type="date" value="${ecEsc(x.data)}"></label>
+      <label class="env-f">Itens — um por linha: SKU e quantidade<textarea id="env-itens" rows="12" style="width:100%;font:12px var(--mono)" placeholder="589902.000 120&#10;200005.004 130">${ecEsc(x.itens)}</textarea></label>
+      <label class="env-f">Observação<input id="env-obs" value="${ecEsc(x.obs)}" maxlength="200"></label>
+      <div id="env-msg" class="c-orange" style="font-size:12px;min-height:16px"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button class="btn-sm" onclick="ecCloseCfg()">Cancelar</button><button class="btn-sm btn-primary" onclick="ecEnvioGravar()">Salvar envio</button></div>
+    </div></div>`;
+  el.style.display = 'flex';
+}
+async function ecEnvioGravar() {
+  const g = id => document.getElementById(id); const msg = t => { g('env-msg').textContent = t; };
+  const id = String(g('env-id').value || '').trim().replace(/^#/, ''); const data = g('env-data').value; const obs = g('env-obs').value.trim();
+  if (!id) return msg('Informe o número do envio.'); if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return msg('Informe a data do envio.');
+  const skus = new Set(EC.rows.map(r => r.sku)); const itens = {}; const ruins = [];
+  g('env-itens').value.split(/\n/).map(l => l.trim()).filter(Boolean).forEach(l => {
+    const m = l.match(/^(\S+)[\s;,\t]+(\d+)/); if (!m) { ruins.push(l); return; }
+    const sku = normSku(m[1]); const q = parseInt(m[2], 10);
+    if (!skus.has(sku) || !(q > 0)) { ruins.push(l); return; } itens[sku] = (itens[sku] || 0) + q;
+  });
+  if (ruins.length) return msg(`Linhas não reconhecidas (SKU inexistente ou sem quantidade): ${ruins.slice(0, 4).join(' | ')}${ruins.length > 4 ? '…' : ''}`);
+  if (!Object.keys(itens).length) return msg('Nenhum item.');
+  const lista = [...(EC.envios?.lista || [])];
+  const x = EC._envEdit; const i = lista.findIndex(e => e.id === id);
+  if (x.novo && i >= 0) return msg('Já existe um envio com esse número. Edite o existente.');
+  const env = { ...(i >= 0 ? lista[i] : { status: 'programado', criado: new Date().toISOString() }), id, data, obs, itens };
+  if (i >= 0) lista[i] = env; else lista.unshift(env);
+  if (await ecEnviosSalvar(lista)) ecCloseCfg();
+}
+async function ecEnvioStatus(id, st) {
+  const lista = (EC.envios?.lista || []).map(e => ({ ...e })); const e = lista.find(x => x.id === id); if (!e) return;
+  if (st === 'excluir') { if (!confirm(`Excluir o registro do envio ${id}? Isso não mexe no envio do Mercado Livre.`)) return; await ecEnviosSalvar(lista.filter(x => x.id !== id)); return; }
+  e.status = st; await ecEnviosSalvar(lista);
+}
+
+const EC_GF_FILTROS = {
+  acao: ['Acionar envio', r => r.fullStatus === 'CRÍTICO' || r.fullStatus === 'BAIXO'],
+  rupt: ['Ruptura / crítico', r => r.fullStatus === 'CRÍTICO'],
+  compra: ['Matriz insuficiente', r => r.fullFaltaMatriz > 0],
+  ok: ['OK (aguardar)', r => r.fullStatus === 'OK'],
+  exc: ['Excesso no Full', r => r.fullStatus === 'EXCESSIVO'],
+  fora: ['Fora da regra', r => r.anuncioFull && !r.fullRegra],
+  todos: ['Todos no Full', r => r.anuncioFull],
+};
+function ecGfLinhas() {
+  const f = EC_GF_FILTROS[EC.gfFiltro || 'acao'] || EC_GF_FILTROS.acao; const q = (EC.gfQ || '').toLowerCase();
+  const ordem = { 'CRÍTICO': 0, 'BAIXO': 1, 'OK': 2, 'EXCESSIVO': 3, '': 4 };
+  return EC.rows.filter(r => r.anuncioFull && f[1](r) && (!q || (r.sku + ' ' + r.nome).toLowerCase().includes(q)))
+    .sort((a, b) => (ordem[a.fullStatus] - ordem[b.fullStatus]) || (a.fullRegra || 'Z').localeCompare(b.fullRegra || 'Z') || (a.cobFullPos - b.cobFullPos) || (b.fullRate - a.fullRate));
+}
+function ecRenderFull() {
+  const el = document.getElementById('ec-full'); if (!el) return;
+  const cfg = ecCfg(), FR = cfg.fullRegra; const R = EC.rows.filter(r => r.anuncioFull);
+  const reg = R.filter(r => r.fullRegra);
+  const n = fn => R.filter(fn).length, un = (fn, k) => R.filter(fn).reduce((s, r) => s + (r[k] || 0), 0);
+  const acao = r => r.fullStatus === 'CRÍTICO' || r.fullStatus === 'BAIXO';
+  const env = (EC.envios?.lista || []); const pend = env.map(e => ({ e, x: ecEnvioPend(e) }));
+  const progUn = Object.values(EC.fullProg || {}).reduce((a, b) => a + b, 0);
+  const vendaDia = reg.reduce((s, r) => s + r.fullRate, 0), posReg = reg.reduce((s, r) => s + r.fullPos, 0);
+  const pode = ecPodeEditar(); const fil = EC.gfFiltro || 'acao';
+  const linhas = ecGfLinhas();
+  const st = r => r.fullStatus === 'CRÍTICO' ? ecPill('🔴 Crítico', 'crit') : r.fullStatus === 'BAIXO' ? ecPill('🟠 Acionar', 'aten') : r.fullStatus === 'OK' ? ecPill('🟢 OK', 'ok') : r.fullStatus === 'EXCESSIVO' ? ecPill('🟡 Excesso', 'mon') : '<span class="ec-sub">fora da regra</span>';
+  const dataG = r => r.fullDiasGatilho != null && isFinite(r.fullDiasGatilho) ? ecDay(-Math.floor(r.fullDiasGatilho)).split('-').reverse().slice(0, 2).join('/') : '';
+  el.innerHTML = `
+  <div class="card"><div class="card-head"><span class="card-title">Gestão Full — regras de envio</span><span class="ec-muted">estoque Full do Mercado Livre (disponível) + envios programados · demanda dos últimos ${FR.base} dias</span></div>
+    <div class="card-body">
+      <div class="ec-notes" style="margin:0 0 12px">
+        <div>🅰 <b>Curva A</b> (anúncio): mantém <b>${FR.A.alvo} dias</b> no Full · aciona envio quando Full + programado chega a <b>${FR.A.gatilho} dias</b> de venda.</div>
+        <div>🅱 <b>Curva B com crescimento</b> (≥ ${Math.round(FR.B ? FR.bCresc * 100 : 10)}% nos últimos 30d × 30d anteriores): alvo <b>${FR.B.alvo} dias</b> · aciona em <b>${FR.B.gatilho} dias</b>.</div>
+        <div>⛔ Curva C e curva B sem crescimento: não enviar. Envio limitado ao que a Matriz pode ceder sem faltar para as outras vendas; se não der, vira necessidade de compra.</div>
+      </div>
+      <div class="ec-counters">
+        ${ecCounterGf('Acionar envio agora', n(acao), 'aten', 'acao', `${ecInt(un(acao, 'envioFull'))} un a enviar`)}
+        ${ecCounterGf('Crítico / ruptura no Full', n(r => r.fullStatus === 'CRÍTICO'), 'crit', 'rupt', 'A/B sem estoque ou ≤ 7d')}
+        ${ecCounterGf('Matriz insuficiente → comprar', n(r => r.fullFaltaMatriz > 0), 'crit', 'compra', `${ecInt(un(r => r.fullFaltaMatriz > 0, 'fullFaltaMatriz'))} un faltando`)}
+        ${ecCounterGf('OK — aguardar', n(r => r.fullStatus === 'OK'), 'ok', 'ok', 'acima do gatilho')}
+        ${ecCounterGf('Excesso no Full', n(r => r.fullStatus === 'EXCESSIVO'), 'mon', 'exc', 'não enviar')}
+        ${ecCounterGf('Programado a caminho', Object.keys(EC.fullProg || {}).length, 'neutral', 'todos', `${ecInt(progUn)} un em ${pend.filter(p => p.x.conta).length} envios`)}
+      </div>
+      <div class="ec-muted" style="font-size:12px;margin-top:8px">Anúncios na regra (A + B crescendo): <b>${reg.length}</b> · venda/dia ${ecInt(Math.round(vendaDia))} un · cobertura Full + programado ${vendaDia > 0 ? Math.round(posReg / vendaDia) + 'd' : '—'}</div>
+    </div></div>
+
+  <div class="card"><div class="card-head"><span class="card-title">Envios programados</span>
+      <span style="display:flex;gap:6px;align-items:center">${EC.envios && !EC.envios.ok ? `<span class="c-orange" style="font-size:11px">servidor indisponível: ${ecEsc(EC.envios.erro || '')}</span>` : ''}
+      ${pode ? `<button class="btn-sm" onclick="ecEnvioNovo(true)" title="Abre um envio já preenchido com a sugestão atual">+ Envio a partir da sugestão</button><button class="btn-sm" onclick="ecEnvioNovo(false)">+ Envio em branco</button>` : '<span class="ec-muted" style="font-size:11px">só o acesso master registra envios</span>'}</span></div>
+    <div class="card-body" style="padding-top:0">
+      ${env.length ? `<table class="t ec-t"><thead><tr><th>Envio</th><th>Data</th><th class="r">SKUs</th><th class="r">Unidades</th><th class="r">Recebido no CD</th><th class="r">A caminho</th><th>Situação</th>${pode ? '<th></th>' : ''}</tr></thead><tbody>
+      ${pend.slice(0, 30).map(({ e, x }) => `<tr><td class="mono">#${ecEsc(e.id)}${e.obs ? `<div class="ec-sub">${ecEsc(e.obs)}</div>` : ''}</td><td class="mono">${ecEsc(e.data.split('-').reverse().join('/'))}</td><td class="r mono">${Object.keys(e.itens || {}).length}</td><td class="r mono">${ecInt(x.totQ)}</td><td class="r mono">${ecInt(x.recebido)}</td><td class="r mono"><b>${x.conta ? ecInt(x.tot) : '—'}</b></td>
+        <td>${e.status === 'cancelado' ? ecPill('cancelado', 'neutral') : e.status === 'recebido' || (!x.tot && x.totQ) ? ecPill('recebido', 'ok') : x.vencido ? ecPill('conferir: ' + EC_ENV_VALIDADE + 'd sem chegar', 'aten') : ecPill(e.status, 'aten')}</td>
+        ${pode ? `<td style="white-space:nowrap"><button class="ec-link" onclick="ecEnvioEditar('${ecEsc(e.id)}')">editar</button> · ${EC_ENV_ATIVOS.includes(e.status) ? `<button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','recebido')">recebido</button> · <button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','cancelado')">cancelar</button> · ` : ''}<button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','excluir')">excluir</button></td>` : ''}</tr>`).join('')}
+      </tbody></table>` : '<div class="ec-muted">Nenhum envio programado registrado. Registre aqui os envios criados no Mercado Livre (nº, data e itens) para o painel não sugerir em dobro.</div>'}
+    </div></div>
+
+  <div class="card"><div class="card-head"><span class="card-title">Análise por anúncio</span>
+      <span style="display:flex;gap:6px"><button class="btn-sm" onclick="ecGfExcel()">⬇ Excel do envio</button></span></div>
+    <div class="card-body" style="padding-top:0">
+      <div class="ec-chips">${Object.entries(EC_GF_FILTROS).map(([k, v]) => `<button class="ec-chip ${fil === k ? 'active' : ''}" onclick="EC.gfFiltro='${k}';ecRenderFull()">${v[0]}<span>${R.filter(v[1]).length}</span></button>`).join('')}</div>
+      <div class="ec-tools" style="margin:10px 0"><input class="ec-search" placeholder="Buscar SKU ou descrição…" value="${ecEsc(EC.gfQ || '')}" oninput="EC.gfQ=this.value;clearTimeout(EC._gfT);EC._gfT=setTimeout(()=>{ecRenderFull();const i=document.querySelector('#ec-full .ec-search');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length)}},250)"></div>
+      <div class="ec-table-wrap"><table class="t ec-t"><thead><tr><th>Produto</th><th>Curva anúncio</th><th class="r">Venda 30d</th><th class="r">Tendência</th><th class="r">Venda/dia Full</th><th class="r">Full ML</th><th class="r">Programado</th><th class="r">Cobertura</th><th class="r">Gatilho / alvo</th><th class="r">Enviar</th><th class="r">Cob. após</th><th class="r">Matriz livre</th><th>Situação</th><th>Ação</th></tr></thead><tbody>
+      ${linhas.slice(0, 300).map(r => `<tr><td>${ecProd(r)}</td><td>${ecCurva(r.curvaAn)}${r.fullRegra === 'B' ? '<div class="ec-sub">crescendo</div>' : ''}</td><td class="r mono">${ecInt(r.vDir30)}</td>
+        <td class="r mono ${r.tendDir >= 0.1 ? 'c-green' : r.tendDir <= -0.1 ? 'c-red' : ''}">${r.vDirPrev30 > 0 || r.vDir30 > 0 ? (r.tendDir >= 0 ? '+' : '') + Math.round(r.tendDir * 100) + '%' : '—'}</td>
+        <td class="r mono">${r.fullRate ? r.fullRate.toLocaleString('pt-BR', { maximumFractionDigits: 1 }) : '—'}${r.fullShare < 1 && r.fullShare > 0 ? `<div class="ec-sub">${Math.round(r.fullShare * 100)}% via Full</div>` : ''}</td>
+        <td class="r mono">${ecInt(r.fullDisp)}</td><td class="r mono">${r.fullProg ? ecInt(r.fullProg) : '—'}</td>
+        <td class="r mono"><b>${ecDays(r.cobFullPos)}</b>${r.fullProg ? `<div class="ec-sub">sem prog. ${ecDays(r.cobFull)}</div>` : ''}</td>
+        <td class="r mono">${r.fullRegra ? r.fullGatilhoD + 'd / ' + r.fullAlvoD + 'd' : '—'}</td>
+        <td class="r mono"><b>${r.envioFull ? ecInt(r.envioFull) : '—'}</b>${r.fullFaltaMatriz ? `<div class="ec-sub c-red">faltam ${ecInt(r.fullFaltaMatriz)}</div>` : ''}</td>
+        <td class="r mono">${r.envioFull ? ecDays(r.cobFullApos) : '—'}</td><td class="r mono">${ecInt(r.fullMatrizDisp)}</td>
+        <td>${st(r)}</td><td style="font-size:12px">${ecEsc(r.fullAcao)}${r.fullStatus === 'OK' && dataG(r) ? `<div class="ec-sub">aciona ~${dataG(r)}</div>` : ''}</td></tr>`).join('') || '<tr><td colspan="14" class="ec-muted">Nada neste filtro.</td></tr>'}
+      </tbody></table></div>
+      ${linhas.length > 300 ? `<div class="ec-muted">Mostrando 300 de ${linhas.length}.</div>` : ''}
+    </div></div>`;
+}
+function ecCounterGf(label, n, tone, f, sub) {
+  return `<button class="ec-counter" onclick="EC.gfFiltro='${f}';ecRenderFull()"><div class="ec-c-label"><span class="ec-dot" style="background:${EC_STATUS[tone] || EC_STATUS.neutral}"></span>${ecEsc(label)}</div><div class="ec-c-val">${ecInt(n)}</div><div class="ec-c-sub">${ecEsc(sub || '')}</div></button>`;
+}
+async function ecGfExcel() {
+  if (!(await ccLoadXlsx())) return;
+  const inv = ecInvMap(); const fs = EC.rows.filter(r => r.anuncioFull && (r.envioFull > 0 || r.fullFaltaMatriz > 0))
+    .sort((a, b) => (a.curvaAn || 'C').localeCompare(b.curvaAn || 'C') || a.cobFullPos - b.cobFullPos);
+  const d = v => isFinite(v) ? Math.round(v) : '';
+  const env = fs.filter(r => r.envioFull > 0).map(r => ({ 'SKU': r.sku, 'Código Full (inventory)': (inv[r.sku]?.inv || r.mlInvs || []).join(' / '), 'Anúncio(s)': (r.mlIds || []).join(' / '), 'Produto': r.nome, 'Curva anúncio': r.curvaAn, 'Regra': r.fullRegra === 'B' ? 'B crescendo' : r.fullRegra,
+    'Venda 30d': r.vDir30, 'Tendência %': Math.round(r.tendDir * 100), 'Venda/dia Full': +r.fullRate.toFixed(2), 'Full ML': r.fullDisp, 'Programado': r.fullProg, 'Cobertura atual (d)': d(r.cobFullPos), 'Gatilho (d)': r.fullGatilhoD, 'Alvo (d)': r.fullAlvoD,
+    'ENVIAR': r.envioFull, 'Cobertura após (d)': d(r.cobFullApos), 'Matriz': r.matriz, 'Falta p/ alvo (comprar)': r.fullFaltaMatriz || 0 }));
+  const comp = fs.filter(r => r.fullFaltaMatriz > 0).map(r => ({ 'SKU': r.sku, 'Produto': r.nome, 'Curva anúncio': r.curvaAn, 'Necessidade Full': r.fullNecessidade, 'Matriz livre': r.fullMatrizDisp, 'Falta': r.fullFaltaMatriz, 'Fornecedor': r.fornecedor, 'Compra sugerida (estoque)': r.sugCompra || 0 }));
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(env.length ? env : [{ 'Aviso': 'Nada a enviar agora' }]); ws['!cols'] = Object.keys(env[0] || { a: 1 }).map(k => ({ wch: Math.max(10, Math.min(48, k.length + 4)) })); XLSX.utils.book_append_sheet(wb, ws, 'Enviar ao Full');
+  if (comp.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(comp), 'Matriz insuficiente');
+  const cfg = ecCfg().fullRegra;
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Regra', 'Alvo (dias)', 'Gatilho (dias)'], ['Curva A (anúncio)', cfg.A.alvo, cfg.A.gatilho], ['Curva B com crescimento ≥ ' + Math.round(cfg.bCresc * 100) + '%', cfg.B.alvo, cfg.B.gatilho], ['Demanda', 'últimos ' + cfg.base + ' dias', ''], ['Gerado em', new Date().toLocaleString('pt-BR'), '']]), 'Regras');
+  XLSX.writeFile(wb, `envio_full_${ecDay()}.xlsx`);
+}
+
 function ecSetTab(t) {
   EC.view.tab = t;
   document.querySelectorAll('.ec-subtab').forEach(b => b.classList.toggle('active', b.dataset.t === t));
@@ -3783,6 +4033,7 @@ function ecSetTab(t) {
   document.getElementById('ec-itens').style.display = t === 'itens' ? '' : 'none';
   document.getElementById('ec-conc').style.display = t === 'conc' ? '' : 'none';
   const ce = document.getElementById('ec-cesta'); if (ce) ce.style.display = t === 'cesta' ? '' : 'none';
+  const gf = document.getElementById('ec-full'); if (gf) gf.style.display = t === 'full' ? '' : 'none';
   ecRender();
 }
 function ecOpenFilter(f) { EC.view.filter = f; EC.view.page = 0; EC.view.q = ''; EC.view.sort = { k: 'prio', d: 1 }; ecSetTab('itens'); window.scrollTo({ top: 0, behavior: 'smooth' }); }
@@ -3797,7 +4048,7 @@ function ecRender() {
   const meta = document.getElementById('ec-meta');
   if (meta) meta.textContent = `Bling ${b ? new Date(b.updatedAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'} · ML ${EC.histDays} dias de vendas · lead time padrão ${ecCfg().leadTime}d`;
   ecRenderNotifBell();
-  if (EC.view.tab === 'dash') ecRenderDash(); else if (EC.view.tab === 'conc') ecRenderConc(); else if (EC.view.tab === 'cesta') ecRenderCesta(); else ecRenderItens();
+  if (EC.view.tab === 'dash') ecRenderDash(); else if (EC.view.tab === 'conc') ecRenderConc(); else if (EC.view.tab === 'cesta') ecRenderCesta(); else if (EC.view.tab === 'full') ecRenderFull(); else ecRenderItens();
 }
 
 // ───────── Dashboard ─────────
@@ -3824,7 +4075,7 @@ function ecRenderDash() {
   const aumentar = EC.rows.filter(EC_FILTERS.aumentar.fn).sort((x, y) => y.ajustePct - x.ajustePct).slice(0, 5);
   const reduzir = EC.rows.filter(r => r.rec === EC_REC.REDUZIR).sort((x, y) => y.excessoR - x.excessoR).slice(0, 5);
   const semGiro = EC.rows.filter(EC_FILTERS.semgiro.fn).sort((x, y) => y.valorCusto - x.valorCusto).slice(0, 8);
-  const envios = EC.rows.filter(r => r.envioFull > 0).sort((x, y) => (x.curvaAn || 'C').localeCompare(y.curvaAn || 'C') || x.cobFull - y.cobFull).slice(0, 8);
+  const envios = EC.rows.filter(r => r.envioFull > 0).sort((x, y) => (x.curvaAn || 'C').localeCompare(y.curvaAn || 'C') || x.cobFullPos - y.cobFullPos).slice(0, 8);
   const mBaixa = EC.rows.filter(EC_FILTERS.margembaixa.fn).sort((x, y) => y.rev90 - x.rev90).slice(0, 5);
   const mBoa = EC.rows.filter(EC_FILTERS.margemboa.fn).sort((x, y) => y.rev90 - x.rev90).slice(0, 5);
   const avisos = [];
@@ -3958,8 +4209,8 @@ function ecRenderDash() {
       </div>
       <div class="ec-subhead" style="margin-top:12px">Sugestão de envio para o Full — ${ecInt(a.full.envioUn)} un em ${a.full.envioSkus} SKUs</div>
       ${envios.length ? `<table class="t ec-t"><thead><tr><th>Produto</th><th>Curva anúncio</th><th class="r">Full</th><th class="r">Cob. atual</th><th class="r">Enviar</th><th class="r">Cob. após</th></tr></thead><tbody>
-      ${envios.map(r => `<tr><td>${ecProd(r)}</td><td>${ecCurva(r.curvaAn)}</td><td class="r mono">${ecInt(r.full)}</td><td class="r mono">${ecDays(r.cobFull)}</td><td class="r mono"><b>${ecInt(r.envioFull)}</b></td><td class="r mono">${ecDays(r.cobFullApos)}</td></tr>`).join('')}
-      </tbody></table>${a.full.envioSkus > 8 ? `<button class="ec-link" onclick="ecOpenFilter('enviofull')">ver todos →</button>` : ''}` : '<div class="ec-muted">Nenhum envio necessário agora.</div>'}
+      ${envios.map(r => `<tr><td>${ecProd(r)}</td><td>${ecCurva(r.curvaAn)}</td><td class="r mono">${ecInt(r.fullDisp)}${r.fullProg ? ' +' + ecInt(r.fullProg) : ''}</td><td class="r mono">${ecDays(r.cobFullPos)}</td><td class="r mono"><b>${ecInt(r.envioFull)}</b></td><td class="r mono">${ecDays(r.cobFullApos)}</td></tr>`).join('')}
+      </tbody></table>${a.full.envioSkus > 8 ? `<button class="ec-link" onclick="ecSetTab('full')">ver todos →</button>` : ''} <button class="ec-link" onclick="ecSetTab('full')">abrir Gestão Full →</button>` : '<div class="ec-muted">Nenhum envio necessário agora.</div>'}
     </div></div>
   </div>
   <div class="g2">
@@ -4209,6 +4460,7 @@ function ecExportCSV() {
 
 // ───────── Configurações ─────────
 function ecOpenCfg() {
+  EC._regraAntes = JSON.stringify(ecCfg().fullRegra);
   const c = ecCfg(); const m = document.getElementById('ec-cfg');
   const inp = (id, v, label, suf = 'dias') => `<label class="ec-f"><span>${label}</span><span><input type="number" id="${id}" value="${v}" min="0" step="any"> ${suf}</span></label>`;
   m.innerHTML = `<div class="ec-modal-box">
@@ -4230,7 +4482,7 @@ function ecOpenCfg() {
       <div><div class="ec-subhead">Faixas de cobertura</div>
         ${inp('ec-fc', c.faixas.crit, 'Crítico até')}${inp('ec-fa', c.faixas.aten, 'Atenção até')}${inp('ec-fs', c.faixas.saud, 'Saudável até (acima = excesso)')}
         <div class="ec-subhead" style="margin-top:12px">Full</div>
-        ${inp('ec-fa2', c.fullAlvo, 'Cobertura alvo no Full')}${inp('ec-fm', c.fullMax, 'Acima disso = excesso no Full')}</div>
+        ${inp('ec-gfaa', c.fullRegra.A.alvo, 'Full curva A — alvo')}${inp('ec-gfag', c.fullRegra.A.gatilho, 'Full curva A — aciona envio em')}${inp('ec-gfba', c.fullRegra.B.alvo, 'Full curva B crescendo — alvo')}${inp('ec-gfbg', c.fullRegra.B.gatilho, 'Full curva B crescendo — aciona em')}${inp('ec-gfbc', Math.round(c.fullRegra.bCresc * 100), 'Crescimento mínimo p/ curva B', '%')}${inp('ec-fm', c.fullMax, 'Fora da regra: acima disso = excesso no Full')}</div>
       <div><div class="ec-subhead">Estoque e margem</div>
         <label class="ec-f"><span>Saldo do Bling já inclui o Full</span><span><input type="checkbox" id="ec-bif" ${c.blingIncluiFull ? 'checked' : ''}></span></label>
         <div class="ec-muted" style="font-size:11px;margin-bottom:8px">${EC.depMatriz ? `Matriz = depósito <b>${ecEsc(EC.depMatriz.nome)}</b> do Bling. Full = ${EC.depFull ? `depósito <b>${ecEsc(EC.depFull.nome)}</b> do Bling` : 'Full do Mercado Livre (nenhum depósito Fulfillment no Bling)'}. O Mercado Livre é usado só para validação (aba Conciliação). Esta opção só vale se o depósito Matriz não for identificado.` : 'Depósito Matriz não identificado — com a opção marcada, Matriz = Bling − Full do ML.'}</div>
@@ -4275,14 +4527,18 @@ function ecApplyCfg() {
   c.leadTime = Math.max(1, Math.round(pos(g('ec-lt'), c.leadTime)));
   c.alvo = { A: pos(g('ec-aA'), c.alvo.A), B: pos(g('ec-aB'), c.alvo.B), C: pos(g('ec-aC'), c.alvo.C) };
   c.faixas = { crit: pos(g('ec-fc'), c.faixas.crit), aten: pos(g('ec-fa'), c.faixas.aten), saud: pos(g('ec-fs'), c.faixas.saud) };
-  c.fullAlvo = pos(g('ec-fa2'), c.fullAlvo); c.fullMax = pos(g('ec-fm'), c.fullMax);
+  c.fullMax = pos(g('ec-fm'), c.fullMax);
+  c.fullRegra = { ...c.fullRegra, A: { alvo: pos(g('ec-gfaa'), c.fullRegra.A.alvo), gatilho: pos(g('ec-gfag'), c.fullRegra.A.gatilho) }, B: { alvo: pos(g('ec-gfba'), c.fullRegra.B.alvo), gatilho: pos(g('ec-gfbg'), c.fullRegra.B.gatilho) }, bCresc: pos(g('ec-gfbc'), Math.round(c.fullRegra.bCresc * 100)) / 100 };
+  if (c.fullRegra.A.gatilho >= c.fullRegra.A.alvo) c.fullRegra.A.gatilho = Math.max(1, c.fullRegra.A.alvo - 1);
+  if (c.fullRegra.B.gatilho >= c.fullRegra.B.alvo) c.fullRegra.B.gatilho = Math.max(1, c.fullRegra.B.alvo - 1);
   c.blingIncluiFull = document.getElementById('ec-bif').checked; c.impostoPct = pos(g('ec-imp'), 0);
   c.abc = { A: ecClamp(pos(g('ec-abcA'), 70) / 100, 0.3, 0.95), B: ecClamp(pos(g('ec-abcB'), 90) / 100, 0.5, 0.99) };
   if (c.abc.B <= c.abc.A) c.abc.B = Math.min(0.99, c.abc.A + 0.1);
   let ltMudou = false;
   if (ecPodeEditar()) document.querySelectorAll('.ec-ltf').forEach(el => { const f = (EC._ltForn || [])[+el.dataset.i]; if (!f) return; const n = parseInt(el.value, 10), ant = c.ltForn[f.k] || 0; if ((n > 0 ? n : 0) !== ant) ltMudou = true; if (n > 0) c.ltForn[f.k] = n; else delete c.ltForn[f.k]; });
   ecSaveCfg(); ecCloseCfg();
-  if (ltMudou) ecParamsSave().then(() => { ecCompute(); ecRender(); });
+  const regraMudou = JSON.stringify(c.fullRegra) !== EC._regraAntes;
+  if ((ltMudou || regraMudou) && ecPodeEditar()) ecParamsSave().then(() => { ecCompute(); ecRender(); });
   if (blingMudou || !EC.bling) ecLoad(true); else { ecCompute(); ecRender(); }
 }
 function ecResetCfg() { const o = ecCfg(), lt = o.ltSku, cc = o.ccIds; EC.cfg = { ...JSON.parse(JSON.stringify(EC_DEFAULT_CFG)), ltSku: lt, ltForn: o.ltForn, moqSku: o.moqSku, multSku: o.multSku }; if (cc) EC.cfg.ccIds = cc; ecSaveCfg(); ecOpenCfg(); }
