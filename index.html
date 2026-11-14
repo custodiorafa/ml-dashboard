@@ -1351,6 +1351,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
         <div class="page-title">Central de <span>Alertas</span></div>
         <button class="btn-sm btn-ghost" onclick="clearAlerts()">Limpar lidos</button>
       </div>
+      <div id="al-regras"></div>
       <div id="alerts-container"></div>
     </div>
 
@@ -1700,6 +1701,7 @@ function goTab(el, page){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   el.classList.add('active');
   document.getElementById('page-'+page).classList.add('active');
+  if (page === 'alerts' && typeof alRender === 'function') alRender();
 }
 
 // ════════════════════════════════════════════
@@ -3006,7 +3008,7 @@ function ecCompute() {
     rows.push({
       sku, id: p.id, nome: p.nome, ativo, isKit, kitFisico, formato: p.formato, blingVirt, matriz, full, total, transito, lt, ltFonte, moq, mult, moqFonte, multFonte, buyLido: !!bf,
       custo, preco, tarifaUn, freteUn, freteFonte, impPct, impUn, impFonte: taxMap[sku] != null ? 'Bling' : 'padrão', margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
-      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, rev180, revCurva: cv.v, revCurvaAn: cv.v, revCurvaProd: cvP.v, revKit90: s && !isKit ? ecSum(s.rk, 0, 90) : 0, revCurvaBruta: cv.bruto, ruptCurva: cv.rupt, vDir30: s ? ecSum(s.q, 0, 30) : 0, vDirPrev30: s ? ecSum(s.q, 30, 60) : 0, vDir90: s ? ecSum(s.q, 0, 90) : 0, fq30: s ? ecSum(s.fq, 0, 30) : 0, mlTemProprio: !!(m && m.ownIds && m.ownIds.length), canc90, full90, tendPct, tend90Pct, tend, vol,
+      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, rev180, revCurva: cv.v, revCurvaAn: cv.v, revCurvaProd: cvP.v, revKit90: s && !isKit ? ecSum(s.rk, 0, 90) : 0, revCurvaBruta: cv.bruto, ruptCurva: cv.rupt, vDir30: s ? ecSum(s.q, 0, 30) : 0, vDir7: s ? ecSum(s.q, 0, 7) : 0, rev7: s ? ecSum(s.r, 0, 7) : 0, vDirPrev30: s ? ecSum(s.q, 30, 60) : 0, vDir90: s ? ecSum(s.q, 0, 90) : 0, fq30: s ? ecSum(s.fq, 0, 30) : 0, mlTemProprio: !!(m && m.ownIds && m.ownIds.length), canc90, full90, tendPct, tend90Pct, tend, vol,
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
       deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds) || full > 0, anuncioFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
       compra: cp,
@@ -4040,6 +4042,107 @@ async function ecGfExcel() {
   const cfg = ecCfg().fullRegra;
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Regra', 'Alvo (dias)', 'Gatilho (dias)'], ['Curva A (anúncio)', cfg.A.alvo, cfg.A.gatilho], ['Curva B com crescimento ≥ ' + Math.round(cfg.bCresc * 100) + '%', cfg.B.alvo, cfg.B.gatilho], ['Demanda', 'últimos ' + cfg.base + ' dias', ''], ['Gerado em', new Date().toLocaleString('pt-BR'), '']]), 'Regras');
   XLSX.writeFile(wb, `envio_full_${ecDay()}.xlsx`);
+}
+
+// ═════════════════════════ REGRAS DE ALERTA (notificação) ═════════════════════════
+// Avaliadas pelo painel (botão "Avaliar agora") e pela tarefa agendada diária, que manda a notificação.
+// Ads em janela curta (padrão 7 dias, fechada em ontem) para permitir ajuste rápido.
+const AL_PADRAO = { quedaPct: 20, queda7Pct: 30, estDias: 10, tacosMax: 4, tacosMinCusto: 20, semVendaCusto: 20, altoCusto: 100, altoRoasMin: 4, adsDias: 7 };
+function alCfg() { try { return Object.assign({}, AL_PADRAO, JSON.parse(localStorage.getItem('al_regras_v1') || '{}')); } catch (e) { return { ...AL_PADRAO }; } }
+function alSalvarCfg() {
+  const c = alCfg(); Object.keys(AL_PADRAO).forEach(k => { const el = document.getElementById('al-' + k); if (el) { const v = parseFloat(el.value); if (isFinite(v) && v >= 0) c[k] = v; } });
+  try { localStorage.setItem('al_regras_v1', JSON.stringify(c)); } catch (e) {} showToast('Regras salvas.', 'ok'); alRender();
+}
+async function alAdsLer(dias) {
+  if (state.isDemo) throw new Error('modo demonstração');
+  if (!ADS.adv) {
+    const a = await adsReq('/advertising/advertisers?product_id=PADS', { ver: 1 });
+    if (!a.ok) throw new Error('Mercado Ads: ' + adsErroTexto(a));
+    const l = (a.json && a.json.advertisers) || []; ADS.adv = l.filter(x => x.site_id === 'MLB')[0] || l[0] || null;
+    if (!ADS.adv) throw new Error('sem anunciante de Product Ads');
+  }
+  const d = adsDatas(dias);
+  const ads = await adsPaginar('/advertising/' + (ADS.adv.site_id || 'MLB') + '/advertisers/' + ADS.adv.advertiser_id + '/product_ads/ads/search?date_from=' + d.de + '&date_to=' + d.ate + '&metrics=' + ADS_METRICAS, 'Ads ' + dias + 'd');
+  if (ads == null) throw new Error('não consegui ler os anúncios do Mercado Ads');
+  return { ads, d };
+}
+// Retorna { em, cfg, grupos: [{ id, titulo, tom, itens: [{ chave, nome, det }] }], erros: [] }
+async function alAvaliar() {
+  const c = alCfg(); const R = (EC.rows || []); const out = { em: new Date().toISOString(), cfg: c, grupos: [], erros: [] };
+  if (!R.length) { out.erros.push('Estoque & Compras não carregado'); return out; }
+  const pct = v => (v >= 0 ? '+' : '') + Math.round(v * 100) + '%';
+  const nomeR = r => r.nome || r.sku;
+  // 1) Anúncios curva A em queda
+  const queda = R.filter(r => r.curvaAn === 'A' && (r.vDir30 > 0 || r.vDirPrev30 > 0)).map(r => {
+    const t30 = r.tendDir, ritmo30 = r.vDir30 / 30, t7 = ritmo30 > 0 ? (r.vDir7 / 7 - ritmo30) / ritmo30 : 0;
+    return { r, t30, t7 };
+  }).filter(x => x.t30 <= -c.quedaPct / 100 || (x.r.vDir30 >= 8 && x.t7 <= -c.queda7Pct / 100)).sort((a, b) => Math.min(a.t30, a.t7) - Math.min(b.t30, b.t7));
+  out.grupos.push({ id: 'queda', titulo: `Anúncios curva A em queda (30d ≤ −${c.quedaPct}% ou 7d ≤ −${c.queda7Pct}% do ritmo)`, tom: 'aten',
+    itens: queda.map(x => ({ chave: x.r.sku, nome: nomeR(x.r), det: `30d ${x.r.vDir30} un (${pct(x.t30)} vs 30d anteriores) · 7d ${x.r.vDir7} un (${pct(x.t7)} vs ritmo)` })) });
+  // 2) Estoque curva A abaixo de N dias
+  const est = [];
+  R.filter(r => !r.isKit && r.curvaProd === 'A' && r.rate > 0.001 && r.cob < c.estDias).forEach(r => est.push({ chave: r.sku, nome: nomeR(r), det: `estoque total ${ecInt(r.total)} un = ${Math.floor(r.cob)}d de venda${r.transito ? ` · ${ecInt(r.transito)} em trânsito` : ''} · compra sugerida ${ecInt(r.sugCompra || 0)}` }));
+  R.filter(r => r.anuncioFull && r.curvaAn === 'A' && r.fullRate > 0.02 && r.cobFullPos < c.estDias).forEach(r => est.push({ chave: r.sku + '·full', nome: nomeR(r) + ' (Full)', det: `Full ${ecInt(r.fullDisp)}${r.fullProg ? ' + ' + ecInt(r.fullProg) + ' a caminho' : ''} = ${Math.floor(r.cobFullPos)}d · enviar ${ecInt(r.envioFull)}${r.fullFaltaMatriz ? ' · falta ' + ecInt(r.fullFaltaMatriz) + ' na Matriz' : ''}` }));
+  out.grupos.push({ id: 'estoque', titulo: `Estoque curva A abaixo de ${c.estDias} dias de venda`, tom: 'crit', itens: est });
+  // Ads (janela curta)
+  let A = null;
+  try { A = await alAdsLer(c.adsDias); } catch (e) { out.erros.push('Ads: ' + e.message); }
+  if (A) {
+    const margem = {}; R.forEach(r => { if (r.margemPct != null) (r.mlIds || []).forEach(id => { margem[id] = r.margemPct * 100; }); });
+    const p = { ...adsParams(), janela: c.adsDias };
+    const L = A.ads.map(x => adsAvaliar(x, p, [], margem)).filter(r => !/paus/i.test(r.status));
+    const custoTot = L.reduce((s, r) => s + r.custo, 0);
+    const receitaConta = R.reduce((s, r) => s + (r.rev7 || 0), 0) * (c.adsDias / 7);
+    const tacosConta = receitaConta > 0 ? custoTot / receitaConta * 100 : null;
+    const per = `${A.d.de.split('-').reverse().slice(0, 2).join('/')}–${A.d.ate.split('-').reverse().slice(0, 2).join('/')}`;
+    const money = v => 'R$ ' + Math.round(v).toLocaleString('pt-BR');
+    const tit = r => r.titulo || r.id;
+    // 3) TACOS
+    const tItens = [];
+    if (tacosConta != null && tacosConta > c.tacosMax) tItens.push({ chave: 'conta', nome: 'Conta inteira', det: `TACOS ${tacosConta.toFixed(1).replace('.', ',')}% (Ads ${money(custoTot)} ÷ faturamento ${money(receitaConta)}, ${per})` });
+    L.filter(r => r.tacos != null && r.tacos > c.tacosMax && r.custo >= c.tacosMinCusto).sort((a, b) => b.custo - a.custo).forEach(r => tItens.push({ chave: r.id, nome: tit(r), det: `TACOS ${r.tacos.toFixed(1).replace('.', ',')}% · Ads ${money(r.custo)} · faturamento ${money(r.receita + r.organico)}` }));
+    out.grupos.push({ id: 'tacos', titulo: `TACOS acima de ${c.tacosMax}% (${per})`, tom: 'aten', itens: tItens, resumo: tacosConta != null ? `TACOS da conta: ${tacosConta.toFixed(1).replace('.', ',')}%` : '' });
+    // 4) Investimento sem venda
+    out.grupos.push({ id: 'semvenda', titulo: `Anúncios com investimento e nenhuma venda (≥ ${money(c.semVendaCusto)}, ${per})`, tom: 'crit',
+      itens: L.filter(r => r.vendas === 0 && r.custo >= c.semVendaCusto).sort((a, b) => b.custo - a.custo).map(r => ({ chave: r.id, nome: tit(r), det: `${money(r.custo)} gastos · ${r.cliques} cliques · 0 vendas` })) });
+    // 5) Impactando a performance: ACOS acima da margem de contribuição (cada venda patrocinada dá prejuízo)
+    out.grupos.push({ id: 'impacto', titulo: `Anúncios impactando a performance (ACOS acima da margem, ${per})`, tom: 'aten',
+      itens: L.filter(r => r.vendas > 0 && r.acos != null && r.margem != null && r.acos > r.margem && r.custo >= 10).sort((a, b) => (b.acos - b.margem) - (a.acos - a.margem)).map(r => ({ chave: r.id, nome: tit(r), det: `ACOS ${r.acos.toFixed(1).replace('.', ',')}% > margem ${r.margem.toFixed(1).replace('.', ',')}% · Ads ${money(r.custo)} · ${r.vendas} vendas` })) });
+    // 6) Investimento alto sem retorno
+    out.grupos.push({ id: 'alto', titulo: `Investimento alto sem retorno (≥ ${money(c.altoCusto)} e ROAS < ${c.altoRoasMin}, ${per})`, tom: 'crit',
+      itens: L.filter(r => r.custo >= c.altoCusto && (r.receita / r.custo) < c.altoRoasMin).sort((a, b) => b.custo - a.custo).map(r => ({ chave: r.id, nome: tit(r), det: `Ads ${money(r.custo)} → vendas ${money(r.receita)} (ROAS ${(r.receita / r.custo).toFixed(1).replace('.', ',')}) · ${r.vendas} vendas` })) });
+  }
+  EC.alUltima = out; try { localStorage.setItem('al_ultima_v1', JSON.stringify(out)); } catch (e) {}
+  return out;
+}
+// Texto curto para a notificação (usado pela tarefa agendada)
+function alTexto(o, max) {
+  max = max || 5; const g = o.grupos.filter(x => x.itens.length);
+  if (!g.length) return 'Alertas: nenhuma regra disparou' + (o.erros.length ? ' (' + o.erros.join('; ') + ')' : '') + '.';
+  return g.map(x => `• ${x.titulo}: ${x.itens.length}${x.resumo ? ' — ' + x.resumo : ''}\n` + x.itens.slice(0, max).map(i => `   – ${i.nome}: ${i.det}`).join('\n') + (x.itens.length > max ? `\n   … +${x.itens.length - max}` : '')).join('\n') + (o.erros.length ? '\n(' + o.erros.join('; ') + ')' : '');
+}
+function alRender() {
+  const el = document.getElementById('al-regras'); if (!el) return;
+  const c = alCfg(); const o = EC.alUltima || (() => { try { return JSON.parse(localStorage.getItem('al_ultima_v1') || 'null'); } catch (e) { return null; } })();
+  const inp = (k, label, suf) => `<label class="ec-f"><span>${label}</span><span><input type="number" id="al-${k}" value="${c[k]}" min="0" step="any"> ${suf}</span></label>`;
+  el.innerHTML = `<div class="card"><div class="card-head"><span class="card-title">Regras de alerta — notificação diária</span>
+    <span style="display:flex;gap:6px"><button class="btn-sm" onclick="alToggleCfg()">⚙ Limites</button><button class="btn-sm btn-primary" onclick="alRodar()">Avaliar agora</button></span></div>
+    <div class="card-body">
+      <div class="ec-muted" style="font-size:12px;margin-bottom:8px">A tarefa agendada das 8h40 avalia estas regras e manda notificação no celular quando alguma dispara. Ads em janela de ${c.adsDias} dias fechada em ontem. ${o ? 'Última avaliação: ' + new Date(o.em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'Ainda não avaliado.'}</div>
+      <div id="al-cfg" style="display:none;margin-bottom:12px;max-width:520px">
+        ${inp('quedaPct', 'Curva A em queda: 30d vs 30d anteriores ≤', '−%')}${inp('queda7Pct', 'Curva A em queda: 7d vs ritmo dos 30d ≤', '−%')}
+        ${inp('estDias', 'Estoque curva A abaixo de', 'dias')}${inp('tacosMax', 'TACOS acima de', '%')}${inp('tacosMinCusto', 'TACOS: só anúncios com Ads ≥', 'R$')}
+        ${inp('semVendaCusto', 'Investimento sem venda: Ads ≥', 'R$')}${inp('altoCusto', 'Investimento alto: Ads ≥', 'R$')}${inp('altoRoasMin', 'Investimento alto: ROAS abaixo de', '×')}${inp('adsDias', 'Janela do Ads', 'dias')}
+        <button class="btn-sm btn-primary" onclick="alSalvarCfg()">Salvar limites</button></div>
+      ${o ? o.grupos.map(g => `<div style="margin:10px 0"><div style="font-weight:600;font-size:13px">${ecPill(String(g.itens.length), g.itens.length ? g.tom : 'ok')} ${ecEsc(g.titulo)}${g.resumo ? ` <span class="ec-muted">· ${ecEsc(g.resumo)}</span>` : ''}</div>
+        ${g.itens.length ? `<div style="font-size:12px;margin:4px 0 0 8px">${g.itens.slice(0, 15).map(i => `<div>• <b>${ecEsc(i.nome)}</b> — <span class="ec-muted">${ecEsc(i.det)}</span></div>`).join('')}${g.itens.length > 15 ? `<div class="ec-muted">… +${g.itens.length - 15}</div>` : ''}</div>` : ''}</div>`).join('') + (o.erros.length ? `<div class="c-orange" style="font-size:12px">${ecEsc(o.erros.join(' · '))}</div>` : '') : ''}
+    </div></div>`;
+}
+function alToggleCfg() { const e = document.getElementById('al-cfg'); if (e) e.style.display = e.style.display === 'none' ? '' : 'none'; }
+async function alRodar() {
+  if (!EC.rows || !EC.rows.length) { showToast('Carregando Estoque & Compras…', 'info'); await ecLoad(); }
+  const el = document.getElementById('al-regras'); if (el) el.querySelector('.card-body').insertAdjacentHTML('afterbegin', '<div class="ec-muted" id="al-wait">Avaliando…</div>');
+  await alAvaliar(); alRender();
 }
 
 function ecSetTab(t) {
