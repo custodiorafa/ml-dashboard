@@ -3008,7 +3008,7 @@ function ecCompute() {
     rows.push({
       sku, id: p.id, nome: p.nome, ativo, isKit, kitFisico, formato: p.formato, blingVirt, matriz, full, total, transito, lt, ltFonte, moq, mult, moqFonte, multFonte, buyLido: !!bf,
       custo, preco, tarifaUn, freteUn, freteFonte, impPct, impUn, impFonte: taxMap[sku] != null ? 'Bling' : 'padrão', margemUn, margemPct, custoFonte: p.custo > 0 ? 'Bling' : (custo > 0 ? 'última compra' : '—'),
-      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, rev180, revCurva: cv.v, revCurvaAn: cv.v, revCurvaProd: cvP.v, revKit90: s && !isKit ? ecSum(s.rk, 0, 90) : 0, revCurvaBruta: cv.bruto, ruptCurva: cv.rupt, vDir30: s ? ecSum(s.q, 0, 30) : 0, vDir7: s ? ecSum(s.q, 0, 7) : 0, rev7: s ? ecSum(s.r, 0, 7) : 0, vDirPrev30: s ? ecSum(s.q, 30, 60) : 0, vDir90: s ? ecSum(s.q, 0, 90) : 0, fq30: s ? ecSum(s.fq, 0, 30) : 0, mlTemProprio: !!(m && m.ownIds && m.ownIds.length), canc90, full90, tendPct, tend90Pct, tend, vol,
+      v7, v15, v30, v60, v90, prev30, prev90, rev30, rev90, rev180, revCurva: cv.v, revCurvaAn: cv.v, revCurvaProd: cvP.v, revKit90: s && !isKit ? ecSum(s.rk, 0, 90) : 0, revCurvaBruta: cv.bruto, ruptCurva: cv.rupt, vDir30: s ? ecSum(s.q, 0, 30) : 0, vDir7: s ? ecSum(s.q, 0, 7) : 0, rev7: s ? ecSum(s.r, 1, 8) : 0, vDirPrev30: s ? ecSum(s.q, 30, 60) : 0, vDir90: s ? ecSum(s.q, 0, 90) : 0, fq30: s ? ecSum(s.fq, 0, 30) : 0, mlTemProprio: !!(m && m.ownIds && m.ownIds.length), canc90, full90, tendPct, tend90Pct, tend, vol,
       rate, prev, sd, ultimaVenda, diasSemVenda, vKit30, vKit90, comp: p.comp || null,
       deps: p.deps || {}, mlIds: m ? m.ids : [], temFull: !!(m && m.fullIds) || full > 0, anuncioFull: !!(m && m.fullIds), mlAtivos: m ? m.active : 0,
       compra: cp,
@@ -4076,7 +4076,14 @@ async function alAvaliar() {
   const queda = R.filter(r => r.curvaAn === 'A' && (r.vDir30 > 0 || r.vDirPrev30 > 0)).map(r => {
     const t30 = r.tendDir, ritmo30 = r.vDir30 / 30, t7 = ritmo30 > 0 ? (r.vDir7 / 7 - ritmo30) / ritmo30 : 0;
     return { r, t30, t7 };
-  }).filter(x => x.t30 <= -c.quedaPct / 100 || (x.r.vDir30 >= 8 && x.t7 <= -c.queda7Pct / 100)).sort((a, b) => Math.min(a.t30, a.t7) - Math.min(b.t30, b.t7));
+  }).filter(x => {
+    // volume mínimo para não alertar ruído; sem estoque não é queda de demanda (vai para a regra de estoque)
+    const semEstoque = x.r.total <= 0 || (x.r.anuncioFull && x.r.fullDisp <= 0 && x.r.matriz <= 0);
+    if (semEstoque) return false;
+    const q30 = x.r.vDirPrev30 >= 8 && x.t30 <= -c.quedaPct / 100;
+    const q7 = (x.r.vDir30 / 30) * 7 >= 5 && x.t7 <= -c.queda7Pct / 100;
+    return q30 || q7;
+  }).sort((a, b) => Math.min(a.t30, a.t7) - Math.min(b.t30, b.t7));
   out.grupos.push({ id: 'queda', titulo: `Anúncios curva A em queda (30d ≤ −${c.quedaPct}% ou 7d ≤ −${c.queda7Pct}% do ritmo)`, tom: 'aten',
     itens: queda.map(x => ({ chave: x.r.sku, nome: nomeR(x.r), det: `30d ${x.r.vDir30} un (${pct(x.t30)} vs 30d anteriores) · 7d ${x.r.vDir7} un (${pct(x.t7)} vs ritmo)` })) });
   // 2) Estoque curva A abaixo de N dias
