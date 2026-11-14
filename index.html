@@ -1174,7 +1174,7 @@ table.t tr:hover td { background:rgba(52,131,250,0.04); }
       <div class="page-header">
         <div>
           <div class="page-title">Inteligência de <span>Mercado</span></div>
-          <div class="page-meta">Ranking oficial, concorrência e marcas — coleta diária com fonte e data</div>
+          <div class="page-meta">Disputa de mercado (faturamento e share via Shopping de Preços), ranking oficial, concorrência e marcas</div>
         </div>
       </div>
       <div id="mi-corpo"></div>
@@ -11405,7 +11405,7 @@ async function fornExportarCompra() {
    mais vendidos. A tela diz "posição", não "vendas".
    ═══════════════════════════════════════════════════════════════════════ */
 
-var MI = { estado: null, view: 'visao', cat: '', dados: null, loading: false, erro: null, pesos: null };
+var MI = { estado: null, view: 'disputa', cat: '', dados: null, loading: false, erro: null, pesos: null };
 
 /* ─── contexto do radar: o que só existe no navegador ────────────────────
    Marcas e domínios que a Titanium já vende, o vínculo entre produto de
@@ -11496,7 +11496,7 @@ async function miApi(rota) {
   return j;
 }
 
-async function miOpen() { if (!MI.estado) miCarregar(); else miRender(); }
+async function miOpen() { if (MI.view === 'disputa') { if (!MK.latest) mkCarregar(); else miRender(); return; } if (!MI.estado) miCarregar(); else miRender(); }
 
 async function miCarregar() {
   MI.loading = true; MI.erro = null; miRender();
@@ -11509,6 +11509,7 @@ async function miCarregar() {
 }
 
 async function miVer(v) {
+  if (v === 'disputa') { MI.view = v; MI.erro = null; MI.loading = false; if (!MK.latest) mkCarregar(); else miRender(); return; }
   MI.view = v; MI.dados = null; MI.erro = null; MI.loading = true; miRender();
   try {
     if (v === 'produtos' || v === 'radar') MI.dados = await miApi('/mi/produtos' + (MI.cat ? '?cat=' + MI.cat : ''));
@@ -11821,20 +11822,252 @@ function miExportarRadar() {
 }
 
 /* ─── render ─────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════
+   DISPUTA DE MERCADO — Shopping de Preços → Worker market-intel
+
+   O que o ranking oficial não dá (faturamento e unidades por concorrente),
+   o Shopping de Preços dá: ele recebe do ML o arquivo diário de vendas.
+   A coleta roda no Chrome do Rafael (tarefa agendada de segunda) e grava
+   no Worker market-intel. Esta tela só lê: GET /latest e /snapshots.
+
+   Cada busca-chave (ex.: "cuica 30x30") é um mercado. Para cada mercado:
+   faturamento 90 dias, share da Titanium, líder, top concorrentes, quem
+   vende UNIFORT além da Titanium, e os anúncios próprios vinculados
+   (casados pelo título com as mesmas regras da coleta) com estoque.
+   Valores do Shopping de Preços vêm arredondados pela regra do ML.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var MK_URL = 'https://market-intel.rafael-custodio.workers.dev';
+var MK = { latest: null, hist: {}, keywords: [], loading: false, erro: null, aberto: null, ordem: 'alerta' };
+
+function mkChave() { try { return localStorage.getItem('mk_key') || ''; } catch (e) { return ''; } }
+function mkSalvarChave() {
+  var v = (document.getElementById('mk-key-in') || {}).value || '';
+  v = v.trim();
+  if (v.length < 16) { alert('A chave tem que ter pelo menos 16 caracteres.'); return; }
+  try { localStorage.setItem('mk_key', v); } catch (e) {}
+  MK.erro = null; mkCarregar();
+}
+function mkTrocarChave() { try { localStorage.removeItem('mk_key'); } catch (e) {} MK.latest = null; miRender(); }
+
+async function mkApi(rota) {
+  var r = await fetchWithTimeout(MK_URL + rota, { headers: { Authorization: 'Bearer ' + mkChave() } }, 30000);
+  var j = await r.json().catch(function () { return null; });
+  if (r.status === 401) throw new Error('chave recusada pelo Worker market-intel');
+  if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+  return j;
+}
+
+async function mkCarregar() {
+  if (!mkChave()) { miRender(); return; }
+  MK.loading = true; MK.erro = null; miRender();
+  try {
+    var res = await Promise.all([mkApi('/latest'), mkApi('/keywords')]);
+    MK.latest = res[0] || [];
+    MK.keywords = res[1] || [];
+    var hs = await Promise.all(MK.latest.map(function (s) {
+      return mkApi('/snapshots?keyword_id=' + encodeURIComponent(s.keyword_id) + '&limit=8')
+        .then(function (h) { return [s.keyword_id, h]; })
+        .catch(function () { return [s.keyword_id, [s]]; });
+    }));
+    MK.hist = {};
+    hs.forEach(function (p) { MK.hist[p[0]] = p[1]; });
+  } catch (e) { MK.erro = e.message; }
+  MK.loading = false; miRender();
+}
+
+/* anúncios próprios ligados à busca: mesmas regras de título da coleta */
+function mkNorm(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
+function mkMeusAnuncios(kwId) {
+  var kw = (MK.keywords || []).filter(function (k) { return k.id === kwId; })[0];
+  if (!kw || !kw.must) return [];
+  var re = kw.must.map(function (m) { return new RegExp(m); });
+  var itens = (typeof state !== 'undefined' && state.items) || [];
+  return itens.filter(function (i) {
+    var t = mkNorm(i.title);
+    return re.every(function (r) { return r.test(t); });
+  });
+}
+
+function mkPct(v) { return v == null || !isFinite(v) ? '—' : (v * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%'; }
+
+/* alertas por mercado — mesmas regras do resumo de segunda-feira,
+   mais o que só o painel sabe: estoque dos anúncios vinculados */
+function mkAlertas(s) {
+  var out = [];
+  var h = MK.hist[s.keyword_id] || [s];
+  var b = h[1], old = h[Math.min(4, h.length - 1)];
+  var meus = mkMeusAnuncios(s.keyword_id);
+  var ativos = meus.filter(function (i) { return i.status === 'active'; });
+  var semEstoque = meus.filter(function (i) { return i.status === 'active' && (i.available_quantity || 0) <= 0; });
+  var pausados = meus.filter(function (i) { return i.status === 'paused'; });
+
+  if (s.total > 20000 && s.titanium.fat === 0) out.push({ g: 3, t: 'Mercado de ' + ecMoneyK(s.total) + ' em 90 dias e a Titanium sem venda.' + (meus.length ? '' : ' Nenhum anúncio próprio encontrado para esta busca.') });
+  if (semEstoque.length) out.push({ g: 3, t: semEstoque.length + ' anúncio(s) próprio(s) ativo(s) sem estoque disponível.' });
+  if (pausados.length && !ativos.length) out.push({ g: 3, t: 'Todos os anúncios próprios desta busca estão pausados.' });
+  if (b) {
+    if (b.titanium.share > 0.01 && s.titanium.share < b.titanium.share * 0.7)
+      out.push({ g: 3, t: 'Share caiu de ' + mkPct(b.titanium.share) + ' para ' + mkPct(s.titanium.share) + ' desde a coleta anterior.' });
+    var prev = {}; (b.vendedores || []).forEach(function (v) { prev[v.vendedor] = 1; });
+    (s.vendedores || []).slice(0, 5).forEach(function (v) {
+      if (!prev[v.vendedor] && v.fat > 10000) out.push({ g: 2, t: 'Novo no top 5: ' + v.vendedor + ' (' + v.cidade + ') com ' + ecMoneyK(v.fat) + '.' });
+    });
+  }
+  (s.unifort_terceiros || []).forEach(function (u) {
+    if (u.fat > 5000) out.push({ g: 2, t: u.vendedor + ' (' + u.cidade + ') vende UNIFORT: ' + ecMoneyK(u.fat) + ' em 90 dias.' });
+  });
+  var lider = (s.vendedores || [])[0];
+  if (lider && !/^titanium/i.test(lider.vendedor) && s.total > 50000 && s.titanium.share < 0.05)
+    out.push({ g: 1, t: 'Mercado grande com share baixo: líder ' + lider.vendedor + ' tem ' + mkPct(lider.share) + ', a Titanium ' + mkPct(s.titanium.share) + '.' });
+  if (old && old !== s && old.total > 0 && s.total > old.total * 1.2 && s.titanium.fat <= old.titanium.fat)
+    out.push({ g: 1, t: 'Mercado cresceu ' + mkPct(s.total / old.total - 1) + ' e a Titanium não acompanhou.' });
+  out.sort(function (x, y) { return y.g - x.g; });
+  return out;
+}
+
+function mkPosicao(s) {
+  var i = (s.vendedores || []).findIndex(function (v) { return /^titanium/i.test(v.vendedor); });
+  return i < 0 ? null : i + 1;
+}
+function mkTendencia(s) {
+  var h = MK.hist[s.keyword_id] || [];
+  if (h.length < 2) return '<span class="ec-sub">1ª coleta</span>';
+  var d = s.titanium.share - h[1].titanium.share;
+  if (Math.abs(d) < 0.005) return '<span class="ec-sub">=</span>';
+  return d > 0 ? '<span style="color:var(--green)">▲ ' + mkPct(d) + '</span>' : '<span style="color:var(--red)">▼ ' + mkPct(-d) + '</span>';
+}
+
+function mkAbrir(id) { MK.aberto = MK.aberto === id ? null : id; miRender(); }
+function mkOrdenar(o) { MK.ordem = o; miRender(); }
+
+function mkDetalhe(s) {
+  var meus = mkMeusAnuncios(s.keyword_id);
+  var vend = (s.vendedores || []).slice(0, 10).map(function (v, i) {
+    var tit = /^titanium/i.test(v.vendedor);
+    return '<tr' + (tit ? ' style="background:rgba(0,166,80,.08)"' : '') + '><td class="r mono">' + (i + 1) + '</td><td>' + (tit ? '<b>' : '') + ecEsc(v.vendedor) + (tit ? '</b>' : '') +
+      ' <span class="ec-sub">' + ecEsc(v.cidade || '') + '</span></td><td class="ec-sub">' + ecEsc((v.marcas || []).join(', ')) + '</td>' +
+      '<td class="r mono">' + ecMoneyK(v.fat) + '</td><td class="r mono">' + ecInt(v.un) + '</td><td class="r mono">' + mkPct(v.share) + '</td></tr>';
+  }).join('');
+  var marcas = (s.marcas || []).slice(0, 8).map(function (m) {
+    return '<span class="cat-pill">' + ecEsc(m.marca) + ' · ' + mkPct(m.share) + '</span>';
+  }).join(' ');
+  var top = (s.top_anuncios || []).slice(0, 8).map(function (a) {
+    return '<tr><td>' + ecEsc(a.titulo) + '</td><td class="ec-sub">' + ecEsc(a.vendedor) + '</td><td class="ec-sub">' + ecEsc(a.marca) + '</td>' +
+      '<td class="ec-sub">' + ecEsc(a.envio) + '</td><td class="r mono">' + ecInt(a.un) + '</td><td class="r mono">' + ecMoneyK(a.fat) +
+      '</td><td class="r mono">' + (a.un ? ecMoney2(a.fat / a.un) : '—') + '</td></tr>';
+  }).join('');
+  var mine = meus.length ? meus.map(function (i) {
+    var vendido = (s.titanium.anuncios || []).filter(function (a) { return mkNorm(a.titulo).slice(0, 30) === mkNorm(i.title).slice(0, 30); })[0];
+    return '<tr><td><a href="' + ecEsc(i.permalink || '#') + '" target="_blank">' + ecEsc(i.id) + '</a> ' + ecEsc(i.title) + '</td>' +
+      '<td>' + (i.status === 'active' ? '<span style="color:var(--green)">ativo</span>' : '<span style="color:var(--orange)">' + ecEsc(i.status) + '</span>') + '</td>' +
+      '<td class="r mono">' + ecMoney2(i.price) + '</td>' +
+      '<td class="r mono"' + ((i.available_quantity || 0) <= 0 ? ' style="color:var(--red)"' : '') + '>' + ecInt(i.available_quantity) + '</td>' +
+      '<td class="r mono">' + (vendido ? ecMoneyK(vendido.fat) : '<span class="ec-sub">—</span>') + '</td></tr>';
+  }).join('') : '<tr><td colspan="5" class="ec-sub">Nenhum anúncio próprio com título que case com esta busca (ou anúncios ainda não carregados no painel).</td></tr>';
+
+  return '<tr><td colspan="9" style="padding:0"><div style="padding:14px 18px;background:var(--surface2)">' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
+    '<div><div class="card-title" style="margin-bottom:6px">Ranking de vendedores (90 dias)</div>' +
+    '<table class="t ec-table"><thead><tr><th class="r">#</th><th>Vendedor</th><th>Marcas</th><th class="r">Faturamento</th><th class="r">Unid.</th><th class="r">Share</th></tr></thead><tbody>' + vend + '</tbody></table></div>' +
+    '<div><div class="card-title" style="margin-bottom:6px">Seus anúncios nesta disputa</div>' +
+    '<table class="t ec-table"><thead><tr><th>Anúncio</th><th>Status</th><th class="r">Preço</th><th class="r">Estoque</th><th class="r">Vendeu 90d</th></tr></thead><tbody>' + mine + '</tbody></table>' +
+    '<div class="card-title" style="margin:12px 0 6px">Marcas</div><div style="display:flex;flex-wrap:wrap;gap:6px">' + marcas + '</div></div>' +
+    '</div>' +
+    '<div class="card-title" style="margin:14px 0 6px">Anúncios que mais faturam</div>' +
+    '<table class="t ec-table"><thead><tr><th>Anúncio</th><th>Vendedor</th><th>Marca</th><th>Envio</th><th class="r">Unid.</th><th class="r">Faturamento</th><th class="r">Ticket</th></tr></thead><tbody>' + top + '</tbody></table>' +
+    '</div></td></tr>';
+}
+
+function mkTela() {
+  if (typeof window !== 'undefined' && window.EQUIPE_MODO)
+    return '<div class="card ec-sec"><div class="card-body">A disputa de mercado está disponível só no acesso master.</div></div>';
+  if (!mkChave())
+    return '<div class="card ec-sec"><div class="card-head"><span class="card-title">Conectar a coleta do Shopping de Preços</span></div>' +
+      '<div class="card-body" style="font-size:13px;line-height:1.7">Cole a mesma chave salva como <b>MI_KEY</b> no Worker <b>market-intel</b> (Cloudflare). Ela fica só neste navegador.' +
+      '<div style="display:flex;gap:8px;margin-top:10px;max-width:520px"><input id="mk-key-in" type="password" style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface2);color:var(--text)" placeholder="MI_KEY">' +
+      '<button class="btn-sm btn-primary" onclick="mkSalvarChave()">Conectar</button></div></div></div>';
+  if (MK.loading) return '<div class="card ec-sec"><div class="card-body">Lendo a coleta do Shopping de Preços…</div></div>';
+  if (MK.erro) return '<div class="card ec-sec" style="border-left:3px solid var(--red)"><div class="card-body">Não consegui ler a coleta: <b>' + ecEsc(MK.erro) +
+    '</b>. <button class="btn-sm" onclick="mkCarregar()">Tentar de novo</button> <button class="btn-sm" onclick="mkTrocarChave()">Trocar chave</button></div></div>';
+  if (!MK.latest) { mkCarregar(); return '<div class="card ec-sec"><div class="card-body">Lendo a coleta do Shopping de Preços…</div></div>'; }
+
+  var L = MK.latest.filter(function (s) { return s.total > 0; });
+  var vazios = MK.latest.length - L.length;
+  if (!L.length) return '<div class="card ec-sec"><div class="card-body">Ainda não há coleta com dados. A tarefa de segunda-feira grava aqui automaticamente.</div></div>';
+
+  var totMerc = L.reduce(function (a, s) { return a + s.total; }, 0);
+  var totTit = L.reduce(function (a, s) { return a + s.titanium.fat; }, 0);
+  var lidera = L.filter(function (s) { return mkPosicao(s) === 1; }).length;
+  var periodo = L[0].ini.split('-').reverse().join('/') + ' a ' + L[0].fim.split('-').reverse().join('/');
+  var coleta = L.map(function (s) { return s.coletado_em; }).sort().pop();
+
+  var linhas = L.map(function (s) { return { s: s, al: mkAlertas(s) }; });
+  if (MK.ordem === 'alerta') linhas.sort(function (a, b) {
+    var ga = a.al.length ? a.al[0].g : 0, gb = b.al.length ? b.al[0].g : 0;
+    return gb - ga || b.s.total - a.s.total;
+  });
+  else if (MK.ordem === 'mercado') linhas.sort(function (a, b) { return b.s.total - a.s.total; });
+  else linhas.sort(function (a, b) { return a.s.titanium.share - b.s.titanium.share; });
+
+  var nAl = linhas.filter(function (x) { return x.al.some(function (a) { return a.g >= 3; }); }).length;
+
+  var card = function (t, v, sub) { return '<div class="kpi"><div class="kpi-label">' + t + '</div><div class="kpi-value">' + v + '</div>' + (sub ? '<div class="kpi-delta">' + sub + '</div>' : '') + '</div>'; };
+  var kpis = '<div class="kpi-row">' +
+    card('Mercados monitorados', ecInt(L.length), 'buscas-chave da curva A e freio') +
+    card('Tamanho somado (90d)', ecMoneyK(totMerc), periodo) +
+    card('Titanium nesses mercados', ecMoneyK(totTit), 'share ' + mkPct(totMerc ? totTit / totMerc : 0)) +
+    card('Mercados que você lidera', ecInt(lidera) + ' de ' + ecInt(L.length), '1º no faturamento') +
+    card('Alertas críticos', ecInt(nAl), nAl ? 'abra as linhas em vermelho' : 'nenhum') + '</div>';
+
+  var corpo = linhas.map(function (x) {
+    var s = x.s, al = x.al, pos = mkPosicao(s), lider = (s.vendedores || [])[0] || {};
+    var cor = al.length ? (al[0].g >= 3 ? 'var(--red)' : al[0].g === 2 ? 'var(--orange)' : 'var(--ml-yellow)') : 'var(--green)';
+    var top3 = (s.vendedores || []).filter(function (v) { return !/^titanium/i.test(v.vendedor); }).slice(0, 3)
+      .map(function (v) { return ecEsc(v.vendedor) + ' <span class="ec-sub">' + mkPct(v.share) + '</span>'; }).join('<br>');
+    var row = '<tr style="cursor:pointer;border-left:3px solid ' + cor + '" onclick="mkAbrir(\'' + s.keyword_id + '\')">' +
+      '<td><b>' + ecEsc(s.termo) + '</b><br><span class="ec-sub">' + ecEsc(s.grupo || '') + ' · ' + ecInt(s.n_vendedores) + ' vendedores</span></td>' +
+      '<td class="r mono">' + ecMoneyK(s.total) + '<br><span class="ec-sub">ticket ' + ecMoney2(s.ticket_medio) + '</span></td>' +
+      '<td class="r mono">' + ecMoneyK(s.titanium.fat) + '<br><span class="ec-sub">' + ecInt(s.titanium.un) + ' un.</span></td>' +
+      '<td class="r mono"><b>' + mkPct(s.titanium.share) + '</b></td>' +
+      '<td class="r mono">' + (pos ? pos + 'º' : '<span class="ec-sub">fora do top 15</span>') + '</td>' +
+      '<td class="r">' + mkTendencia(s) + '</td>' +
+      '<td>' + (/^titanium/i.test(lider.vendedor || '') ? '<span style="color:var(--green)">Titanium</span>' : ecEsc(lider.vendedor || '—') + ' <span class="ec-sub">' + mkPct(lider.share) + '</span>') + '</td>' +
+      '<td style="font-size:12px">' + top3 + '</td>' +
+      '<td style="font-size:12px">' + (al.length ? al.slice(0, 2).map(function (a) { return '<div style="color:' + (a.g >= 3 ? 'var(--red)' : a.g === 2 ? 'var(--orange)' : 'var(--text2)') + '">• ' + ecEsc(a.t) + '</div>'; }).join('') + (al.length > 2 ? '<div class="ec-sub">+' + (al.length - 2) + '</div>' : '') : '<span class="ec-sub">sem alerta</span>') + '</td>' +
+      '</tr>';
+    return row + (MK.aberto === s.keyword_id ? mkDetalhe(s) : '');
+  }).join('');
+
+  var ordens = [['alerta', 'Prioridade'], ['mercado', 'Tamanho do mercado'], ['share', 'Menor share']];
+  return kpis +
+    '<div class="card ec-sec"><div class="card-head"><span class="card-title">Disputa por mercado — faturamento 90 dias por busca-chave</span>' +
+    '<div style="display:flex;gap:6px;align-items:center">' + ordens.map(function (o) {
+      return '<button class="ec-chip ' + (MK.ordem === o[0] ? 'active' : '') + '" onclick="mkOrdenar(\'' + o[0] + '\')">' + o[1] + '</button>';
+    }).join('') + '<button class="btn-sm" onclick="mkCarregar()">↻</button></div></div>' +
+    '<div class="ec-muted" style="padding:0 18px 10px;font-size:12px">Fonte: Shopping de Preços (dados oficiais de vendas do ML, valores arredondados). ' +
+    'Período ' + periodo + ' · coletado em ' + (coleta ? new Date(coleta).toLocaleString('pt-BR') : '—') + '. Clique numa linha para ver vendedores, seus anúncios vinculados e os anúncios que mais faturam.' +
+    (vazios ? ' <span style="color:var(--orange)">' + vazios + ' busca(s) sem dados na última coleta — aguardando nova rodada.</span>' : '') + '</div>' +
+    '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr>' +
+    '<th>Mercado (busca)</th><th class="r">Mercado 90d</th><th class="r">Titanium</th><th class="r">Share</th><th class="r">Posição</th>' +
+    '<th class="r">vs coleta anterior</th><th>Líder</th><th>Principais concorrentes</th><th>Alertas</th>' +
+    '</tr></thead><tbody>' + corpo + '</tbody></table></div></div>';
+}
+
 function miRender() {
   var el = document.getElementById('mi-corpo');
   if (!el) return;
-  var abas = [['visao', 'Visão estratégica'], ['radar', 'Radar de oportunidades'],
+  var abas = [['disputa', 'Disputa de mercado'], ['visao', 'Visão estratégica'], ['radar', 'Radar de oportunidades'],
               ['produtos', 'Ranking de produtos'], ['marcas', 'Ranking de marcas']];
   var nav = '<div class="card ec-sec"><div class="ec-toolbar"><div class="ec-chips">' +
     abas.map(function (a) {
       return '<button class="ec-chip ' + (MI.view === a[0] ? 'active' : '') +
         '" onclick="miVer(\'' + a[0] + '\')">' + a[1] + '</button>';
     }).join('') +
-    '</div><button class="btn-sm" onclick="miCarregar()">↻ Atualizar</button></div></div>';
+    '</div><button class="btn-sm" onclick="' + (MI.view === 'disputa' ? 'mkCarregar()' : 'miCarregar()') + '">↻ Atualizar</button></div></div>';
 
   var corpo = '';
-  if (MI.loading) corpo = '<div class="card ec-sec"><div class="card-body">Consultando o Worker…</div></div>';
+  if (MI.view === 'disputa') corpo = mkTela();
+  else if (MI.loading) corpo = '<div class="card ec-sec"><div class="card-body">Consultando o Worker…</div></div>';
   else if (MI.erro) corpo = '<div class="card ec-sec" style="border-left:3px solid var(--red)">' +
       '<div class="card-body">Não consegui ler os dados: <b>' + ecEsc(MI.erro) + '</b>.<br>' +
       '<span class="ec-sub">A coleta no Worker continua rodando — isto é só a leitura.</span></div></div>';
