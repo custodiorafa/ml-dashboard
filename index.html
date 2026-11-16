@@ -2772,6 +2772,7 @@ async function ecLoad(force = false) {
     await ecEnviosLoad();
     ecProgress('Lendo anúncios Full pausados e visitas…', null);
     try { await fiPausadosLoad(force); } catch (e) { console.warn('Full pausados', e); }
+    try { await fiInvCompletar(); } catch (e) { console.warn('estoque CD dos pausados', e); }
     try { await fiVisitsLoad(force); } catch (e) { console.warn('visitas', e); }
     ecCompute();
     EC.loadedAt = Date.now();
@@ -4207,8 +4208,17 @@ function fiCompute(rows) {
 
   // ── passo 1: demanda, tendência, visitas, conversão
   let convV = 0, convQ = 0;
+  const invCD = EC.fullInv || {};
   rows.forEach(r => {
     const q = r._q, qk = r._qk; const fi = r.fi = { motivosConf: [], elev: [], elevC: [] };
+    // Estoque Full = saldo no CD do ML (/inventories/{id}/stock/fulfillment), uma vez por código de inventário.
+    // Não usar available_quantity do anúncio: em anúncio híbrido ele traz o depósito próprio, e anúncios sincronizados repetem o mesmo saldo.
+    if (r.anuncioFull) {
+      const invs = [...new Set(r.mlInvs || [])], got = invs.filter(i => invCD[i]);
+      fi.fullAnuncio = r.fullML;
+      if (invs.length && got.length === invs.length) { r.fullDisp = got.reduce((a, i) => a + (invCD[i].available_quantity || 0), 0); r.mlFullIndisp = got.reduce((a, i) => a + (invCD[i].not_available_quantity || 0), 0); fi.fullFonte = 'CD'; }
+      else { r.fullDisp = 0; fi.fullFonte = 'indisponível'; }
+    }
     const w = q ? ecWinsorize(q.slice(1), 30) : [];
     const raw = (a, b) => q ? ecSum(q, a, b) : 0;
     fi.v7 = raw(1, 8); fi.v15 = raw(1, 16); fi.v30 = raw(1, 31); fi.v60 = raw(1, 61);
@@ -4246,6 +4256,7 @@ function fiCompute(rows) {
     if (fi.reprimida) bx('ruptura recente: histórico pode estar subestimado');
     if (fi.picos) bx('picos isolados de venda foram limitados');
     if (envAtras[r.sku]) bx('envio ao Full atrasado');
+    if (fi.fullFonte === 'indisponível') bx('estoque no CD Full não foi lido (considerado 0)');
     fi.conf = nv >= 2 ? 'ALTA' : nv === 1 ? 'MÉDIA' : 'BAIXA';
     // divisão por canal: Full × demais vendas atendidas pela Matriz (anúncio próprio + consumo via kits)
     const share = r.anuncioFull ? r.fullShare || 0 : 0;
@@ -4459,6 +4470,17 @@ async function fiPausadosLoad(force) {
   EC.fiPausados = out; EC.fiPausadosAt = Date.now();
 }
 
+// estoque no CD dos anúncios Full pausados (não entram na leitura padrão, que só olha os ativos)
+async function fiInvCompletar() {
+  const inv = EC.fullInv || (EC.fullInv = {}); const ids = new Set();
+  (EC.fiPausados || []).forEach(it => { if (it.inventory_id) ids.add(it.inventory_id); (it.variations || []).forEach(v => { if (v.inventory_id) ids.add(v.inventory_id); }); });
+  const falta = [...ids].filter(id => !inv[id]);
+  for (let i = 0; i < falta.length; i += 6) {
+    const b = falta.slice(i, i + 6); const res = await Promise.all(b.map(id => mlGet(`/inventories/${id}/stock/fulfillment`).catch(() => null)));
+    res.forEach((r, k) => { if (r && (r.total != null || r.available_quantity != null)) inv[b[k]] = r; });
+  }
+}
+
 // ───────── frescor das fontes ─────────
 function fiFontes() {
   const h = 3600e3, now = Date.now();
@@ -4613,12 +4635,12 @@ function ecRenderFull() {
       </div>
       <div class="ec-chips">${Object.entries(FI_ENV_FILTROS).map(([k, v]) => `<button class="ec-chip ${fE === k ? 'active' : ''}" onclick="EC.fiEnvF='${k}';ecRenderFull()">${v[0]}<span>${RF.filter(v[1]).length}</span></button>`).join('')}</div>
       <div class="ec-tools" style="margin:10px 0">${fiBusca('fiQe')}</div>
-      <div class="ec-table-wrap"><table class="t ec-t"><thead><tr><th>SKU</th><th>Produto</th><th>Curva</th><th class="r">Vendas 30d</th><th class="r">GMD projetado</th><th class="r">Full disponível</th><th class="r">Em trânsito</th><th class="r">Matriz disponível</th><th class="r">Cobertura projetada</th><th>Ruptura prevista</th><th class="r">Enviar unidades</th><th>Prioridade</th><th>Ação</th></tr></thead><tbody>
+      <div class="ec-table-wrap"><table class="t ec-t"><thead><tr><th>SKU</th><th>Produto</th><th>Curva</th><th class="r">Vendas 30d</th><th class="r">GMD projetado</th><th class="r">Full no CD (ML)</th><th class="r">Em trânsito</th><th class="r">Matriz disponível</th><th class="r">Cobertura projetada</th><th>Ruptura prevista</th><th class="r">Enviar unidades</th><th>Prioridade</th><th>Ação</th></tr></thead><tbody>
       ${LE.slice(0, 300).map(r => { const f = r.fi; return `<tr>
         <td>${fiSku(r)}</td><td>${fiNome(r)}</td><td>${ecCurva(r.curvaAn)}${f.regra === 'B' ? '<div class="ec-sub">crescendo</div>' : ''}</td>
         <td class="r mono">${ecInt(f.v30)}</td>
         <td class="r mono">${fiN1(f.dFull)}<div class="ec-sub ${f.tendCls === 'CRESCIMENTO' ? 'c-green' : f.tendCls === 'QUEDA' ? 'c-red' : ''}">${f.volOk ? (f.tend >= 0 ? '+' : '') + Math.round(f.tend * 100) + '% 7d×30d' : 'pouco dado'}</div>${fiConfTag(f.conf)}${f.reprimida ? '<div class="ec-sub c-orange">demanda reprimida</div>' : ''}</td>
-        <td class="r mono">${ecInt(r.fullDisp)}${r.mlFullIndisp ? `<div class="ec-sub">${ecInt(r.mlFullIndisp)} indisp.</div>` : ''}</td>
+        <td class="r mono">${f.fullFonte === 'indisponível' ? '<span class="c-orange" title="Não foi possível ler o estoque no CD">dado indisponível</span>' : ecInt(r.fullDisp)}${r.mlFullIndisp ? `<div class="ec-sub">${ecInt(r.mlFullIndisp)} indisp.</div>` : ''}</td>
         <td class="r mono">${f.progTot ? ecInt(f.progTot) + `<div class="ec-sub ${f.atrasado ? 'c-orange' : ''}">${f.atrasado ? 'atrasado' : 'chega ' + ecFmtDate(ecAddDays(ecDay(), Math.min(...f.chegadas.map(c => c.t))))}</div>` : '—'}${f.reserva ? `<div class="ec-sub" title="Data reservada, montagem em andamento: não entra no cálculo">reservado ${ecInt(f.reserva.q)} · ${f.reserva.envios.map(v => '#' + ecEsc(v.id) + ' ' + ecFmtDate(v.data)).join(', ')}</div>` : ''}</td>
         <td class="r mono">${ecInt(f.matrizLivre)}<div class="ec-sub">de ${ecInt(r.matriz)}</div></td>
         <td class="r mono"><b>${isFinite(f.cobProj) && f.cobProj > 999 ? '999+d' : ecDays(f.cobProj)}</b>${f.regra ? `<div class="ec-sub">gatilho ${f.gatilho}d · alvo ${f.alvo}d</div>` : ''}</td>
@@ -4750,7 +4772,7 @@ function fiMemo(sku) {
   const can = row('Parcela da venda pelo Full', ecPct(f.share)) + row('Demanda Full', fiN1(f.dFull) + ' un/dia') + row('Demanda atendida pela Matriz (anúncio próprio)', fiN1(f.dFull ? f.proj - f.dFull : f.proj) + ' un/dia') + row('Consumo via kits', fiN1(f.kitRate) + ' un/dia')
     + `<div class="ec-memo-f">demanda total de consumo = ${fiN1(f.dTotal)} un/dia (envios ao Full não somam: são transferência interna)</div>`;
   const full = !r.anuncioFull ? '<div class="ec-muted" style="font-size:12px">Sem anúncio Full.</div>' :
-    row('Full disponível (vendável)', ecInt(r.fullDisp)) + (r.mlFullIndisp ? row('Full reservado/indisponível', ecInt(r.mlFullIndisp)) : '')
+    row('Full no CD — disponível (ML, por código de inventário)', f.fullFonte === 'indisponível' ? '<span class="c-orange">dado indisponível (considerado 0)</span>' : ecInt(r.fullDisp)) + (f.fullAnuncio && f.fullAnuncio !== r.fullDisp ? row('Quantidade no anúncio (não usada: inclui depósito próprio)', ecInt(f.fullAnuncio)) : '') + (r.mlFullIndisp ? row('Full reservado/indisponível', ecInt(r.mlFullIndisp)) : '')
     + (f.chegadas.length ? f.chegadas.map(x => row(`Remessa #${ecEsc(x.envio)}`, `${ecInt(x.q)} un · chega ${ecFmtDate(ecAddDays(ecDay(), x.t))}${x.atrasado ? ' <span class="c-orange">(atrasada; prevista ' + ecFmtDate(x.prev) + ')</span>' : ''}`)).join('') : row('Remessas a caminho', '0'))
     + (f.reserva ? row('Datas reservadas (não contam)', f.reserva.envios.map(v => `#${ecEsc(v.id)} ${ecFmtDate(v.data)}: ${ecInt(v.q)} un`).join(' · ')) : '')
     + row('Cobertura atual (só disponível)', ecDays(f.cobAtual)) + row('Cobertura projetada (com remessas na data)', ecDays(f.cobProj))
