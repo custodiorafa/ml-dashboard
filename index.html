@@ -4084,6 +4084,7 @@ const FI_CFG_KEY = 'fi_cfg_v1', FI_VIS_KEY = 'fi_vis_v1', FI_ALERT_KEY = 'fi_ale
 const FI_VIS_MAX = 320, FI_VIS_TTL = 12 * 3600e3;
 const FI_DEFAULT = {
   ltTransf: 4,          // dias entre sair da Matriz e ficar vendável no CD Full
+  ltTransfCD: 5,        // unidades "em transferência" entre CDs do ML: dias até voltarem a ficar vendáveis
   segMatrizDias: 7,     // estoque de segurança da Matriz (dias de demanda total)
   janelaCompra: 15,     // dias além do lead time do fornecedor que ainda contam como prioridade ALTA
   limiteExcesso: 60,    // cobertura acima disso = excesso
@@ -4216,7 +4217,11 @@ function fiCompute(rows) {
     if (r.anuncioFull) {
       const invs = [...new Set(r.mlInvs || [])], got = invs.filter(i => invCD[i]);
       fi.fullAnuncio = r.fullML;
-      if (invs.length && got.length === invs.length) { r.fullDisp = got.reduce((a, i) => a + (invCD[i].available_quantity || 0), 0); r.mlFullIndisp = got.reduce((a, i) => a + (invCD[i].not_available_quantity || 0), 0); fi.fullFonte = 'CD'; }
+      if (invs.length && got.length === invs.length) {
+        r.fullDisp = got.reduce((a, i) => a + (invCD[i].available_quantity || 0), 0); r.mlFullIndisp = got.reduce((a, i) => a + (invCD[i].not_available_quantity || 0), 0); fi.fullFonte = 'CD';
+        // "transfer" = unidades sendo movidas entre CDs do ML: voltam a ser vendáveis; as demais indisponíveis (avaria, fiscal, perda) não contam
+        fi.transfCD = got.reduce((a, i) => a + (invCD[i].not_available_detail || []).filter(d => d.status === 'transfer').reduce((x, d) => x + (d.quantity || 0), 0), 0);
+      }
       else { r.fullDisp = 0; fi.fullFonte = 'indisponível'; }
     }
     const w = q ? ecWinsorize(q.slice(1), 30) : [];
@@ -4274,6 +4279,7 @@ function fiCompute(rows) {
     const demF = t => fi.dFull * fiPromoFator(sku, ecAddDays(hoje, t));
     const demM = t => fi.dMatriz * fiPromoFator(sku, ecAddDays(hoje, t));
     const ch = (cheg[sku] || []).map(c => ({ ...c }));
+    if (fi.transfCD > 0) ch.push({ t: Math.max(1, F.ltTransfCD || 5), q: fi.transfCD, envio: 'transferência entre CDs do ML', prev: ecAddDays(hoje, Math.max(1, F.ltTransfCD || 5)), atrasado: false, transf: true });
     fi.chegadas = ch; fi.atrasado = !!envAtras[sku]; fi.reserva = resv[sku] || null;
     fi.minProt = Math.max(0, +F.minProt[sku] || 0); fi.multEnvio = Math.max(0, +F.multEnvio[sku] || 0);
     const saidas = saidaProg[sku] || []; fi.saidaProg = saidas.reduce((a, x) => a + x.q, 0);
@@ -4456,10 +4462,14 @@ function fiCompute(rows) {
 async function fiPausadosLoad(force) {
   if (!force && EC.fiPausadosAt && Date.now() - EC.fiPausadosAt < 30 * 60e3) return;
   if (!state.sellerId || state.isDemo) return;
-  const ids = []; let off = 0, tot = 1;
-  while (off < tot && off < 500) {
-    const p = await mlGet(`/users/${state.sellerId}/items/search?status=paused&logistic_type=fulfillment&limit=100&offset=${off}`).catch(() => null);
-    if (!p || !p.results) break; tot = p.paging?.total ?? p.results.length; ids.push(...p.results); off += 100; if (p.results.length < 100) break;
+  // anúncios Full pausados e também ativos criados/reativados depois do login (a lista do painel é carregada uma vez)
+  const ids = [];
+  for (const st of ['paused', 'active']) {
+    let off = 0, tot = 1;
+    while (off < tot && off < 1000) {
+      const p = await mlGet(`/users/${state.sellerId}/items/search?status=${st}&logistic_type=fulfillment&limit=100&offset=${off}`).catch(() => null);
+      if (!p || !p.results) break; tot = p.paging?.total ?? p.results.length; ids.push(...p.results); off += 100; if (p.results.length < 100) break;
+    }
   }
   const ativos = new Set((state.items || []).map(it => it.id)); const out = [];
   const falta = ids.filter(id => !ativos.has(id));
@@ -4641,7 +4651,7 @@ function ecRenderFull() {
         <td class="r mono">${ecInt(f.v30)}</td>
         <td class="r mono">${fiN1(f.dFull)}<div class="ec-sub ${f.tendCls === 'CRESCIMENTO' ? 'c-green' : f.tendCls === 'QUEDA' ? 'c-red' : ''}">${f.volOk ? (f.tend >= 0 ? '+' : '') + Math.round(f.tend * 100) + '% 7d×30d' : 'pouco dado'}</div>${fiConfTag(f.conf)}${f.reprimida ? '<div class="ec-sub c-orange">demanda reprimida</div>' : ''}</td>
         <td class="r mono">${f.fullFonte === 'indisponível' ? '<span class="c-orange" title="Não foi possível ler o estoque no CD">dado indisponível</span>' : ecInt(r.fullDisp)}${r.mlFullIndisp ? `<div class="ec-sub">${ecInt(r.mlFullIndisp)} indisp.</div>` : ''}</td>
-        <td class="r mono">${f.progTot ? ecInt(f.progTot) + `<div class="ec-sub ${f.atrasado ? 'c-orange' : ''}">${f.atrasado ? 'atrasado' : 'chega ' + ecFmtDate(ecAddDays(ecDay(), Math.min(...f.chegadas.map(c => c.t))))}</div>` : '—'}${f.reserva ? `<div class="ec-sub" title="Data reservada, montagem em andamento: não entra no cálculo">reservado ${ecInt(f.reserva.q)} · ${f.reserva.envios.map(v => '#' + ecEsc(v.id) + ' ' + ecFmtDate(v.data)).join(', ')}</div>` : ''}</td>
+        <td class="r mono">${f.progTot ? ecInt(f.progTot) + `<div class="ec-sub ${f.atrasado ? 'c-orange' : ''}">${f.atrasado ? 'atrasado' : 'chega ' + ecFmtDate(ecAddDays(ecDay(), Math.min(...f.chegadas.map(c => c.t))))}</div>${f.transfCD ? `<div class="ec-sub">${ecInt(f.transfCD)} em transferência no ML</div>` : ''}` : '—'}${f.reserva ? `<div class="ec-sub" title="Data reservada, montagem em andamento: não entra no cálculo">reservado ${ecInt(f.reserva.q)} · ${f.reserva.envios.map(v => '#' + ecEsc(v.id) + ' ' + ecFmtDate(v.data)).join(', ')}</div>` : ''}</td>
         <td class="r mono">${ecInt(f.matrizLivre)}<div class="ec-sub">de ${ecInt(r.matriz)}</div></td>
         <td class="r mono"><b>${isFinite(f.cobProj) && f.cobProj > 999 ? '999+d' : ecDays(f.cobProj)}</b>${f.regra ? `<div class="ec-sub">gatilho ${f.gatilho}d · alvo ${f.alvo}d</div>` : ''}</td>
         <td class="mono">${f.ruptData ? `<span class="${f.ruptDia <= f.tChega ? 'c-red' : ''}">${ecFmtDate(f.ruptData)}</span><div class="ec-sub">${f.diasRuptCom ? f.diasRuptCom + 'd de ruptura prováveis' : 'evitável enviando agora'}</div>` : '—'}</td>
@@ -4773,7 +4783,7 @@ function fiMemo(sku) {
     + `<div class="ec-memo-f">demanda total de consumo = ${fiN1(f.dTotal)} un/dia (envios ao Full não somam: são transferência interna)</div>`;
   const full = !r.anuncioFull ? '<div class="ec-muted" style="font-size:12px">Sem anúncio Full.</div>' :
     row('Full no CD — disponível (ML, por código de inventário)', f.fullFonte === 'indisponível' ? '<span class="c-orange">dado indisponível (considerado 0)</span>' : ecInt(r.fullDisp)) + (f.fullAnuncio && f.fullAnuncio !== r.fullDisp ? row('Quantidade no anúncio (não usada: inclui depósito próprio)', ecInt(f.fullAnuncio)) : '') + (r.mlFullIndisp ? row('Full reservado/indisponível', ecInt(r.mlFullIndisp)) : '')
-    + (f.chegadas.length ? f.chegadas.map(x => row(`Remessa #${ecEsc(x.envio)}`, `${ecInt(x.q)} un · chega ${ecFmtDate(ecAddDays(ecDay(), x.t))}${x.atrasado ? ' <span class="c-orange">(atrasada; prevista ' + ecFmtDate(x.prev) + ')</span>' : ''}`)).join('') : row('Remessas a caminho', '0'))
+    + (f.chegadas.length ? f.chegadas.map(x => row(x.transf ? 'Em transferência entre CDs (ML)' : `Remessa #${ecEsc(x.envio)}`, `${ecInt(x.q)} un · chega ${ecFmtDate(ecAddDays(ecDay(), x.t))}${x.atrasado ? ' <span class="c-orange">(atrasada; prevista ' + ecFmtDate(x.prev) + ')</span>' : ''}`)).join('') : row('Remessas a caminho', '0'))
     + (f.reserva ? row('Datas reservadas (não contam)', f.reserva.envios.map(v => `#${ecEsc(v.id)} ${ecFmtDate(v.data)}: ${ecInt(v.q)} un`).join(' · ')) : '')
     + row('Cobertura atual (só disponível)', ecDays(f.cobAtual)) + row('Cobertura projetada (com remessas na data)', ecDays(f.cobProj))
     + row('Ruptura prevista', f.ruptData ? ecFmtDate(f.ruptData) : 'não no horizonte') + row('Envio novo chegaria em', ecFmtDate(f.dataChega) + ` (${f.tChega}d)`)
@@ -4804,7 +4814,7 @@ function fiOpenParams() {
     <div class="card-body">
       <div class="ec-muted" style="font-size:12px;margin-bottom:10px">${pode ? '' : 'Acesso de consulta: só o acesso master altera. '}${EC.fiServidor ? 'Parâmetros compartilhados pelo servidor com todos os acessos.' : '<span class="c-orange">Estes parâmetros ainda não voltaram do servidor: valem neste navegador. Se continuar assim depois de salvar, o Worker precisa guardar a chave "fi" em /ec/params.</span>'}</div>
       <div class="ec-subhead">Regras de envio por curva (anúncio)</div>
-      <div class="fi-grid2">${inp('fi-aalvo', FR.A.alvo, 'Curva A — cobertura-alvo')}${inp('fi-agat', FR.A.gatilho, 'Curva A — gatilho de envio')}${inp('fi-balvo', FR.B.alvo, 'Curva B c/ crescimento — alvo')}${inp('fi-bgat', FR.B.gatilho, 'Curva B c/ crescimento — gatilho')}${inp('fi-bcresc', Math.round(FR.bCresc * 100), 'Crescimento mínimo da curva B', '%')}${inp('fi-lttr', F.ltTransf, 'Lead time Matriz → Full')}</div>
+      <div class="fi-grid2">${inp('fi-aalvo', FR.A.alvo, 'Curva A — cobertura-alvo')}${inp('fi-agat', FR.A.gatilho, 'Curva A — gatilho de envio')}${inp('fi-balvo', FR.B.alvo, 'Curva B c/ crescimento — alvo')}${inp('fi-bgat', FR.B.gatilho, 'Curva B c/ crescimento — gatilho')}${inp('fi-bcresc', Math.round(FR.bCresc * 100), 'Crescimento mínimo da curva B', '%')}${inp('fi-lttr', F.ltTransf, 'Lead time Matriz → Full')}${inp('fi-lttcd', F.ltTransfCD ?? 5, 'Unidades em transferência entre CDs voltam em')}</div>
       <div class="ec-subhead">Matriz, compra e alertas</div>
       <div class="fi-grid2">${inp('fi-seg', F.segMatrizDias, 'Estoque de segurança da Matriz')}${inp('fi-jan', F.janelaCompra, 'Janela de prioridade ALTA além do lead time')}${inp('fi-exc', F.limiteExcesso, 'Limite de excesso de estoque')}${inp('fi-cresc', Math.round(F.crescAlerta * 100), 'Crescimento mínimo para alerta/escala', '%')}${inp('fi-vmin', F.visitasMin, 'Visitas mínimas em 15 dias', 'visitas', 1)}${inp('fi-conf', F.vendasMinConf, 'Vendas 30d mínimas p/ confiança', 'un', 1)}${inp('fi-hor', F.horizonte, 'Horizonte da simulação Full')}
         <label class="ec-f"><span>Envio "programado" ainda está no saldo da Matriz no Bling até a coleta</span><span><input type="checkbox" id="fi-prog" ${F.progNaMatriz ? 'checked' : ''} ${dis}></span></label></div>
@@ -4831,13 +4841,13 @@ async function fiSalvarParams() {
     promo.push({ ini: m[1], fim: m[2], fator: parseFloat(m[3].replace(',', '.')) || 1, skus: m[4] === '*' ? [] : m[4].split(',').map(normSku).filter(Boolean), nome: m[5] || 'Promoção' });
   });
   if (ruins.length) return msg('Linhas não reconhecidas: ' + ruins.slice(0, 3).join(' | '));
-  const v = { aalvo: num('fi-aalvo', 1), agat: num('fi-agat', 0), balvo: num('fi-balvo', 1), bgat: num('fi-bgat', 0), bcresc: num('fi-bcresc'), lttr: num('fi-lttr', 1), seg: num('fi-seg'), jan: num('fi-jan'), exc: num('fi-exc', 1), cresc: num('fi-cresc'), vmin: num('fi-vmin'), conf: num('fi-conf'), hor: num('fi-hor', 30) };
+  const v = { aalvo: num('fi-aalvo', 1), agat: num('fi-agat', 0), balvo: num('fi-balvo', 1), bgat: num('fi-bgat', 0), bcresc: num('fi-bcresc'), lttr: num('fi-lttr', 1), lttcd: num('fi-lttcd', 1), seg: num('fi-seg'), jan: num('fi-jan'), exc: num('fi-exc', 1), cresc: num('fi-cresc'), vmin: num('fi-vmin'), conf: num('fi-conf'), hor: num('fi-hor', 30) };
   if (Object.values(v).some(x => x == null)) return msg('Confira os números (vazios ou abaixo do mínimo).');
   if (v.agat >= v.aalvo || v.bgat >= v.balvo) return msg('O gatilho precisa ser menor que a cobertura-alvo.');
   const FR = ecCfg().fullRegra; const regraNova = { ...FR, A: { alvo: v.aalvo, gatilho: v.agat }, B: { alvo: v.balvo, gatilho: v.bgat }, bCresc: v.bcresc / 100 };
   if (JSON.stringify(regraNova) !== JSON.stringify(FR) && !confirm(`Alterar as regras de envio por curva?\nA: alvo ${v.aalvo}d / gatilho ${v.agat}d · B: alvo ${v.balvo}d / gatilho ${v.bgat}d / crescimento ${v.bcresc}%`)) return;
   ecCfg().fullRegra = regraNova;
-  EC.fiCfg = { ...fiCfg(), ltTransf: v.lttr, segMatrizDias: v.seg, janelaCompra: v.jan, limiteExcesso: v.exc, crescAlerta: v.cresc / 100, visitasMin: v.vmin, vendasMinConf: v.conf, horizonte: v.hor, progNaMatriz: g('fi-prog').checked, minProt, multEnvio, promo };
+  EC.fiCfg = { ...fiCfg(), ltTransf: v.lttr, ltTransfCD: v.lttcd, segMatrizDias: v.seg, janelaCompra: v.jan, limiteExcesso: v.exc, crescAlerta: v.cresc / 100, visitasMin: v.vmin, vendasMinConf: v.conf, horizonte: v.hor, progNaMatriz: g('fi-prog').checked, minProt, multEnvio, promo };
   fiSaveCfgLocal(); ecSaveCfg();
   const ok = await ecParamsSave();
   ecCompute(); fiAlertasAtualizar(); ecRender(); ecCloseCfg();
