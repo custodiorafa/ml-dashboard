@@ -11551,10 +11551,11 @@ function mkMeusAnuncios(kwId) {
   var kw = (MK.keywords || []).filter(function (k) { return k.id === kwId; })[0];
   if (!kw || !kw.must) return [];
   var re = kw.must.map(function (m) { return new RegExp(m); });
+  var nao = kw.not ? new RegExp(kw.not) : null;
   var itens = (typeof state !== 'undefined' && state.items) || [];
   return itens.filter(function (i) {
     var t = mkNorm(i.title);
-    return re.every(function (r) { return r.test(t); });
+    return re.every(function (r) { return r.test(t); }) && !(nao && nao.test(t));
   });
 }
 
