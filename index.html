@@ -4474,7 +4474,8 @@ async function fiPausadosLoad(force) {
   const ativos = new Set((state.items || []).map(it => it.id)); const out = [];
   const falta = ids.filter(id => !ativos.has(id));
   for (let i = 0; i < falta.length; i += 20) {
-    const d = await mlGetPublic(`/items?ids=${falta.slice(i, i + 20).join(',')}`).catch(() => null);
+    // consulta autenticada: a pública não traz inventory_id (Código ML), e sem ele não dá para ler o CD
+    const d = await mlGet(`/items?ids=${falta.slice(i, i + 20).join(',')}`).catch(() => null);
     (d || []).map(x => x && x.body).filter(Boolean).forEach(it => { if (it.shipping?.logistic_type === 'fulfillment') out.push(it); });
   }
   EC.fiPausados = out; EC.fiPausadosAt = Date.now();
@@ -4645,9 +4646,9 @@ function ecRenderFull() {
       </div>
       <div class="ec-chips">${Object.entries(FI_ENV_FILTROS).map(([k, v]) => `<button class="ec-chip ${fE === k ? 'active' : ''}" onclick="EC.fiEnvF='${k}';ecRenderFull()">${v[0]}<span>${RF.filter(v[1]).length}</span></button>`).join('')}</div>
       <div class="ec-tools" style="margin:10px 0">${fiBusca('fiQe')}</div>
-      <div class="ec-table-wrap"><table class="t ec-t"><thead><tr><th>SKU</th><th>Produto</th><th>Curva</th><th class="r">Vendas 30d</th><th class="r">GMD projetado</th><th class="r">Full no CD (ML)</th><th class="r">Em trânsito</th><th class="r">Matriz disponível</th><th class="r">Cobertura projetada</th><th>Ruptura prevista</th><th class="r">Enviar unidades</th><th>Prioridade</th><th>Ação</th></tr></thead><tbody>
-      ${LE.slice(0, 300).map(r => { const f = r.fi; return `<tr>
-        <td>${fiSku(r)}</td><td>${fiNome(r)}</td><td>${ecCurva(r.curvaAn)}${f.regra === 'B' ? '<div class="ec-sub">crescendo</div>' : ''}</td>
+      <div class="ec-table-wrap"><table class="t ec-t"><thead><tr><th>SKU / Código ML</th><th>Produto</th><th>Curva</th><th class="r">Vendas 30d</th><th class="r">GMD projetado</th><th class="r">Full no CD (ML)</th><th class="r">Em trânsito</th><th class="r">Matriz disponível</th><th class="r">Cobertura projetada</th><th>Ruptura prevista</th><th class="r">Enviar unidades</th><th>Prioridade</th><th>Ação</th></tr></thead><tbody>
+      ${LE.slice(0, 300).map(r => { const f = r.fi; const cod = [...new Set(r.mlInvs || [])].join(' / '); return `<tr>
+        <td>${fiSku(r)}${cod ? `<div class="ec-sub mono" title="Código ML (inventário Full)">${ecEsc(cod)}</div>` : ''}</td><td>${fiNome(r)}</td><td>${ecCurva(r.curvaAn)}${f.regra === 'B' ? '<div class="ec-sub">crescendo</div>' : ''}</td>
         <td class="r mono">${ecInt(f.v30)}</td>
         <td class="r mono">${fiN1(f.dFull)}<div class="ec-sub ${f.tendCls === 'CRESCIMENTO' ? 'c-green' : f.tendCls === 'QUEDA' ? 'c-red' : ''}">${f.volOk ? (f.tend >= 0 ? '+' : '') + Math.round(f.tend * 100) + '% 7d×30d' : 'pouco dado'}</div>${fiConfTag(f.conf)}${f.reprimida ? '<div class="ec-sub c-orange">demanda reprimida</div>' : ''}</td>
         <td class="r mono">${f.fullFonte === 'indisponível' ? '<span class="c-orange" title="Não foi possível ler o estoque no CD">dado indisponível</span>' : ecInt(r.fullDisp)}${r.mlFullIndisp ? `<div class="ec-sub">${ecInt(r.mlFullIndisp)} indisp.</div>` : ''}</td>
@@ -4748,7 +4749,7 @@ async function fiExcelCompras() {
   const lin = EC.rows.filter(r => r.fi && r.fi.compra).sort((a, b) => fiOrdP(a.fi.compra.prio) - fiOrdP(b.fi.compra.prio) || String(a.fi.compra.dataLimite || '9').localeCompare(String(b.fi.compra.dataLimite || '9')));
   const grupoN = { agora: 'Comprar agora', '7d': 'Próximos 7 dias', prog: 'Compra programada', sem: 'Sem necessidade', exc: 'Excesso de estoque' };
   const data = lin.map(r => { const f = r.fi, c = f.compra; return {
-    'Grupo': grupoN[c.grupo] || '', 'Prioridade': c.prio || '', 'Motivo da elevação': c.elevMotivo || '', 'SKU': r.sku, 'Produto': r.nome, 'Curva': r.curva || '', 'Fornecedor': r.fornecedor || '',
+    'Grupo': grupoN[c.grupo] || '', 'Prioridade': c.prio || '', 'Motivo da elevação': c.elevMotivo || '', 'SKU': r.sku, 'Código ML': [...new Set(r.mlInvs || [])].join(' / '), 'Produto': r.nome, 'Curva': r.curva || '', 'Fornecedor': r.fornecedor || '',
     'Demanda projetada (un/dia)': +f.dTotal.toFixed(2), 'Demanda histórica GMD30': +f.g30.toFixed(2), 'Confiança': f.conf, 'Ressalvas': f.motivosConf.join(' | '),
     'Estoque Matriz (disponível)': d(f.matrizNet), 'Full disponível': r.fullDisp || 0, 'Em trânsito ao Full': f.progTot, 'Necessidade Full não atendida': f.faltaFull || 0,
     'Pedidos em aberto': r.transito || 0, 'Previsão de chegada do pedido': c.po[0] ? (c.po[0].data || 'sem previsão') : '', 'Lead time (dias)': c.lt, 'Lead time é premissa': c.ltPremissa ? 'sim' : 'não',
@@ -4797,7 +4798,7 @@ function fiMemo(sku) {
     + `<div class="ec-memo-f">1. necessidade calculada = ${ecInt(c.nec)}<br>2. ajustada ao lote = <b>${ecInt(c.qAj)}</b>${r.moq ? ' · MOQ ' + r.moq : ''}${r.mult > 1 ? ' · múltiplo ' + r.mult : ''}${!c.ativo ? ' · inativo no Bling: não compra' : ''}<br>3. estoque projetado após a compra = ${ecInt(c.projApos)}<br>4. data-limite = ${c.dataLimite ? ecFmtDate(c.dataLimite) : '—'} · ruptura Matriz ${c.ruptData ? ecFmtDate(c.ruptData) : 'não prevista'}<br>5. chegada = ${c.chegada ? ecFmtDate(c.chegada) : '—'}<br>prioridade: <b>${c.prio || 'sem necessidade'}</b>${c.elevMotivo ? ` (era ${c.prioOrig}; elevada por: ${ecEsc(c.elevMotivo)})` : ''}</div>`;
   el.innerHTML = `<div class="ec-modal-box">
     <div class="card-head" style="position:sticky;top:0;background:var(--surface);z-index:2"><span class="card-title">Full & Compras — memória</span><button class="btn-sm" onclick="ecMemoClose()">✕</button></div>
-    <div class="ec-memo-sec"><div style="font-weight:600">${ecEsc(r.nome)}</div><div class="ec-muted mono" style="font-size:12px;margin:2px 0 8px">${ecEsc(r.sku)} · curva anúncio ${r.curvaAn || '—'} · curva produto ${r.curva || '—'}</div><button class="ec-link" onclick="ecMemo('${ecEsc(r.sku)}')">memória de cálculo do estoque (Itens em linha) →</button></div>
+    <div class="ec-memo-sec"><div style="font-weight:600">${ecEsc(r.nome)}</div><div class="ec-muted mono" style="font-size:12px;margin:2px 0 8px">${ecEsc(r.sku)}${(r.mlInvs || []).length ? ' · Código ML ' + ecEsc([...new Set(r.mlInvs)].join(' / ')) : ''} · curva anúncio ${r.curvaAn || '—'} · curva produto ${r.curva || '—'}</div><button class="ec-link" onclick="ecMemo('${ecEsc(r.sku)}')">memória de cálculo do estoque (Itens em linha) →</button></div>
     ${sec('Demanda', dem)}${sec('Canais', can)}${sec('Envio ao Full', full)}${sec('Compra para a Matriz', comp)}${f.excesso.length ? sec('Excesso', `<div style="font-size:12px">${ecEsc(f.excesso.join(' · '))}${f.excUn ? ` · excedente ${ecInt(f.excUn)} un${f.excR != null ? ' = ' + ecMoney(f.excR) : ' (custo indisponível)'}` : ''}</div>`) : ''}
   </div>`;
   el.style.display = 'flex';
