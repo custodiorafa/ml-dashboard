@@ -49,14 +49,15 @@
      tokens parecidos (Jaccard ≥ 0,45) viram o mesmo produto. */
   var GEN = ('de da do das dos e p para pra c com s sem em a o as os na no um uma kit jogo par peca pecas novo nova original ' +
     'caminhao caminhoes onibus linha pesada pesado qualidade premium alta reforcado reforcada universal frete gratis envio imediato ' +
-    'pronta entrega promocao oferta unidade unidades pc pcs und cj conjunto modelo tipo marca').split(' ');
+    'pronta entrega promocao oferta unidade unidades pc pcs und cj conjunto modelo tipo marca compativel completo cam inst instalacao aplicacao serve ate linha nf garantia').split(' ');
   var ALIAS = { mercedes: 'mb', benz: 'mb', mbb: 'mb', 'mercedes-benz': 'mb', volkswagen: 'vw', vwm: 'vw', constellation: 'constel', delivery: 'deliv' };
   function tokens(titulo, extra) {
     var out = {};
     norm(titulo).replace(/[^a-z0-9/]+/g, ' ').split(' ').forEach(function (w) {
       if (!w) return;
       w = ALIAS[w] || w;
-      if (w.length < 2 && !/\d/.test(w)) return;
+      w = w.replace(/^\/+|\/+$/g, '');
+      if (w.length < 2) return;
       if (GEN.indexOf(w) >= 0 || extra[w]) return;
       out[w] = 1;
     });
