@@ -11496,8 +11496,11 @@ async function miVer() { MI.view = 'disputa'; if (!MK.latest) mkCarregar(); else
 
    O que o ranking oficial não dá (faturamento e unidades por concorrente),
    o Shopping de Preços dá: ele recebe do ML o arquivo diário de vendas.
-   A coleta roda no Chrome do Rafael (tarefa agendada de segunda) e grava
-   no Worker market-intel. Esta tela só lê: GET /latest e /snapshots.
+   A coleta roda sob demanda no Chrome do Rafael: favorito "MI Coletar"
+   (mi-coletor.js, sem IA) aberto dentro do Shopping de Preços. Grava no
+   Worker market-intel. Esta tela só lê: GET /latest e /snapshots.
+   Cada coleta (versão 2) traz também os PRODUTOS dentro do mercado:
+   anúncios agrupados por título parecido (aplicação, medida, modelo).
 
    Cada busca-chave (ex.: "cuica 30x30") é um mercado. Para cada mercado:
    faturamento 90 dias, share da Titanium, líder, top concorrentes, quem
@@ -11507,7 +11510,7 @@ async function miVer() { MI.view = 'disputa'; if (!MK.latest) mkCarregar(); else
    ═══════════════════════════════════════════════════════════════════════ */
 
 var MK_URL = 'https://market-intel.rafael-custodio.workers.dev';
-var MK = { latest: null, hist: {}, keywords: [], loading: false, erro: null, aberto: null, ordem: 'alerta' };
+var MK = { latest: null, hist: {}, keywords: [], loading: false, erro: null, aberto: null, ordem: 'alerta', ajuda: false, verTodosProd: false };
 
 function mkChave() { try { return localStorage.getItem('mk_key') || ''; } catch (e) { return ''; } }
 function mkSalvarChave() {
@@ -11591,8 +11594,103 @@ function mkAlertas(s) {
     out.push({ g: 1, t: 'Mercado grande com share baixo: líder ' + lider.vendedor + ' tem ' + mkPct(lider.share) + ', a Titanium ' + mkPct(s.titanium.share) + '.' });
   if (old && old !== s && old.total > 0 && s.total > old.total * 1.2 && s.titanium.fat <= old.titanium.fat)
     out.push({ g: 1, t: 'Mercado cresceu ' + mkPct(s.total / old.total - 1) + ' e a Titanium não acompanhou.' });
+  if (s.produtos) {
+    var lac = s.produtos.filter(function (p) { return mkAlertasProduto(s, p).some(function (a) { return a.g >= 3; }); });
+    if (lac.length) out.push({ g: 2, t: lac.length + ' produto(s) com alerta crítico, somando ' + ecMoneyK(lac.reduce(function (a, p) { return a + p.fat; }, 0)) + '.' });
+  }
   out.sort(function (x, y) { return y.g - x.g; });
   return out;
+}
+
+/* ── produtos dentro do mercado ─────────────────────────────────────── */
+var MK_BOOKMARK = "javascript:(function(){var s=document.createElement('script');s.src='https://custodiorafa.github.io/ml-dashboard/mi-coletor.js?v='+Date.now();document.body.appendChild(s);})();";
+function mkTit(v) { return /^titanium/i.test(v || ''); }
+function mkJac(a, b) {
+  a = a || []; b = b || []; if (!a.length || !b.length) return 0;
+  var o = {}, i = 0; a.forEach(function (x) { o[x] = 1; }); b.forEach(function (x) { if (o[x]) i++; });
+  return i / (a.length + b.length - i);
+}
+function mkProdAnterior(s, p) {
+  var h = MK.hist[s.keyword_id] || [];
+  var b = h[1]; if (!b || !b.produtos) return null;
+  var best = null, bs = 0;
+  b.produtos.forEach(function (q) { var j = q.nome === p.nome ? 1 : mkJac(q.chave, p.chave); if (j > bs) { bs = j; best = q; } });
+  return bs >= 0.5 ? best : null;
+}
+/* anúncios próprios que parecem ser este produto (lacuna = falta de anúncio ou falta de venda?) */
+function mkMeusNoProduto(s, p) {
+  var ch = (p.chave || []).slice(0, 4); if (!ch.length) return [];
+  var need = Math.min(2, ch.length);
+  return mkMeusAnuncios(s.keyword_id).filter(function (i) {
+    var t = ' ' + mkNorm(i.title).replace(/mercedes|benz|mbb/g, 'mb').replace(/volkswagen/g, 'vw').replace(/[^a-z0-9/]+/g, ' ') + ' ';
+    return ch.filter(function (c) { return t.indexOf(' ' + c + ' ') >= 0; }).length >= need;
+  });
+}
+function mkAlertasProduto(s, p) {
+  var out = [], ant = mkProdAnterior(s, p), t = p.titanium, l = p.lider || {};
+  var relevante = p.fat >= Math.max(8000, s.total * 0.05);
+  if (!t && relevante) {
+    var meus = mkMeusNoProduto(s, p);
+    var semEst = meus.filter(function (i) { return i.status !== 'active' || (i.available_quantity || 0) <= 0; });
+    var txt = meus.length
+      ? (semEst.length === meus.length ? 'Você tem anúncio, mas pausado ou sem estoque: ' + ecMoneyK(p.fat) + ' vendidos por outros.'
+                                        : 'Você tem anúncio ativo e não vendeu: ' + ecMoneyK(p.fat) + ' foram para ' + l.vendedor + ' (' + mkPct(l.share) + ').')
+      : 'Você não vende: ' + ecMoneyK(p.fat) + ' em 90 dias, líder ' + l.vendedor + ' a ' + ecMoney2(l.preco) + '.';
+    out.push({ g: 3, tipo: meus.length ? 'Sem venda' : 'Lacuna', t: txt });
+  }
+  if (ant && ant.titanium && ant.titanium.fat > 2000 && (!t || t.share < ant.titanium.share * 0.7))
+    out.push({ g: 3, tipo: 'Perdendo', t: 'Seu share caiu de ' + mkPct(ant.titanium.share) + ' para ' + mkPct(t ? t.share : 0) + ' desde a coleta anterior.' });
+  if (t && l.vendedor && !mkTit(l.vendedor) && l.preco && t.preco > l.preco * 1.1 && p.fat > 5000)
+    out.push({ g: 2, tipo: 'Preço', t: 'Seu preço médio ' + ecMoney2(t.preco) + ' contra ' + ecMoney2(l.preco) + ' do líder (+' + mkPct(t.preco / l.preco - 1) + ').' });
+  if (t && l.full && !t.full && !mkTit(l.vendedor) && p.fat > 5000)
+    out.push({ g: 2, tipo: 'Full', t: 'Líder vende pelo Full e você não.' });
+  if (t && l.vendedor && !mkTit(l.vendedor) && t.share < 0.25 && p.fat > 15000 && !out.length)
+    out.push({ g: 1, tipo: 'Share baixo', t: 'Você tem ' + mkPct(t.share) + ' deste produto; líder ' + l.vendedor + ' tem ' + mkPct(l.share) + '.' });
+  if (ant && ant.fat > 0 && p.fat > ant.fat * 1.3 && p.fat > 10000)
+    out.push({ g: 1, tipo: 'Crescendo', t: 'Produto cresceu ' + mkPct(p.fat / ant.fat - 1) + ' desde a coleta anterior.' });
+  return out;
+}
+function mkTodosAlertasProduto() {
+  var out = [];
+  (MK.latest || []).forEach(function (s) {
+    (s.produtos || []).forEach(function (p) {
+      mkAlertasProduto(s, p).forEach(function (a) { out.push({ s: s, p: p, a: a }); });
+    });
+  });
+  out.sort(function (x, y) { return y.a.g - x.a.g || y.p.fat - x.p.fat; });
+  return out;
+}
+function mkCorAlerta(g) { return g >= 3 ? 'var(--red)' : g === 2 ? 'var(--orange)' : 'var(--text2)'; }
+function mkProdutosTabela(s) {
+  if (!s.produtos) return '<div class="ec-sub" style="padding:6px 0">Esta busca ainda é da coleta antiga, sem a quebra por produto. Rode o favorito MI Coletar para atualizar.</div>';
+  var linhas = s.produtos.filter(function (p) { return p.fat >= 1000; }).slice(0, 20).map(function (p) {
+    var al = mkAlertasProduto(s, p), t = p.titanium, l = p.lider || {}, ant = mkProdAnterior(s, p);
+    var dv = ant && ant.fat ? p.fat / ant.fat - 1 : null;
+    var anun = (p.anuncios || []).slice(0, 3).map(function (a) {
+      return '<div class="ec-sub" style="font-size:11px">' + (a.mlb ? '<a href="https://produto.mercadolivre.com.br/' + a.mlb.replace('MLB', 'MLB-') + '" target="_blank">' : '') +
+        ecEsc(a.titulo.slice(0, 70)) + (a.mlb ? '</a>' : '') + ' · ' + ecEsc(a.vendedor) + ' · ' + ecMoneyK(a.fat) + '</div>';
+    }).join('');
+    return '<tr' + (t && t.pos === 1 ? ' style="background:rgba(0,166,80,.06)"' : '') + '>' +
+      '<td><b>' + ecEsc(p.nome) + '</b><div class="ec-sub" style="font-size:11px">' + ecEsc((p.chave || []).join(' · ')) + ' · ' + p.n_anuncios + ' anúncios, ' + p.n_vendedores + ' vendedores</div>' + anun + '</td>' +
+      '<td class="r mono">' + ecMoneyK(p.fat) + '<br><span class="ec-sub">' + mkPct(p.share_mercado) + ' do mercado</span>' + (dv == null ? '' : '<br><span style="font-size:11px;color:' + (dv >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (dv >= 0 ? '▲' : '▼') + mkPct(Math.abs(dv)) + '</span>') + '</td>' +
+      '<td class="r mono">' + ecMoney2(p.preco_mediano || p.preco_medio) + '<br><span class="ec-sub">mín ' + ecMoney2(p.preco_min) + '</span></td>' +
+      '<td>' + (mkTit(l.vendedor) ? '<span style="color:var(--green)"><b>Titanium</b></span>' : ecEsc(l.vendedor || '—')) + ' <span class="ec-sub">' + mkPct(l.share) + '</span><br><span class="ec-sub">' + ecMoney2(l.preco) + (l.full ? ' · Full' : '') + ' · ' + ecEsc((l.marcas || []).join(', ')) + '</span></td>' +
+      '<td class="r mono">' + (t ? '<b>' + mkPct(t.share) + '</b> <span class="ec-sub">' + t.pos + 'º</span><br><span class="ec-sub">' + ecMoneyK(t.fat) + ' · ' + ecMoney2(t.preco) + (t.full ? ' · Full' : '') + '</span>' : '<span style="color:var(--red)">não vende</span>') + '</td>' +
+      '<td style="font-size:12px">' + (al.length ? al.map(function (a) { return '<div style="color:' + mkCorAlerta(a.g) + '"><b>' + a.tipo + ':</b> ' + ecEsc(a.t) + '</div>'; }).join('') : '<span class="ec-sub">ok</span>') + '</td></tr>';
+  }).join('');
+  return '<table class="t ec-table"><thead><tr><th>Produto</th><th class="r">Vendas 90d</th><th class="r">Preço</th><th>Líder</th><th class="r">Titanium</th><th>Alertas</th></tr></thead><tbody>' +
+    (linhas || '<tr><td colspan="6" class="ec-sub">Sem produtos com venda relevante.</td></tr>') + '</tbody></table>';
+}
+function mkColetarCard() {
+  return '<div class="card ec-sec"><div class="card-head"><span class="card-title">Atualizar a coleta (sob demanda, sem custo de IA)</span><button class="btn-sm" onclick="MK.ajuda=!MK.ajuda;miRender()">' + (MK.ajuda ? 'Fechar' : 'Como usar') + '</button></div>' +
+    (MK.ajuda ? '<div class="card-body" style="font-size:13px;line-height:1.7">' +
+      '<b>1.</b> Arraste este botão para a barra de favoritos do Chrome (uma vez só): ' +
+      '<a href="' + ecEsc(MK_BOOKMARK) + '" onclick="alert(\'Arraste para a barra de favoritos. Depois clique nele com o Shopping de Preços aberto.\');return false;" style="display:inline-block;padding:4px 12px;border-radius:6px;background:#2d3277;color:#fff;text-decoration:none;font-weight:600">MI Coletar</a><br>' +
+      '<b>2.</b> Abra o <a href="https://app.shoppingdeprecos.com.br/" target="_blank">Shopping de Preços</a> logado e clique no favorito <b>MI Coletar</b>.<br>' +
+      '<b>3.</b> Escolha as buscas e clique em <b>Coletar selecionadas</b> (~1 min por busca). Deixe a aba aberta.<br>' +
+      '<b>4.</b> Ao terminar, volte aqui e clique em ↻ Atualizar.<br>' +
+      '<span class="ec-sub">Na primeira vez o coletor pede a chave MI_KEY, a mesma usada aqui. Para incluir uma busca nova, peça ao Claude.</span></div>' : '') +
+    '</div>';
 }
 
 function mkPosicao(s) {
@@ -11636,7 +11734,8 @@ function mkDetalhe(s) {
   }).join('') : '<tr><td colspan="5" class="ec-sub">Nenhum anúncio próprio com título que case com esta busca (ou anúncios ainda não carregados no painel).</td></tr>';
 
   return '<tr><td colspan="9" style="padding:0"><div style="padding:14px 18px;background:var(--surface2)">' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
+    '<div class="card-title" style="margin-bottom:6px">Produtos dentro deste mercado</div>' + mkProdutosTabela(s) +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">' +
     '<div><div class="card-title" style="margin-bottom:6px">Ranking de vendedores (90 dias)</div>' +
     '<table class="t ec-table"><thead><tr><th class="r">#</th><th>Vendedor</th><th>Marcas</th><th class="r">Faturamento</th><th class="r">Unid.</th><th class="r">Share</th></tr></thead><tbody>' + vend + '</tbody></table></div>' +
     '<div><div class="card-title" style="margin-bottom:6px">Seus anúncios nesta disputa</div>' +
@@ -11663,7 +11762,7 @@ function mkTela() {
 
   var L = MK.latest.filter(function (s) { return s.total > 0; });
   var vazios = MK.latest.length - L.length;
-  if (!L.length) return '<div class="card ec-sec"><div class="card-body">Ainda não há coleta com dados. A tarefa de segunda-feira grava aqui automaticamente.</div></div>';
+  if (!L.length) { MK.ajuda = true; return mkColetarCard(); }
 
   var totMerc = L.reduce(function (a, s) { return a + s.total; }, 0);
   var totTit = L.reduce(function (a, s) { return a + s.titanium.fat; }, 0);
@@ -11689,6 +11788,19 @@ function mkTela() {
     card('Mercados que você lidera', ecInt(lidera) + ' de ' + ecInt(L.length), '1º no faturamento') +
     card('Alertas críticos', ecInt(nAl), nAl ? 'abra as linhas em vermelho' : 'nenhum') + '</div>';
 
+  var ap = mkTodosAlertasProduto();
+  var apCrit = ap.filter(function (x) { return x.a.g >= 3; });
+  var apLista = ap.slice(0, MK.verTodosProd ? 80 : 12).map(function (x) {
+    return '<tr style="cursor:pointer" onclick="mkAbrir(\'' + x.s.keyword_id + '\')"><td><span style="color:' + mkCorAlerta(x.a.g) + ';font-weight:600">' + ecEsc(x.a.tipo) + '</span></td>' +
+      '<td>' + ecEsc(x.p.nome) + '<div class="ec-sub" style="font-size:11px">' + ecEsc(x.s.termo) + '</div></td>' +
+      '<td class="r mono">' + ecMoneyK(x.p.fat) + '</td><td style="font-size:12px">' + ecEsc(x.a.t) + '</td></tr>';
+  }).join('');
+  var blocoProd = '<div class="card ec-sec"><div class="card-head"><span class="card-title">Alertas por produto — ' + ecInt(apCrit.length) + ' críticos, ' +
+    ecMoneyK(apCrit.reduce(function (a, x) { return a + x.p.fat; }, 0)) + ' em vendas que não são suas</span>' +
+    (ap.length > 12 ? '<button class="btn-sm" onclick="MK.verTodosProd=!MK.verTodosProd;miRender()">' + (MK.verTodosProd ? 'Ver menos' : 'Ver todos (' + ap.length + ')') + '</button>' : '') + '</div>' +
+    (ap.length ? '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr><th>Tipo</th><th>Produto / mercado</th><th class="r">Vendas 90d</th><th>O que aconteceu</th></tr></thead><tbody>' + apLista + '</tbody></table></div>'
+      : '<div class="card-body ec-sub">' + (L.some(function (s) { return s.produtos; }) ? 'Nenhum alerta por produto.' : 'A quebra por produto aparece depois da primeira coleta pelo favorito MI Coletar.') + '</div>') + '</div>';
+
   var corpo = linhas.map(function (x) {
     var s = x.s, al = x.al, pos = mkPosicao(s), lider = (s.vendedores || [])[0] || {};
     var cor = al.length ? (al[0].g >= 3 ? 'var(--red)' : al[0].g === 2 ? 'var(--orange)' : 'var(--ml-yellow)') : 'var(--green)';
@@ -11709,13 +11821,13 @@ function mkTela() {
   }).join('');
 
   var ordens = [['alerta', 'Prioridade'], ['mercado', 'Tamanho do mercado'], ['share', 'Menor share']];
-  return kpis +
+  return kpis + mkColetarCard() + blocoProd +
     '<div class="card ec-sec"><div class="card-head"><span class="card-title">Disputa por mercado — faturamento 90 dias por busca-chave</span>' +
     '<div style="display:flex;gap:6px;align-items:center">' + ordens.map(function (o) {
       return '<button class="ec-chip ' + (MK.ordem === o[0] ? 'active' : '') + '" onclick="mkOrdenar(\'' + o[0] + '\')">' + o[1] + '</button>';
     }).join('') + '<button class="btn-sm" onclick="mkCarregar()">↻</button></div></div>' +
     '<div class="ec-muted" style="padding:0 18px 10px;font-size:12px">Fonte: Shopping de Preços (dados oficiais de vendas do ML, valores arredondados). ' +
-    'Período ' + periodo + ' · coletado em ' + (coleta ? new Date(coleta).toLocaleString('pt-BR') : '—') + '. Clique numa linha para ver vendedores, seus anúncios vinculados e os anúncios que mais faturam.' +
+    'Período ' + periodo + ' · coletado em ' + (coleta ? new Date(coleta).toLocaleString('pt-BR') : '—') + '. Clique numa linha para ver os produtos do mercado, vendedores e seus anúncios vinculados.' +
     (vazios ? ' <span style="color:var(--orange)">' + vazios + ' busca(s) sem dados na última coleta — aguardando nova rodada.</span>' : '') + '</div>' +
     '<div class="ec-table-wrap"><table class="t ec-table"><thead><tr>' +
     '<th>Mercado (busca)</th><th class="r">Mercado 90d</th><th class="r">Titanium</th><th class="r">Share</th><th class="r">Posição</th>' +
