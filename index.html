@@ -3919,24 +3919,24 @@ async function ecEnviosSalvar(lista) {
 function ecEnvioNovo(usarSugestao) {
   if (!ecPodeEditar()) return;
   const sug = usarSugestao ? EC.rows.filter(r => r.envioFull > 0).sort((a, b) => (a.curvaAn || 'C').localeCompare(b.curvaAn || 'C') || a.cobFullPos - b.cobFullPos) : [];
-  EC._envEdit = { id: '', data: ecDay(-2), obs: '', status: 'programado', itens: sug.map(r => r.sku + ' ' + r.envioFull).join('\n'), novo: true };
+  EC._envEdit = { id: '', data: ecDay(-2), obs: '', status: 'reservado', itens: sug.map(r => r.sku + ' ' + r.envioFull).join('\n'), novo: true };
   ecEnvioModal();
 }
-function ecEnvioEditar(id) {
+function ecEnvioEditar(id, finalizar) {
   const e = (EC.envios?.lista || []).find(x => x.id === id); if (!e || !ecPodeEditar()) return;
-  EC._envEdit = { id: e.id, data: e.data, obs: e.obs || '', status: e.status, itens: Object.entries(e.itens || {}).map(([k, v]) => k + ' ' + v).join('\n'), novo: false, orig: e };
+  EC._envEdit = { id: e.id, data: e.data, obs: e.obs || '', status: finalizar ? 'programado' : e.status, finalizar: !!finalizar, itens: Object.entries(e.itens || {}).map(([k, v]) => k + ' ' + v).join('\n'), novo: false, orig: e };
   ecEnvioModal();
 }
 function ecEnvioModal() {
   const x = EC._envEdit; const el = document.getElementById('ec-cfg');
   el.innerHTML = `<div class="ec-modal-box" style="max-width:560px"><div class="card-head"><span class="card-title">${x.novo ? 'Registrar envio programado' : 'Editar envio ' + ecEsc(x.id)}</span><button class="ec-iconbtn" onclick="ecCloseCfg()">✕</button></div>
     <div class="card-body">
-      <div class="ec-muted" style="font-size:12px;margin-bottom:10px">O que estiver aqui entra no cálculo como estoque já a caminho do Full até o CD registrar o recebimento (baixa automática) ou até ${EC_ENV_VALIDADE} dias depois da data, quando o painel pede conferência.</div>
+      <div class="ec-muted" style="font-size:12px;margin-bottom:10px">${x.finalizar ? '<b class="c-orange">Finalizando a montagem:</b> confira os itens e as quantidades que realmente foram montados antes de salvar. ' : ''}<b>Data reservada</b> não entra no cálculo (o painel continua sugerindo esses itens). A partir de <b>Montagem finalizada</b>, as unidades contam como estoque a caminho do Full até o CD registrar o recebimento (baixa automática) ou até ${EC_ENV_VALIDADE} dias depois da data, quando o painel pede conferência.</div>
       <style>#ec-cfg .env-f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text2);margin-bottom:10px}#ec-cfg .env-f input,#ec-cfg .env-f textarea{background:var(--bg2);border:1px solid var(--border2);color:var(--text);padding:7px 9px;border-radius:8px}</style>
       <label class="env-f">Nº do envio no Mercado Livre<input id="env-id" value="${ecEsc(x.id)}" ${x.novo ? '' : 'disabled'} placeholder="ex.: 78708582"></label>
       <label class="env-f">Data de envio (coleta/entrega no CD)<input id="env-data" type="date" value="${ecEsc(x.data)}"></label>
       <label class="env-f">Itens — um por linha: SKU e quantidade<textarea id="env-itens" rows="12" style="width:100%;font:12px var(--mono)" placeholder="589902.000 120&#10;200005.004 130">${ecEsc(x.itens)}</textarea></label>
-      <label class="env-f">Situação<select id="env-status" style="background:var(--bg2);border:1px solid var(--border2);color:var(--text);padding:7px 9px;border-radius:8px">${[['programado', 'Programado (coleta/entrega agendada)'], ['enviado', 'A caminho do CD (já coletado/entregue)'], ['recebido', 'Recebido'], ['cancelado', 'Cancelado']].map(([v, t]) => `<option value="${v}" ${x.status === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      <label class="env-f">Situação<select id="env-status" style="background:var(--bg2);border:1px solid var(--border2);color:var(--text);padding:7px 9px;border-radius:8px">${[['reservado', 'Data reservada — montagem em andamento (não conta)'], ['programado', 'Montagem finalizada — coleta/entrega agendada (conta)'], ['enviado', 'A caminho do CD — já coletado/entregue (conta)'], ['recebido', 'Recebido'], ['cancelado', 'Cancelado']].map(([v, t]) => `<option value="${v}" ${x.status === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
       <label class="env-f">Observação<input id="env-obs" value="${ecEsc(x.obs)}" maxlength="200"></label>
       <div id="env-msg" class="c-orange" style="font-size:12px;min-height:16px"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button class="btn-sm" onclick="ecCloseCfg()">Cancelar</button><button class="btn-sm btn-primary" onclick="ecEnvioGravar()">Salvar envio</button></div>
@@ -3958,7 +3958,7 @@ async function ecEnvioGravar() {
   const lista = [...(EC.envios?.lista || [])];
   const x = EC._envEdit; const i = lista.findIndex(e => e.id === id);
   if (x.novo && i >= 0) return msg('Já existe um envio com esse número. Edite o existente.');
-  const env = { ...(i >= 0 ? lista[i] : { criado: new Date().toISOString() }), id, data, obs, itens, status: g('env-status').value || 'programado' };
+  const env = { ...(i >= 0 ? lista[i] : { criado: new Date().toISOString() }), id, data, obs, itens, status: g('env-status').value || 'reservado' };
   if (i >= 0) lista[i] = env; else lista.unshift(env);
   if (await ecEnviosSalvar(lista)) ecCloseCfg();
 }
@@ -4021,8 +4021,8 @@ function ecRenderFullLegado() {   // regra anterior: usada só se o motor novo f
     <div class="card-body" style="padding-top:0">
       ${env.length ? `<table class="t ec-t"><thead><tr><th>Envio</th><th>Data</th><th class="r">SKUs</th><th class="r">Unidades</th><th class="r">Recebido no CD</th><th class="r">A caminho</th><th>Situação</th>${pode ? '<th></th>' : ''}</tr></thead><tbody>
       ${pend.slice(0, 30).map(({ e, x }) => `<tr><td class="mono">#${ecEsc(e.id)}${e.obs ? `<div class="ec-sub">${ecEsc(e.obs)}</div>` : ''}</td><td class="mono">${ecEsc(e.data.split('-').reverse().join('/'))}</td><td class="r mono">${Object.keys(e.itens || {}).length}</td><td class="r mono">${ecInt(x.totQ)}</td><td class="r mono">${ecInt(x.recebido)}</td><td class="r mono"><b>${x.conta ? ecInt(x.tot) : '—'}</b></td>
-        <td>${e.status === 'cancelado' ? ecPill('cancelado', 'neutral') : e.status === 'recebido' || (!x.tot && x.totQ) ? ecPill('recebido', 'ok') : x.vencido ? ecPill('conferir: ' + EC_ENV_VALIDADE + 'd sem chegar', 'aten') : ecPill(e.status === 'enviado' ? 'a caminho do CD' : 'programado', 'aten')}</td>
-        ${pode ? `<td style="white-space:nowrap"><button class="ec-link" onclick="ecEnvioEditar('${ecEsc(e.id)}')">editar</button> · ${EC_ENV_ATIVOS.includes(e.status) ? `<button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','recebido')">recebido</button> · <button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','cancelado')">cancelar</button> · ` : ''}<button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','excluir')">excluir</button></td>` : ''}</tr>`).join('')}
+        <td>${e.status === 'cancelado' ? ecPill('cancelado', 'neutral') : e.status === 'recebido' || (!x.tot && x.totQ) ? ecPill('recebido', 'ok') : e.status === 'reservado' ? ecPill('data reservada · não conta', 'neutral') : x.vencido ? ecPill('conferir: ' + EC_ENV_VALIDADE + 'd sem chegar', 'aten') : ecPill(e.status === 'enviado' ? 'a caminho do CD' : 'montado · coleta agendada', 'aten')}</td>
+        ${pode ? `<td style="white-space:nowrap">${e.status === 'reservado' ? `<button class="ec-link" style="color:var(--green)" onclick="ecEnvioEditar('${ecEsc(e.id)}',true)">finalizar montagem</button> · ` : ''}<button class="ec-link" onclick="ecEnvioEditar('${ecEsc(e.id)}')">editar</button> · ${e.status === 'reservado' ? `<button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','cancelado')">cancelar</button> · ` : ''}${EC_ENV_ATIVOS.includes(e.status) ? `<button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','recebido')">recebido</button> · <button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','cancelado')">cancelar</button> · ` : ''}<button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','excluir')">excluir</button></td>` : ''}</tr>`).join('')}
       </tbody></table>` : '<div class="ec-muted">Nenhum envio programado registrado. Registre aqui os envios criados no Mercado Livre (nº, data e itens) para o painel não sugerir em dobro.</div>'}
     </div></div>
 
@@ -4182,8 +4182,10 @@ function fiCompute(rows) {
   const visSum = (ids, a, b) => { let t = 0, ok = 0; ids.forEach(id => { const c = vis[id]; if (!c) return; ok++; for (let k = a; k <= b; k++) t += c.d[ecDay(k)] || 0; }); return { t, completo: ids.length > 0 && ok === ids.length }; };
 
   // remessas ao Full ainda não recebidas, com data prevista de recebimento (data do envio + trânsito Matriz → Full)
-  const cheg = {}, saidaProg = {}, envAtras = {};
+  const cheg = {}, saidaProg = {}, envAtras = {}, resv = {};
   (EC.envios?.lista || []).forEach(e => {
+    // data reservada (montagem em andamento): não conta como estoque a caminho; só informa
+    if (e.status === 'reservado') { Object.entries(e.itens || {}).forEach(([sku, q]) => { const x = resv[sku] || (resv[sku] = { q: 0, envios: [] }); x.q += q; x.envios.push({ id: e.id, data: e.data, q }); }); return; }
     const x = ecEnvioPend(e); if (!x.conta) return;
     const prev = ecAddDays(e.data, F.ltTransf); let t = ecDaysBetween(hoje, prev); const atrasado = t < 1;
     if (atrasado) t = 1; // atrasado: considera chegando amanhã e sinaliza
@@ -4257,7 +4259,7 @@ function fiCompute(rows) {
     const demF = t => fi.dFull * fiPromoFator(sku, ecAddDays(hoje, t));
     const demM = t => fi.dMatriz * fiPromoFator(sku, ecAddDays(hoje, t));
     const ch = (cheg[sku] || []).map(c => ({ ...c }));
-    fi.chegadas = ch; fi.atrasado = !!envAtras[sku];
+    fi.chegadas = ch; fi.atrasado = !!envAtras[sku]; fi.reserva = resv[sku] || null;
     fi.minProt = Math.max(0, +F.minProt[sku] || 0); fi.multEnvio = Math.max(0, +F.multEnvio[sku] || 0);
     const saidas = saidaProg[sku] || []; fi.saidaProg = saidas.reduce((a, x) => a + x.q, 0);
     fi.reservado = r.fisico != null && r.virtual != null ? Math.max(0, r.fisico - r.virtual) : null;
@@ -4613,7 +4615,7 @@ function ecRenderFull() {
         <td class="r mono">${ecInt(f.v30)}</td>
         <td class="r mono">${fiN1(f.dFull)}<div class="ec-sub ${f.tendCls === 'CRESCIMENTO' ? 'c-green' : f.tendCls === 'QUEDA' ? 'c-red' : ''}">${f.volOk ? (f.tend >= 0 ? '+' : '') + Math.round(f.tend * 100) + '% 7d×30d' : 'pouco dado'}</div>${fiConfTag(f.conf)}${f.reprimida ? '<div class="ec-sub c-orange">demanda reprimida</div>' : ''}</td>
         <td class="r mono">${ecInt(r.fullDisp)}${r.mlFullIndisp ? `<div class="ec-sub">${ecInt(r.mlFullIndisp)} indisp.</div>` : ''}</td>
-        <td class="r mono">${f.progTot ? ecInt(f.progTot) + `<div class="ec-sub ${f.atrasado ? 'c-orange' : ''}">${f.atrasado ? 'atrasado' : 'chega ' + ecFmtDate(ecAddDays(ecDay(), Math.min(...f.chegadas.map(c => c.t))))}</div>` : '—'}</td>
+        <td class="r mono">${f.progTot ? ecInt(f.progTot) + `<div class="ec-sub ${f.atrasado ? 'c-orange' : ''}">${f.atrasado ? 'atrasado' : 'chega ' + ecFmtDate(ecAddDays(ecDay(), Math.min(...f.chegadas.map(c => c.t))))}</div>` : '—'}${f.reserva ? `<div class="ec-sub" title="Data reservada, montagem em andamento: não entra no cálculo">reservado ${ecInt(f.reserva.q)} · ${f.reserva.envios.map(v => '#' + ecEsc(v.id) + ' ' + ecFmtDate(v.data)).join(', ')}</div>` : ''}</td>
         <td class="r mono">${ecInt(f.matrizLivre)}<div class="ec-sub">de ${ecInt(r.matriz)}</div></td>
         <td class="r mono"><b>${isFinite(f.cobProj) && f.cobProj > 999 ? '999+d' : ecDays(f.cobProj)}</b>${f.regra ? `<div class="ec-sub">gatilho ${f.gatilho}d · alvo ${f.alvo}d</div>` : ''}</td>
         <td class="mono">${f.ruptData ? `<span class="${f.ruptDia <= f.tChega ? 'c-red' : ''}">${ecFmtDate(f.ruptData)}</span><div class="ec-sub">${f.diasRuptCom ? f.diasRuptCom + 'd de ruptura prováveis' : 'evitável enviando agora'}</div>` : '—'}</td>
@@ -4684,9 +4686,10 @@ function fiEnviosCard() {
     <div class="card-body" style="padding-top:0">
       ${env.length ? `<table class="t ec-t"><thead><tr><th>Envio</th><th>Data</th><th class="r">SKUs</th><th class="r">Unidades</th><th class="r">Recebido no CD</th><th class="r">A caminho</th><th>Situação</th>${pode ? '<th></th>' : ''}</tr></thead><tbody>
       ${pend.slice(0, 30).map(({ e, x }) => `<tr><td class="mono">#${ecEsc(e.id)}${e.obs ? `<div class="ec-sub">${ecEsc(e.obs)}</div>` : ''}</td><td class="mono">${ecEsc(e.data.split('-').reverse().join('/'))}</td><td class="r mono">${Object.keys(e.itens || {}).length}</td><td class="r mono">${ecInt(x.totQ)}</td><td class="r mono">${ecInt(x.recebido)}</td><td class="r mono"><b>${x.conta ? ecInt(x.tot) : '—'}</b></td>
-        <td>${e.status === 'cancelado' ? ecPill('cancelado', 'neutral') : e.status === 'recebido' || (!x.tot && x.totQ) ? ecPill('recebido', 'ok') : x.vencido ? ecPill('conferir: ' + EC_ENV_VALIDADE + 'd sem chegar', 'aten') : ecPill(e.status === 'enviado' ? 'a caminho do CD' : 'programado', 'aten')}</td>
-        ${pode ? `<td style="white-space:nowrap"><button class="ec-link" onclick="ecEnvioEditar('${ecEsc(e.id)}')">editar</button> · ${EC_ENV_ATIVOS.includes(e.status) ? `<button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','recebido')">recebido</button> · <button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','cancelado')">cancelar</button> · ` : ''}<button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','excluir')">excluir</button></td>` : ''}</tr>`).join('')}
+        <td>${e.status === 'cancelado' ? ecPill('cancelado', 'neutral') : e.status === 'recebido' || (!x.tot && x.totQ) ? ecPill('recebido', 'ok') : e.status === 'reservado' ? ecPill('data reservada · não conta', 'neutral') : x.vencido ? ecPill('conferir: ' + EC_ENV_VALIDADE + 'd sem chegar', 'aten') : ecPill(e.status === 'enviado' ? 'a caminho do CD' : 'montado · coleta agendada', 'aten')}</td>
+        ${pode ? `<td style="white-space:nowrap">${e.status === 'reservado' ? `<button class="ec-link" style="color:var(--green)" onclick="ecEnvioEditar('${ecEsc(e.id)}',true)">finalizar montagem</button> · ` : ''}<button class="ec-link" onclick="ecEnvioEditar('${ecEsc(e.id)}')">editar</button> · ${e.status === 'reservado' ? `<button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','cancelado')">cancelar</button> · ` : ''}${EC_ENV_ATIVOS.includes(e.status) ? `<button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','recebido')">recebido</button> · <button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','cancelado')">cancelar</button> · ` : ''}<button class="ec-link" onclick="ecEnvioStatus('${ecEsc(e.id)}','excluir')">excluir</button></td>` : ''}</tr>`).join('')}
       </tbody></table>` : '<div class="ec-muted">Nenhum envio programado registrado. Registre aqui os envios criados no Mercado Livre (nº, data e itens) para o painel não sugerir em dobro.</div>'}
+      <div class="ec-muted" style="font-size:11px;margin-top:8px">Só contam no cálculo os envios com montagem finalizada ou a caminho do CD. Data reservada aparece na tabela "Enviar ao Full" como informação, sem descontar da sugestão.</div>
     </div></div>`;
 }
 
@@ -4699,7 +4702,7 @@ function fiCriarEnvio() {
   if (EC._envEdit) {
     const n = EC.rows.filter(r => r.envioFull > 0); const un = n.reduce((s, r) => s + r.envioFull, 0);
     const o = document.getElementById('env-obs'); if (o && !o.value) o.value = `Rascunho da sugestão de ${new Date().toLocaleDateString('pt-BR')}`;
-    const m = document.getElementById('env-msg'); if (m) m.textContent = `Rascunho com ${n.length} SKUs e ${ecInt(un)} unidades. Revise, ajuste e clique em Salvar envio para registrar. Nada é gravado antes disso.`;
+    const m = document.getElementById('env-msg'); if (m) m.textContent = `Rascunho com ${n.length} SKUs e ${ecInt(un)} unidades. Fica como "Data reservada" (não conta) até você finalizar a montagem. Revise e clique em Salvar envio; nada é gravado antes disso.`;
   }
 }
 
@@ -4745,6 +4748,7 @@ function fiMemo(sku) {
   const full = !r.anuncioFull ? '<div class="ec-muted" style="font-size:12px">Sem anúncio Full.</div>' :
     row('Full disponível (vendável)', ecInt(r.fullDisp)) + (r.mlFullIndisp ? row('Full reservado/indisponível', ecInt(r.mlFullIndisp)) : '')
     + (f.chegadas.length ? f.chegadas.map(x => row(`Remessa #${ecEsc(x.envio)}`, `${ecInt(x.q)} un · chega ${ecFmtDate(ecAddDays(ecDay(), x.t))}${x.atrasado ? ' <span class="c-orange">(atrasada; prevista ' + ecFmtDate(x.prev) + ')</span>' : ''}`)).join('') : row('Remessas a caminho', '0'))
+    + (f.reserva ? row('Datas reservadas (não contam)', f.reserva.envios.map(v => `#${ecEsc(v.id)} ${ecFmtDate(v.data)}: ${ecInt(v.q)} un`).join(' · ')) : '')
     + row('Cobertura atual (só disponível)', ecDays(f.cobAtual)) + row('Cobertura projetada (com remessas na data)', ecDays(f.cobProj))
     + row('Ruptura prevista', f.ruptData ? ecFmtDate(f.ruptData) : 'não no horizonte') + row('Envio novo chegaria em', ecFmtDate(f.dataChega) + ` (${f.tChega}d)`)
     + row('Regra', f.regra ? `curva ${f.regra} · gatilho ${f.gatilho}d · alvo ${f.alvo}d` : 'fora da regra (sem envio automático)')
