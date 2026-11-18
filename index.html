@@ -6461,7 +6461,7 @@ async function ccBlFacts(from, to, mlIds) {
       // loja própria / venda direta não tem tarifa de venda (zero); marketplace sem % informado = indisponível
       const f = det.com > 0 ? det.com * share : (cfg.taxaPct > 0 || cfg.taxaFixa > 0 ? i.q * i.u * (cfg.taxaPct || 0) / 100 + i.q * (cfg.taxaFixa || 0) : (cfg.tipo === 'outro' || !lojas[det.loja] ? (cfg.tipo === 'outro' ? 0 : null) : null));
       facts.push({ o: 'BL' + det.id, num: det.num, pk: null, d: dia + 'T12:00:00-03:00', st: det.sit === 12 ? 'cancelled' : 'paid', i: null, s: i.s, t: i.t, q: i.q, u: i.u, f: f == null ? null : Math.round(f * 100) / 100, ff: det.com > 0 ? 'Bling' : f > 0 ? (cfg.tipo === 'outro' ? 'comissão' : 'estimada') : f === 0 ? 'sem tarifa' : 'ausente',
-        sh: null, fr: Math.round(det.frete * share * 100) / 100, b: bid, n: '', b2b: false, full: false, c: i.c, cf: i.cf, ip: i.ip, ipf: i.ipf, ch: det.loja, src: 'bling' });
+        sh: null, fr: Math.round(det.frete * share * 100) / 100, b: bid, n: '', b2b: false, full: false, c: i.c, cf: i.cf, ip: i.ip, ipf: i.ipf, ch: det.loja, src: 'bling', nf: det.nfid || 0 });
     });
   });
   CC.naoFat = naoFat;
@@ -6469,7 +6469,8 @@ async function ccBlFacts(from, to, mlIds) {
 }
 // ───────── NF-e do Bling: receita líquida fiscal, devoluções e data de faturamento ─────────
 // A lista de NF não traz o valor: cada nota é lida uma vez (/nfe/{id}) e fica guardada no navegador.
-// Nenhum dado do destinatário é guardado (só número, data, situação, loja, natureza e valores).
+// Nenhum dado do destinatário é guardado (só número, data, situação, loja, natureza, valores, itens da nota,
+// chave de acesso e a classe de ICMS: tipo de pessoa e indicador de contribuinte — sem nome nem documento).
 const CC_NF_META = 'cc_nf_meta_v1', CC_NAT_KEY = 'cc_nat_v1';
 const CC_NF_OK = [5, 6], CC_NF_DEV_OK = [5, 6, 7]; // 5 autorizada · 6 DANFE emitida · 7 registrada
 const CC_NAT_DEF = { '15109819688': 'venda', '15109543475': 'venda', '15109543827': 'venda', '8682717635': 'venda', '15109819627': 'venda', '15102134673': 'dev', '15101963259': 'dev', '15108662129': 'dev', '8682717658': 'outro', '15102105533': 'outro' };
@@ -6520,7 +6521,7 @@ async function ccNfRun() {
       const r = await ccBlRaw(`/nfe?tipo=${tipo}&limite=100&pagina=${pg}&dataEmissaoInicial=${a}%2000:00:00&dataEmissaoFinal=${b}%2023:59:59`);
       const list = (r && r.data) || []; const recs = [];
       list.forEach(n => { const old = CC.nf.map[n.id]; const natId = n.naturezaOperacao && n.naturezaOperacao.id;
-        const rec = { id: n.id, sl: state.sellerId, tipo, sit: n.situacao, d: String(n.dataEmissao || '').slice(0, 10), num: n.numero, loja: String((n.loja && n.loja.id) || 0), nat: natId, cls: ccNatCls(natId, nat), val: old ? old.val : null, fr: old ? old.fr : null, ped: old ? old.ped : '' };
+        const rec = { ...(old || {}), id: n.id, sl: state.sellerId, tipo, sit: n.situacao, d: String(n.dataEmissao || '').slice(0, 10), num: n.numero, loja: String((n.loja && n.loja.id) || 0), nat: natId, cls: ccNatCls(natId, nat), val: old ? old.val : null, fr: old ? old.fr : null, ped: old ? old.ped : '' };
         CC.nf.map[n.id] = rec; recs.push(rec); });
       await ccNfPutMany(recs);
       if (list.length < 100) break; await sleep(350);
@@ -6537,7 +6538,7 @@ async function ccNfRun() {
     if (CC.nf.again || fail > 15) return;
     try {
       const r = await ccBlRaw('/nfe/' + rec.id); const x = r && r.data; if (!x || !x.id) throw new Error('nota não lida');
-      rec.val = +x.valorNota || 0; rec.fr = +x.valorFrete || 0; rec.ped = String(x.numeroPedidoLoja || '');
+      ccNfAplica(rec, x);
       await ccNfPutMany([rec]); fail = 0;
     } catch (e) { fail++; await sleep(2000); }
     CC.nf.done++; if (CC.nf.done % 10 === 0) ccNfPaint();
@@ -6606,6 +6607,139 @@ async function ccNfExport() {
   const linhas = ccNfSum().list.sort((x, y) => y.d.localeCompare(x.d)).map(r => ({ 'NF nº': r.num, 'Emissão': r.d, 'Tipo': r.cls === 'dev' ? 'Devolução' : 'Venda', 'Canal': ccLojaNome(r.loja), 'Situação': CC_NF_SIT[r.sit] || r.sit, 'Pedido na loja': r.ped || '', 'Frete na nota': r.fr == null ? '' : r.fr, 'Valor da nota': r.val == null ? '' : (r.cls === 'dev' ? -r.val : r.val) }));
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), 'Notas fiscais');
   XLSX.writeFile(wb, `central_comercial_nfe_${ecDay()}.xlsx`);
+}
+/* Dados fiscais lidos de /nfe/{id}: valor, frete, pedido na loja, chave, série,
+   itens (código, NCM, CEST, CFOP, origem, quantidade, valor) e a classe de ICMS do
+   destinatário (tipo de pessoa + indicador). Nome e documento não são guardados. */
+function ccNfAplica(rec, x) {
+  rec.val = +x.valorNota || 0; rec.fr = +x.valorFrete || 0; rec.ped = String(x.numeroPedidoLoja || '');
+  rec.ch = String(x.chaveAcesso || ''); rec.se = x.serie != null ? String(x.serie) : '';
+  const ct = x.contato || {}; rec.tp = ct.tipoPessoa || ''; rec.ind = ct.contribuinte != null ? String(ct.contribuinte) : ct.indicadorIe != null ? String(ct.indicadorIe) : '';
+  rec.it = (x.itens || []).map(i => ({ c: normSku(String(i.codigo || '')), d: String(i.descricao || '').slice(0, 120), un: String(i.unidade || ''), q: +i.quantidade || 0, v: +i.valor || 0,
+    t: i.valorTotal != null ? +i.valorTotal || 0 : Math.round((+i.quantidade || 0) * (+i.valor || 0) * 100) / 100,
+    ncm: String(i.classificacaoFiscal || i.ncm || ''), cest: String(i.cest || ''), cfop: String(i.cfop || ''), og: i.origem != null ? String(i.origem) : '', st: ccNfStVal(i.impostos) }));
+  CC._nfNome = CC._nfNome || {}; if (ct.nome) CC._nfNome[rec.id] = String(ct.nome); // só em memória
+}
+// ICMS-ST do item, se o Bling devolver (o formato varia): soma os "valor" dentro de blocos de ST
+function ccNfStVal(o) {
+  let v = null;
+  const walk = (n, inSt, d) => { if (!n || typeof n !== 'object' || d > 5) return;
+    Object.entries(n).forEach(([k, val]) => {
+      const kSt = /(^st$|icmsst|icms_st|substitui)/i.test(k);
+      if (typeof val === 'number') { if (/base|aliq|percent|mva|reduc/i.test(k)) return; if ((inSt && /^valor$|^v$/i.test(k)) || /^(valor|v)(icms)?st$/i.test(k)) v = (v || 0) + val; }
+      else walk(val, inSt || kSt, d + 1);
+    }); };
+  walk(o, false, 0); return v;
+}
+async function ccNfLer(recs, label) {
+  let done = 0, fail = 0;
+  await prPool(recs, 2, async rec => {
+    if (fail > 15) return;
+    try { const r = await ccBlRaw('/nfe/' + rec.id); const x = r && r.data; if (!x || !x.id) throw new Error('nota não lida'); ccNfAplica(rec, x); await ccNfPutMany([rec]); fail = 0; }
+    catch (e) { fail++; await sleep(2000); }
+    done++; if (done % 10 === 0 || done === recs.length) showToast(`${label}: ${done}/${recs.length}`, 'warn');
+    await sleep(350);
+  });
+  return fail <= 15;
+}
+const ccDataBr = d => { if (!d) return ''; const [y, m, dd] = String(d).slice(0, 10).split('-').map(Number); return y ? new Date(Date.UTC(y, m - 1, dd, 12)) : ''; };
+/* Excel para ressarcimento de ICMS-ST: vendas a NÃO contribuintes (inclui PF) do período,
+   uma linha por item da NF-e de saída. Respeita período, canal, UF, PF/PJ, curva e busca;
+   o filtro de ICMS da tela é ignorado (sempre não contribuinte). */
+async function ccExportST() {
+  if (state.isDemo) { showToast('Indisponível no modo demonstração', 'warn'); return; }
+  const bc = blingCfg(); if (!bc.url || !bc.key) { showToast('Conecte o Bling para ler as notas fiscais', 'err'); return; }
+  if (!CC.nf.listed) { showToast('A lista de NF do Bling ainda está sendo lida — tente em instantes', 'warn'); return; }
+  if (CC._stBusy) { showToast('Exportação ST já em andamento…', 'warn'); return; }
+  CC._stBusy = true;
+  try {
+    if (!(await ccLoadXlsx())) return;
+    const p = ccPeriod(); const v = CC.view; const B = CC.buyers || {};
+    const icms0 = v.icms; v.icms = ''; let base; try { base = ccFilter(CC.facts); } finally { v.icms = icms0; }
+    base = base.filter(x => x.st !== 'cancelled' && ['n', 'ni'].includes(ccIcmsCls(B[x.b])));
+    // pedidos (pacote do ML = um pedido / uma NF)
+    const ped = {};
+    base.forEach(x => { const k = x.src === 'bling' ? String(x.o) : String(x.pk || x.o);
+      const o = ped[k] || (ped[k] = { k, src: x.src, ids: new Set(), d: ecDayOf(x.d), x, nf: x.nf || 0, itens: [] });
+      o.ids.add(String(x.o)); if (x.pk) o.ids.add(String(x.pk)); if (ecDayOf(x.d) < o.d) o.d = ecDayOf(x.d); o.itens.push(x); });
+    const okV = r => r.tipo === 1 && r.cls === 'venda' && CC_NF_OK.includes(r.sit);
+    const mapa = () => { const m = {}; Object.values(CC.nf.map).forEach(r => { if (okV(r) && r.ped) m[r.ped] = r; }); return m; };
+    let byPed = mapa();
+    const acha = o => o.src === 'bling' ? (o.nf && CC.nf.map[o.nf] && okV(CC.nf.map[o.nf]) ? CC.nf.map[o.nf] : null) : [...o.ids].map(i => byPed[i]).find(Boolean) || null;
+    // pedidos ainda sem NF achada: lê as notas sem detalhe do período até 7 dias depois (NF pode sair depois da venda)
+    const semNf = Object.values(ped).filter(o => !acha(o));
+    if (semNf.length) {
+      const ate = new Date(new Date(p.to + 'T12:00:00Z').getTime() + 7 * 864e5).toISOString().slice(0, 10);
+      const ler = Object.values(CC.nf.map).filter(r => okV(r) && r.val == null && r.d >= p.from && r.d <= ate);
+      if (ler.length) { await ccNfLer(ler, 'Lendo NF para achar os pedidos'); byPed = mapa(); }
+    }
+    // itens das notas encontradas (notas lidas antes desta versão não têm itens guardados)
+    const nfs = {}; Object.values(ped).forEach(o => { const r = acha(o); if (r) { o.r = r; nfs[r.id] = r; } });
+    const devs = Object.values(CC.nf.map).filter(r => r.cls === 'dev' && CC_NF_DEV_OK.includes(r.sit) && r.d >= p.from && r.d <= p.to);
+    const faltam = Object.values(nfs).concat(devs).filter(r => !r.it);
+    if (faltam.length && !(await ccNfLer(faltam, 'Lendo itens das NF'))) showToast('O Bling parou de responder; parte das notas saiu sem itens', 'warn');
+    const nomeDe = (o) => { const m = CC.blCont || {}; const x = o.x; const bl = [...o.ids].map(i => m['P' + i]).find(Boolean) || (x.b && m[x.b]); return ccMask((bl && bl.nome) || (o.r && (CC._nfNome || {})[o.r.id]) || x.n, x.b); };
+    const linhas = [], sem = [], vistas = {}; let temSt = false, nPf = 0, nPj = 0, nPelaNf = 0;
+    Object.values(ped).sort((a, b) => a.d.localeCompare(b.d)).forEach(o => {
+      const b = B[o.x.b]; let cls = ccIcmsCls(b); let obs = '';
+      if (cls === 'ni') { // sem cadastro: decide pela NF (PF ou indicador 9 = não contribuinte)
+        if (o.r && (o.r.tp === 'F' || o.r.ind === '9')) { cls = 'n'; obs = 'classificado pela NF-e'; nPelaNf++; } else return;
+      }
+      const tipo = ccTipo(b) !== '—' ? ccTipo(b) : o.r && o.r.tp === 'F' ? 'PF' : o.r && o.r.tp === 'J' ? 'PJ' : '';
+      const cab = { 'Data da venda': ccDataBr(o.d), 'Canal': ccCanal(o.x), 'Pedido': o.k, 'Cliente': nomeDe(o), 'PF/PJ': tipo, 'ICMS destinatário': 'Não contribuinte', 'UF destino': b ? b.uf || '' : '', 'Cidade': b ? b.city || '' : '' };
+      if (!o.r || !o.r.it || !o.r.it.length) {
+        o.itens.forEach(x => sem.push({ ...cab, 'SKU': x.s, 'Descrição': x.t, 'Qtde': x.q, 'Valor unitário': +x.u.toFixed(2), 'Valor total': +(x.q * x.u).toFixed(2), 'NF nº': o.r ? o.r.num : '', 'Motivo': o.r ? 'NF achada, itens não lidos do Bling' : 'NF de venda autorizada não encontrada no Bling' }));
+        return;
+      }
+      if (vistas[o.r.id]) return; vistas[o.r.id] = 1; // mesma NF para mais de um pedido do pacote
+      tipo === 'PF' ? nPf++ : nPj++;
+      o.r.it.forEach(i => { if (i.st != null) temSt = true;
+        linhas.push({ 'Data da venda': cab['Data da venda'], 'NF nº': o.r.num, 'Série': o.r.se || '', 'Emissão NF': ccDataBr(o.r.d), 'Chave de acesso': o.r.ch || '', 'CFOP': i.cfop, 'Canal': cab['Canal'], 'Pedido': o.k,
+          'Cliente': cab['Cliente'], 'PF/PJ': tipo, 'ICMS destinatário': 'Não contribuinte', 'UF destino': cab['UF destino'], 'Cidade': cab['Cidade'],
+          'SKU': i.c, 'Descrição': i.d, 'NCM': i.ncm, 'CEST': i.cest, 'Origem': i.og, 'Unid.': i.un, 'Qtde': i.q, 'Valor unitário': +i.v.toFixed(4), 'Valor total do item': +i.t.toFixed(2), _st: i.st, 'Observação': obs }); });
+    });
+    linhas.forEach(l => { if (temSt) l['ICMS-ST no item (Bling)'] = l._st == null ? '' : +l._st.toFixed(2); delete l._st; if (temSt) { const ob = l['Observação']; delete l['Observação']; l['Observação'] = ob; } });
+    // devoluções do período: ligadas a uma venda exportada quando o pedido da nota bate
+    const pedSet = new Set(); Object.values(ped).forEach(o => o.ids.forEach(i => pedSet.add(i)));
+    const dev = [];
+    devs.sort((a, b) => a.d.localeCompare(b.d)).forEach(r => (r.it && r.it.length ? r.it : [null]).forEach(i => dev.push({ 'Emissão NF': ccDataBr(r.d), 'NF nº': r.num, 'Série': r.se || '', 'Chave de acesso': r.ch || '', 'Pedido na loja': r.ped || '', 'Venda não contribuinte exportada': r.ped && pedSet.has(r.ped) ? 'Sim' : r.ped ? 'Não' : 'sem pedido na NF',
+      'CFOP': i ? i.cfop : '', 'SKU': i ? i.c : '', 'Descrição': i ? i.d : '(itens não lidos)', 'NCM': i ? i.ncm : '', 'Qtde': i ? i.q : '', 'Valor total do item': i ? +i.t.toFixed(2) : (r.val || '') })));
+    // resumo por SKU para confrontar com as entradas
+    const rs = {};
+    linhas.forEach(l => { const k = l.SKU + '|' + l.NCM; const x = rs[k] || (rs[k] = { 'SKU': l.SKU, 'Descrição': l['Descrição'], 'NCM': l.NCM, 'CEST': l.CEST, 'Qtde vendida': 0, 'Valor vendido': 0, 'Qtde devolvida (vinculada)': 0, 'Valor devolvido (vinculado)': 0, 'NFs de saída': 0, _n: new Set() }); x['Qtde vendida'] += l.Qtde; x['Valor vendido'] += l['Valor total do item']; x._n.add(l['NF nº']); });
+    dev.filter(d => d['Venda não contribuinte exportada'] === 'Sim' && d.SKU).forEach(d => { const k = Object.keys(rs).find(k => k.startsWith(d.SKU + '|')); if (k) { rs[k]['Qtde devolvida (vinculada)'] += d.Qtde || 0; rs[k]['Valor devolvido (vinculado)'] += d['Valor total do item'] || 0; } });
+    const resumo = Object.values(rs).map(x => { x['NFs de saída'] = x._n.size; delete x._n; x['Valor vendido'] = +x['Valor vendido'].toFixed(2); x['Valor devolvido (vinculado)'] = +x['Valor devolvido (vinculado)'].toFixed(2);
+      x['Qtde líquida'] = x['Qtde vendida'] - x['Qtde devolvida (vinculada)']; x['Valor líquido'] = +(x['Valor vendido'] - x['Valor devolvido (vinculado)']).toFixed(2); return x; }).sort((a, b) => b['Valor líquido'] - a['Valor líquido']);
+    const tot = linhas.reduce((s, l) => s + l['Valor total do item'], 0);
+    const filtros = [v.canal && 'canal ' + v.canal, v.uf && 'UF ' + v.uf, v.pj, v.curva && 'curva ' + v.curva, v.q && 'busca "' + v.q + '"'].filter(Boolean).join(', ');
+    const leia = [
+      ['Exportação para ressarcimento de ICMS-ST — vendas a não contribuintes'], [''],
+      ['Período (data da venda)', p.from.split('-').reverse().join('/') + ' a ' + p.to.split('-').reverse().join('/')],
+      ['Filtros aplicados', filtros || 'nenhum'], ['Gerado em', new Date().toLocaleString('pt-BR')], [''],
+      ['NF-e de saída', Object.keys(vistas).length], ['  para PF', nPf], ['  para PJ não contribuinte', nPj], ['  classificadas pela própria NF-e (cliente sem cadastro lido)', nPelaNf],
+      ['Itens exportados', linhas.length], ['Valor total dos itens (R$)', +tot.toFixed(2)], ['Itens de venda sem NF/sem itens (aba "Sem NF")', sem.length], ['NF de devolução no período (aba "Devoluções")', devs.length], [''],
+      ['Critérios'],
+      ['• Não contribuinte = pessoa física, ou PJ cujo faturamento no ML/cadastro no Bling indica não contribuinte do ICMS. PJ sem informação fica fora.'],
+      ['• Vendas canceladas ficam fora. Só NF-e de venda autorizadas (situação autorizada ou DANFE emitida).'],
+      ['• Uma linha por item da NF-e de saída, com CFOP, NCM e CEST como estão na nota no Bling.'],
+      ['• Data da venda: criação do pedido (marketplace) ou faturamento (venda direta). Emissão NF: data da nota.'],
+      ['• Devoluções: "Sim" quando o pedido da nota de devolução bate com uma venda desta exportação; conferir as demais pela chave referenciada no XML.'],
+      ['• Para o confronto entrada × saída use a aba "Resumo por SKU" (por SKU + NCM).'],
+    ];
+    const wb = XLSX.utils.book_new();
+    const add = (rows, nome, vazio) => { const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ 'Aviso': vazio }], { cellDates: true, dateNF: 'dd/mm/yyyy' });
+      const ks = Object.keys(rows[0] || { Aviso: 1 }); ws['!cols'] = ks.map(k => ({ wch: k === 'Chave de acesso' ? 46 : k === 'Descrição' ? 42 : k === 'Cliente' ? 28 : Math.max(9, Math.min(30, k.length + 2)) }));
+      if (rows.length) ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows.length, c: ks.length - 1 } }) };
+      XLSX.utils.book_append_sheet(wb, ws, nome); };
+    const wl = XLSX.utils.aoa_to_sheet(leia); wl['!cols'] = [{ wch: 60 }, { wch: 28 }]; XLSX.utils.book_append_sheet(wb, wl, 'Leia-me');
+    add(linhas, 'Saídas não contribuintes', 'Nenhuma venda a não contribuinte com NF no período');
+    add(resumo, 'Resumo por SKU', 'Sem itens');
+    add(dev, 'Devoluções', 'Nenhuma NF de devolução no período');
+    add(sem, 'Sem NF', 'Todas as vendas do período têm NF com itens');
+    XLSX.writeFile(wb, `ressarcimento_st_nao_contribuintes_${p.from}_a_${p.to}.xlsx`);
+    showToast(`Excel ST gerado: ${Object.keys(vistas).length} NF, ${linhas.length} itens${sem.length ? ` · ${sem.length} itens sem NF (ver aba)` : ''}`, sem.length ? 'warn' : 'ok');
+  } catch (e) { showToast('Falha na exportação ST: ' + e.message, 'err'); }
+  finally { CC._stBusy = false; }
 }
 // fatos unificados (ML + demais canais) de um intervalo
 async function ccFactsRange(from, to) {
@@ -7006,7 +7140,7 @@ function ccRenderClientes(el, head) {
       <div class="ec-muted" style="margin-top:8px;font-size:11px">Clique em qualquer um destes números para abrir a lista de clientes por trás dele; na lista, clique no cliente para ver pedidos e produtos.</div>
     </div></div>
   </div>
-  <div class="card" id="cc-lista" style="margin-top:16px"><div class="ec-toolbar"><div class="ec-chips">${Object.entries(F).map(([k, x]) => `<button class="ec-chip ${k === f ? 'active' : ''}" onclick="CC.view.cf='${k}';CC.view.cpage=0;ccRender()">${x[0]} <span>${cs.filter(x[1]).length}</span></button>`).join('')}</div><div style="display:flex;gap:8px;align-items:center"><button class="btn-sm" onclick="ccAlternarOculto()">${ccOculto() ? '👁 Mostrar identidade' : '🙈 Ocultar identidade'}</button></div></div>
+  <div class="card" id="cc-lista" style="margin-top:16px"><div class="ec-toolbar"><div class="ec-chips">${Object.entries(F).map(([k, x]) => `<button class="ec-chip ${k === f ? 'active' : ''}" onclick="CC.view.cf='${k}';CC.view.cpage=0;ccRender()">${x[0]} <span>${cs.filter(x[1]).length}</span></button>`).join('')}</div><div style="display:flex;gap:8px;align-items:center"><button class="btn-sm" onclick="ccExportST()" title="Vendas a não contribuintes (inclui PF) no período, uma linha por item da NF-e: data da venda, NF, chave, CFOP, SKU, NCM, CEST, quantidade e valor. Para a contabilidade pedir a restituição do ICMS-ST.">⬇ Excel ST (não contribuintes)</button><button class="btn-sm" onclick="ccAlternarOculto()">${ccOculto() ? '👁 Mostrar identidade' : '🙈 Ocultar identidade'}</button></div></div>
     <div class="ec-table-wrap" style="max-height:560px"><table class="t ec-t px-table"><thead><tr><th>Cliente</th><th>Tipo</th><th>UF / cidade</th><th>Status</th>${th('pedP', 'Pedidos período')}${th('recP', 'Receita período')}${th('ped', 'Pedidos base')}${th('receita', 'Receita base')}${th('margem', 'Margem base')}${th('ticket', 'Ticket')}${th('rec', 'Recência')}</tr></thead><tbody>
     ${list.slice((v.cpage || 0) * 50, (v.cpage || 0) * 50 + 50).map(c => `<tr style="cursor:pointer" onclick="ccCliente360('${c.id}')"><td>${ecEsc(ccNomeCli(c))}${!ccContatoBl(c) ? '<div class="ec-sub" style="font-size:10px">apelido no ML</div>' : ''}${c.potB2B ? ' <span class="ec-tag">potencial B2B</span>' : ''}</td><td>${c.tipo}${c.tipo === 'PJ' ? `<div class="ec-sub">${ecEsc(ccContrib(c.b))}</div>` : c.tipo === 'PF' ? '<div class="ec-sub">Não contribuinte</div>' : ''}</td><td>${c.b ? ecEsc(c.b.uf) + `<div class="ec-sub">${ecEsc(c.b.city || '')}</div>` : '<span class="ec-muted">—</span>'}</td><td>${ecPill(c.status, CC_ST_TONE[c.status])}</td><td class="r mono">${c.pedP || ''}</td><td class="r mono">${c.pedP ? ecMoney2(c.recP) : ''}</td><td class="r mono">${c.ped}</td><td class="r mono">${ecMoney2(c.receita)}</td><td class="r mono ${c.margem < 0 ? 'c-red' : ''}">${ecMoney2(c.margem)}</td><td class="r mono">${ecMoney2(c.ticket)}</td><td class="r mono">${c.rec <= 0 ? 'hoje' : c.rec + ' d'}</td></tr>`).join('') || '<tr><td colspan="11" class="ec-muted" style="padding:16px;text-align:center">Nenhum cliente neste filtro.</td></tr>'}
     </tbody></table></div>
