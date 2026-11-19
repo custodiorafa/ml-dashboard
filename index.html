@@ -6510,6 +6510,8 @@ async function ccNfRun() {
   CC.nf.err = null;
   const p = ccPeriod(); const from = ccSyncIni(p); const today = ecDay();
   let meta = {}; try { meta = JSON.parse(localStorage.getItem(CC_NF_META) || '{}'); } catch (e) {}
+  // o registro de cobertura fica no localStorage e as notas no IndexedDB: se as notas antigas sumiram, relista tudo
+  if (meta.from && meta.from < ecDay(5)) { const ds = Object.values(CC.nf.map).map(r => r.d).filter(Boolean); const min = ds.length ? ds.reduce((a, b) => a < b ? a : b) : null; if (!min || min > ecDay(5)) meta = {}; }
   const mine = meta.seller === state.sellerId; const covered = mine && meta.from <= from;
   if (!(covered && Date.now() - meta.at < 30 * 60e3)) {
     await ccNatSync(); const nat = ccNatMap();
@@ -6614,10 +6616,12 @@ async function ccNfExport() {
 function ccNfAplica(rec, x) {
   rec.val = +x.valorNota || 0; rec.fr = +x.valorFrete || 0; rec.ped = String(x.numeroPedidoLoja || '');
   rec.ch = String(x.chaveAcesso || ''); rec.se = x.serie != null ? String(x.serie) : '';
-  const ct = x.contato || {}; rec.tp = ct.tipoPessoa || ''; rec.ind = ct.contribuinte != null ? String(ct.contribuinte) : ct.indicadorIe != null ? String(ct.indicadorIe) : '';
+  const ct = x.contato || {}; const dg = String(ct.numeroDocumento || '').replace(/\D/g, '');
+  rec.tp = ct.tipoPessoa || (dg.length === 11 ? 'F' : dg.length === 14 ? 'J' : '');
+  rec.ind = ct.contribuinte != null ? String(ct.contribuinte) : ct.indicadorIe != null ? String(ct.indicadorIe) : rec.tp === 'F' ? '9' : rec.tp === 'J' ? (String(ct.ie || '').replace(/\W/g, '') && !/isento/i.test(ct.ie) ? '1' : '9') : '';
   rec.it = (x.itens || []).map(i => ({ c: normSku(String(i.codigo || '')), d: String(i.descricao || '').slice(0, 120), un: String(i.unidade || ''), q: +i.quantidade || 0, v: +i.valor || 0,
     t: i.valorTotal != null ? +i.valorTotal || 0 : Math.round((+i.quantidade || 0) * (+i.valor || 0) * 100) / 100,
-    ncm: String(i.classificacaoFiscal || i.ncm || ''), cest: String(i.cest || ''), cfop: String(i.cfop || ''), og: i.origem != null ? String(i.origem) : '', st: ccNfStVal(i.impostos) }));
+    ncm: String(i.classificacaoFiscal || i.ncm || ''), cest: String(i.cest || ''), cfop: String(i.cfop || ''), og: i.origem != null ? String(i.origem) : '', cst: i.impostos && i.impostos.icms && i.impostos.icms.st != null ? String(i.impostos.icms.st) : '', st: ccNfStVal(i.impostos) }));
   CC._nfNome = CC._nfNome || {}; if (ct.nome) CC._nfNome[rec.id] = String(ct.nome); // só em memória
 }
 // ICMS-ST do item, se o Bling devolver (o formato varia): soma os "valor" dentro de blocos de ST
@@ -6625,11 +6629,26 @@ function ccNfStVal(o) {
   let v = null;
   const walk = (n, inSt, d) => { if (!n || typeof n !== 'object' || d > 5) return;
     Object.entries(n).forEach(([k, val]) => {
-      const kSt = /(^st$|icmsst|icms_st|substitui)/i.test(k);
+      const kSt = /(icmsst|icms_st|substitui|^st$)/i.test(k) && typeof val === 'object';
       if (typeof val === 'number') { if (/base|aliq|percent|mva|reduc/i.test(k)) return; if ((inSt && /^valor$|^v$/i.test(k)) || /^(valor|v)(icms)?st$/i.test(k)) v = (v || 0) + val; }
       else walk(val, inSt || kSt, d + 1);
     }); };
   walk(o, false, 0); return v;
+}
+// lista as NF do Bling emitidas entre a e b (tipo 1 saída e 0 entrada) e grava no navegador
+async function ccNfListar(a, b, label) {
+  await ccNatSync(); const nat = ccNatMap(); let n = 0;
+  for (const tipo of [1, 0]) for (let pg = 1; pg <= 600; pg++) {
+    const r = await ccBlRaw(`/nfe?tipo=${tipo}&limite=100&pagina=${pg}&dataEmissaoInicial=${a}%2000:00:00&dataEmissaoFinal=${b}%2023:59:59`);
+    const list = (r && r.data) || []; const recs = [];
+    list.forEach(x => { const old = CC.nf.map[x.id]; const natId = x.naturezaOperacao && x.naturezaOperacao.id;
+      const rec = { ...(old || {}), id: x.id, sl: state.sellerId, tipo, sit: x.situacao, d: String(x.dataEmissao || '').slice(0, 10), num: x.numero, loja: String((x.loja && x.loja.id) || 0), nat: natId, cls: ccNatCls(natId, nat), val: old ? old.val : null, fr: old ? old.fr : null, ped: old ? old.ped : '' };
+      CC.nf.map[x.id] = rec; recs.push(rec); });
+    await ccNfPutMany(recs); n += list.length;
+    if (label && pg % 3 === 1) showToast(`${label}: ${n} notas`, 'warn');
+    if (list.length < 100) break; await sleep(350);
+  }
+  return n;
 }
 async function ccNfLer(recs, label) {
   let done = 0, fail = 0;
@@ -6664,6 +6683,9 @@ async function ccExportST() {
       o.ids.add(String(x.o)); if (x.pk) o.ids.add(String(x.pk)); if (ecDayOf(x.d) < o.d) o.d = ecDayOf(x.d); o.itens.push(x); });
     const okV = r => r.tipo === 1 && r.cls === 'venda' && CC_NF_OK.includes(r.sit);
     const mapa = () => { const m = {}; Object.values(CC.nf.map).forEach(r => { if (okV(r) && r.ped) m[r.ped] = r; }); return m; };
+    // relista as notas do período (+7 dias: a NF pode sair depois da venda) direto do Bling
+    const ate0 = new Date(new Date(p.to + 'T12:00:00Z').getTime() + 7 * 864e5).toISOString().slice(0, 10); const hoje = ecDay();
+    await ccNfListar(p.from, ate0 < hoje ? ate0 : hoje, 'Listando NF do Bling');
     let byPed = mapa();
     const acha = o => o.src === 'bling' ? (o.nf && CC.nf.map[o.nf] && okV(CC.nf.map[o.nf]) ? CC.nf.map[o.nf] : null) : [...o.ids].map(i => byPed[i]).find(Boolean) || null;
     // pedidos ainda sem NF achada: lê as notas sem detalhe do período até 7 dias depois (NF pode sair depois da venda)
@@ -6696,7 +6718,7 @@ async function ccExportST() {
       o.r.it.forEach(i => { if (i.st != null) temSt = true;
         linhas.push({ 'Data da venda': cab['Data da venda'], 'NF nº': o.r.num, 'Série': o.r.se || '', 'Emissão NF': ccDataBr(o.r.d), 'Chave de acesso': o.r.ch || '', 'CFOP': i.cfop, 'Canal': cab['Canal'], 'Pedido': o.k,
           'Cliente': cab['Cliente'], 'PF/PJ': tipo, 'ICMS destinatário': 'Não contribuinte', 'UF destino': cab['UF destino'], 'Cidade': cab['Cidade'],
-          'SKU': i.c, 'Descrição': i.d, 'NCM': i.ncm, 'CEST': i.cest, 'Origem': i.og, 'Unid.': i.un, 'Qtde': i.q, 'Valor unitário': +i.v.toFixed(4), 'Valor total do item': +i.t.toFixed(2), _st: i.st, 'Observação': obs }); });
+          'SKU': i.c, 'Descrição': i.d, 'NCM': i.ncm, 'CEST': i.cest, 'Origem': i.og, 'CST ICMS': i.cst || '', 'Unid.': i.un, 'Qtde': i.q, 'Valor unitário': +i.v.toFixed(4), 'Valor total do item': +i.t.toFixed(2), _st: i.st, 'Observação': obs }); });
     });
     linhas.forEach(l => { if (temSt) l['ICMS-ST no item (Bling)'] = l._st == null ? '' : +l._st.toFixed(2); delete l._st; if (temSt) { const ob = l['Observação']; delete l['Observação']; l['Observação'] = ob; } });
     // devoluções do período: ligadas a uma venda exportada quando o pedido da nota bate
