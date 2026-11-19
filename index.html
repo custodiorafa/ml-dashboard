@@ -13184,7 +13184,7 @@ function adsRender() {
     card('Investimento', adsMoney(custoTot), 'custo do Product Ads') +
     card('Vendas atribuídas', adsMoney(recTot), 'diretas ' + adsMoney(dirTot) + ' · indiretas ' + adsMoney(indTot)) +
     card('ACOS', adsPct(acosConta), 'investimento ÷ vendas atribuídas', acosConta != null && acosConta > p.acosMax ? 'var(--red)' : '') +
-    card('TACOS', adsPct(tacosConta), 'investimento ÷ (atribuídas + orgânicas ' + adsMoney(orgTot) + ')', tacosConta != null && tacosConta > p.tacosMax ? 'var(--red)' : 'var(--green)') +
+    card('TACOS', adsPct(tacosConta), 'investimento ÷ vendas totais ' + adsMoney(recTot + orgTot) + ' (atribuídas ' + adsMoney(recTot) + ' + orgânicas ' + adsMoney(orgTot) + ')', tacosConta != null && tacosConta > p.tacosMax ? 'var(--red)' : 'var(--green)') +
     card('Alerta TACOS', ecInt(nTacos), 'anúncios acima de ' + adsPct(p.tacosMax) + ' · ' + adsMoney(custoTacos) + ' investidos', nTacos ? 'var(--orange)' : '') +
     '</div>' + (tacosConta != null && tacosConta > p.tacosMax
       ? '<div style="padding:0 18px 14px;color:var(--red);font-size:13px"><b>⚠ TACOS da conta em ' + adsPct(tacosConta) + ', acima do limite de ' + adsPct(p.tacosMax) + '.</b> O Ads está pesando demais sobre o faturamento dos itens anunciados.</div>' : '') +
@@ -13255,7 +13255,7 @@ function adsRender() {
       '<td class="r mono"' + (r.acosDiverge ? ' title="ACOS da API: ' + adsPct(r.acosApi) + '"' : '') + '>' +
         '<span style="color:' + (r.acos != null && r.acos > p.acosMax ? 'var(--red)' : 'inherit') + '">' + adsPct(r.acos) + '</span>' +
         (r.acosDiverge ? '<div class="ec-sub" style="font-size:10px">API ' + adsPct(r.acosApi) + '</div>' : '') + '</td>' +
-      '<td class="r mono" title="Investimento ÷ (vendas atribuídas + orgânicas ' + adsMoney(r.organico) + ')">' +
+      '<td class="r mono" title="Investimento ÷ vendas totais ' + adsMoney((r.receita || 0) + (r.organico || 0)) + ' (atribuídas ' + adsMoney(r.receita) + ' + orgânicas ' + adsMoney(r.organico) + ')">' +
         '<span style="color:' + (r.alertaTacos ? 'var(--orange)' : 'inherit') + '">' + adsPct(r.tacos) + '</span>' +
         (r.alertaTacos ? '<div style="font-size:10px;color:var(--orange)">⚠ acima de ' + adsPct(p.tacosMax) + '</div>' : '') + '</td>' +
       '<td class="r mono" title="Margem de contribuição antes do Ads (Estoque & Compras). ACOS acima dela = venda patrocinada no prejuízo.">' +
